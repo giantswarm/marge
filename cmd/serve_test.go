@@ -119,6 +119,39 @@ func TestBuildSweepResult_staleAndRefreshedAreSeparate(t *testing.T) {
 	}
 }
 
+// TestBuildSweepResult_cancelledAndRetriedAreSeparate guards that a PR whose
+// CircleCI build was auto-cancelled (no verdict yet) and one whose build was
+// just retried are reported under their own keys and excluded from
+// failed/action_required, so rescue tooling never dispatches an agent for a
+// build that only needs a retry.
+func TestBuildSweepResult_cancelledAndRetriedAreSeparate(t *testing.T) {
+	status := pr.NewPRStatus()
+	idx1 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 1})
+	status.Update(idx1, pr.StatusFailed, "checks failed: ci/circleci: go-build")
+	idx2 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 2})
+	status.Update(idx2, pr.StatusCancelled, "build 1263 auto-cancelled; retry needed")
+	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
+	status.Update(idx3, pr.StatusRetried, "re-checking; build 1263 retried as 1272")
+
+	got := buildSweepResult(status)
+
+	if got.Summary.Failed != 1 {
+		t.Errorf("Failed = %d, want 1 (cancelled/retried must be excluded)", got.Summary.Failed)
+	}
+	if got.Summary.Cancelled != 1 || got.Summary.Retried != 1 {
+		t.Errorf("Cancelled = %d, Retried = %d, want 1 and 1", got.Summary.Cancelled, got.Summary.Retried)
+	}
+	if len(got.Cancelled) != 1 || got.Cancelled[0].Number != 2 || got.Cancelled[0].Status != "Cancelled" {
+		t.Errorf("Cancelled = %+v, want only #2 with status Cancelled", got.Cancelled)
+	}
+	if len(got.Retried) != 1 || got.Retried[0].Number != 3 || got.Retried[0].Status != "Retried" {
+		t.Errorf("Retried = %+v, want only #3 with status Retried", got.Retried)
+	}
+	if len(got.ActionRequired) != 1 || got.ActionRequired[0].Number != 1 {
+		t.Errorf("ActionRequired = %+v, want only #1", got.ActionRequired)
+	}
+}
+
 // TestBuildSweepResult_rescueRebased guards that the rescue object tells a
 // marker whose branch was merely rebased (still valid) apart from a stale
 // one, so orchestrators keep skipping the rebased PR.

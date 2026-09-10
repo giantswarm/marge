@@ -171,12 +171,14 @@ func ColorizeStatus(state StatusState, detail string) string {
 		// Magenta so a billing/budget block reads as "not a code failure",
 		// distinct from the red used for genuine failures.
 		return fmt.Sprintf("\033[35m%s\033[0m", label)
-	case StatusSkipped, StatusStale:
+	case StatusSkipped, StatusStale, StatusCancelled:
 		// Yellow: not a real failure, but somebody has to act (a stale
-		// branch wants a refresh, the same color as a stale rescue marker).
+		// branch wants a refresh, a cancelled build wants a retry; the same
+		// color as a stale rescue marker).
 		return fmt.Sprintf("\033[33m%s\033[0m", label)
-	case StatusChecking, StatusApproving, StatusMerging, StatusRefreshed:
-		// Cyan: work in progress -- a refreshed branch is re-running CI.
+	case StatusChecking, StatusApproving, StatusMerging, StatusRefreshed, StatusRetried:
+		// Cyan: work in progress -- a refreshed branch or a retried build
+		// is re-running CI.
 		return fmt.Sprintf("\033[36m%s\033[0m", label)
 	default:
 		return label
@@ -201,6 +203,8 @@ func PrintPlainResults(w *os.File, status *PRStatus) {
 	printFailureGroup(w, "Failed", otherFailed)
 	printFailureGroup(w, StaleGroupHeader, status.StaleEntries())
 	printFailureGroup(w, RefreshedGroupHeader, status.RefreshedEntries())
+	printFailureGroup(w, CancelledGroupHeader, status.CancelledEntries())
+	printFailureGroup(w, RetriedGroupHeader, status.RetriedEntries())
 	printFailureGroup(w, "CI unavailable (Actions budget)", blocked)
 
 	if len(skipped) > 0 {
@@ -212,11 +216,13 @@ func PrintPlainResults(w *os.File, status *PRStatus) {
 	}
 }
 
-// Section headers shared by the plain-text and TUI summaries for the two
-// stale-failure buckets, so both outputs name them identically.
+// Section headers shared by the plain-text and TUI summaries for the stale
+// and cancelled buckets, so both outputs name them identically.
 const (
 	StaleGroupHeader     = "Stale (behind base, failing checks green there -- refresh first)"
 	RefreshedGroupHeader = "Refreshed (re-checking)"
+	CancelledGroupHeader = "Cancelled (CircleCI auto-cancelled the build -- retry first)"
+	RetriedGroupHeader   = "Retried (re-checking)"
 )
 
 // printFailureGroup writes a header and one entry per failure including its

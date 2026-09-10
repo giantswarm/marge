@@ -183,3 +183,54 @@ func TestColorizeStatus_staleAndRefreshedAreNotRed(t *testing.T) {
 		t.Error("stale and refreshed must not render in the failure color")
 	}
 }
+
+func TestStatusCancelled_strings(t *testing.T) {
+	if got := StatusCancelled.String(); got != "Cancelled" {
+		t.Errorf("StatusCancelled.String() = %q, want %q", got, "Cancelled")
+	}
+	if got := StatusRetried.String(); got != "Retried" {
+		t.Errorf("StatusRetried.String() = %q, want %q", got, "Retried")
+	}
+}
+
+func TestStatus_cancelledAndRetriedAreNotFailures(t *testing.T) {
+	s := NewPRStatus()
+	i1 := s.Add(PRInfo{Owner: "o", Repo: "r", Number: 1})
+	s.Update(i1, StatusCancelled, "build 1263 auto-cancelled; retry needed")
+	i2 := s.Add(PRInfo{Owner: "o", Repo: "r", Number: 2})
+	s.Update(i2, StatusRetried, "re-checking; build 1263 retried as 1272")
+	i3 := s.Add(PRInfo{Owner: "o", Repo: "r", Number: 3})
+	s.Update(i3, StatusFailed, "checks failed: ci/circleci: go-build")
+
+	c := s.Summary()
+	if c.Failed != 1 || c.Cancelled != 1 || c.Retried != 1 {
+		t.Errorf("Summary = %+v, want failed=1 cancelled=1 retried=1", c)
+	}
+	if ar := s.ActionRequired(); len(ar) != 1 || ar[0].PR.Number != 3 {
+		t.Errorf("ActionRequired = %+v, want only #3 (cancelled/retried stay out of the rescue path)", ar)
+	}
+	if ce := s.CancelledEntries(); len(ce) != 1 || ce[0].PR.Number != 1 {
+		t.Errorf("CancelledEntries = %+v, want only #1", ce)
+	}
+	if re := s.RetriedEntries(); len(re) != 1 || re[0].PR.Number != 2 {
+		t.Errorf("RetriedEntries = %+v, want only #2", re)
+	}
+	summary := s.FormatSummary()
+	for _, want := range []string{"1 failed", "1 cancelled", "1 retried"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("FormatSummary() = %q, want it to contain %q", summary, want)
+		}
+	}
+}
+
+func TestColorizeStatus_cancelledAndRetriedAreNotRed(t *testing.T) {
+	failed := ColorizeStatus(StatusFailed, "x")
+	cancelled := ColorizeStatus(StatusCancelled, "x")
+	retried := ColorizeStatus(StatusRetried, "x")
+	if cancelled == failed || retried == failed {
+		t.Error("cancelled and retried must not render in the failure color")
+	}
+	if cancelled == retried {
+		t.Error("a build awaiting a retry and one re-running must look different")
+	}
+}

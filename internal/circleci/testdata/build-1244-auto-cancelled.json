@@ -1,0 +1,469 @@
+{
+  "build_num": 1244,
+  "build_url": "https://circleci.com/gh/giantswarm/mcp-capi/1244",
+  "branch": "renovate/golang.org-x-crypto-0.x",
+  "vcs_type": "github",
+  "vcs_revision": "2c0ce64c2e56aeed9a3c15865243f539d6ab25f4",
+  "username": "giantswarm",
+  "reponame": "mcp-capi",
+  "why": "github",
+  "status": "failed",
+  "outcome": "failed",
+  "lifecycle": "finished",
+  "canceled": false,
+  "failed": true,
+  "timedout": false,
+  "infrastructure_fail": false,
+  "retry_of": null,
+  "fail_reason": null,
+  "workflows": {
+    "job_name": "go-build",
+    "workflow_name": "build",
+    "job_id": "93a78546-1013-4d30-a81b-04e9499d9fc6",
+    "workflow_id": "0fc8585a-0701-49af-86ff-4de24beee305"
+  },
+  "steps": [
+    {
+      "name": "Spin up environment",
+      "actions": [
+        {
+          "index": 0,
+          "step": 0,
+          "name": "Spin up environment",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": null,
+          "start_time": "2026-09-09T06:15:56.757Z",
+          "end_time": "2026-09-09T06:16:10.917Z",
+          "run_time_millis": 14160,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Preparing environment variables",
+      "actions": [
+        {
+          "index": 0,
+          "step": 99,
+          "name": "Preparing environment variables",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": null,
+          "start_time": "2026-09-09T06:16:11.111Z",
+          "end_time": "2026-09-09T06:16:11.125Z",
+          "run_time_millis": 14,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Checkout code",
+      "actions": [
+        {
+          "index": 0,
+          "step": 101,
+          "name": "Checkout code",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": null,
+          "start_time": "2026-09-09T06:16:11.235Z",
+          "end_time": "2026-09-09T06:16:12.647Z",
+          "run_time_millis": 1412,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Showing Architect Version",
+      "actions": [
+        {
+          "index": 0,
+          "step": 102,
+          "name": "Showing Architect Version",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:12.705Z",
+          "end_time": "2026-09-09T06:16:12.72Z",
+          "run_time_millis": 15,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Showing Bash Version",
+      "actions": [
+        {
+          "index": 0,
+          "step": 103,
+          "name": "Showing Bash Version",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:12.775Z",
+          "end_time": "2026-09-09T06:16:12.786Z",
+          "run_time_millis": 11,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Showing Git Version",
+      "actions": [
+        {
+          "index": 0,
+          "step": 104,
+          "name": "Showing Git Version",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:12.829Z",
+          "end_time": "2026-09-09T06:16:12.84Z",
+          "run_time_millis": 11,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Showing Gitsemver Version",
+      "actions": [
+        {
+          "index": 0,
+          "step": 105,
+          "name": "Showing Gitsemver Version",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:12.878Z",
+          "end_time": "2026-09-09T06:16:12.891Z",
+          "run_time_millis": 13,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Showing Go Version",
+      "actions": [
+        {
+          "index": 0,
+          "step": 106,
+          "name": "Showing Go Version",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:12.952Z",
+          "end_time": "2026-09-09T06:16:12.969Z",
+          "run_time_millis": 17,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Showing Helm Version",
+      "actions": [
+        {
+          "index": 0,
+          "step": 107,
+          "name": "Showing Helm Version",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:13.018Z",
+          "end_time": "2026-09-09T06:16:13.074Z",
+          "run_time_millis": 56,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Pin GOCACHE",
+      "actions": [
+        {
+          "index": 0,
+          "step": 108,
+          "name": "Pin GOCACHE",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:13.114Z",
+          "end_time": "2026-09-09T06:16:13.12Z",
+          "run_time_millis": 6,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Restore Go module cache",
+      "actions": [
+        {
+          "index": 0,
+          "step": 109,
+          "name": "Restore Go module cache",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": null,
+          "start_time": "2026-09-09T06:16:13.186Z",
+          "end_time": "2026-09-09T06:16:13.323Z",
+          "run_time_millis": 137,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Restore Go build cache",
+      "actions": [
+        {
+          "index": 0,
+          "step": 110,
+          "name": "Restore Go build cache",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": null,
+          "start_time": "2026-09-09T06:16:13.369Z",
+          "end_time": "2026-09-09T06:16:13.453Z",
+          "run_time_millis": 84,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Check if go.mod and go.sum are clean",
+      "actions": [
+        {
+          "index": 0,
+          "step": 111,
+          "name": "Check if go.mod and go.sum are clean",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:13.495Z",
+          "end_time": "2026-09-09T06:16:25.486Z",
+          "run_time_millis": 11991,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Create ldflags file",
+      "actions": [
+        {
+          "index": 0,
+          "step": 112,
+          "name": "Create ldflags file",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:25.533Z",
+          "end_time": "2026-09-09T06:16:26.787Z",
+          "run_time_millis": 1254,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Check for non-ASCII characters in file names",
+      "actions": [
+        {
+          "index": 0,
+          "step": 113,
+          "name": "Check for non-ASCII characters in file names",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:26.842Z",
+          "end_time": "2026-09-09T06:16:26.867Z",
+          "run_time_millis": 25,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Check if Go code is formatted according to goimports",
+      "actions": [
+        {
+          "index": 0,
+          "step": 114,
+          "name": "Check if Go code is formatted according to goimports",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:26.915Z",
+          "end_time": "2026-09-09T06:16:35.774Z",
+          "run_time_millis": 8859,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Check if code structure differs from gofmt's",
+      "actions": [
+        {
+          "index": 0,
+          "step": 115,
+          "name": "Check if code structure differs from gofmt's",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:35.813Z",
+          "end_time": "2026-09-09T06:16:35.851Z",
+          "run_time_millis": 38,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Run unit tests via Makefile target",
+      "actions": [
+        {
+          "index": 0,
+          "step": 116,
+          "name": "Run unit tests via Makefile target",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:16:35.894Z",
+          "end_time": "2026-09-09T06:18:09.461Z",
+          "run_time_millis": 93567,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "architect/go-test: Run gosec on non test files",
+      "actions": [
+        {
+          "index": 0,
+          "step": 117,
+          "name": "architect/go-test: Run gosec on non test files",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:18:09.514Z",
+          "end_time": "2026-09-09T06:18:12.672Z",
+          "run_time_millis": 3158,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Check if dependencies have known security vulnerabilities",
+      "actions": [
+        {
+          "index": 0,
+          "step": 118,
+          "name": "Check if dependencies have known security vulnerabilities",
+          "type": "test",
+          "status": "success",
+          "failed": null,
+          "canceled": null,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": 0,
+          "start_time": "2026-09-09T06:18:12.709Z",
+          "end_time": "2026-09-09T06:18:13.58Z",
+          "run_time_millis": 871,
+          "has_output": true
+        }
+      ]
+    },
+    {
+      "name": "Build binaries",
+      "actions": [
+        {
+          "index": 0,
+          "step": 119,
+          "name": "Build binaries",
+          "type": "test",
+          "status": "canceled",
+          "failed": null,
+          "canceled": true,
+          "timedout": null,
+          "infrastructure_fail": null,
+          "exit_code": null,
+          "start_time": "2026-09-09T06:18:13.627Z",
+          "end_time": "2026-09-09T06:20:48.495Z",
+          "run_time_millis": 154868,
+          "has_output": true,
+          "bash_command": "#!/bin/bash -eo pipefail\nLD_FLAGS=\"-s -w\"\nif [ -f .ldflags ] [1mtail truncated"
+        }
+      ]
+    }
+  ]
+}

@@ -58,6 +58,8 @@ export GITHUB_TOKEN="ghp_..."
 | Metadata | Read | Required by default |
 | Contents | Read (write only with `--refresh-stale`) | Compare a PR with its base (stale classification, rescue marker fingerprints); with `--refresh-stale`: update a stale PR branch from its base |
 
+Optionally, a CircleCI API token lets marge inspect builds of **private** CircleCI projects and retry auto-cancelled builds (see [Cancelled builds](#cancelled-builds-circleci-auto-cancel)). marge reads `CIRCLECI_CLI_TOKEN` or the CircleCI CLI's own config, `~/.circleci/cli.yml`, and sends it as the `Circle-Token` header. Public projects need no token.
+
 ## Usage
 
 ### `marge [query] [flags]` (default command)
@@ -75,6 +77,7 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 | `--org` | | | Limit to repos owned by this org or user |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
 | `--refresh-stale` | | `false` | Update the branch of stale PRs from their base so CI re-runs (see [Stale failures](#stale-failures-already-fixed-on-the-base-branch)) |
+| `--retry-cancelled` | | `false` | Retry CircleCI builds that CircleCI auto-cancelled on the PR head (see [Cancelled builds](#cancelled-builds-circleci-auto-cancel)) |
 | `--trusted-authors` | | `renovate[bot],dependabot[bot]` | Comma-separated list of trusted PR author logins |
 | `--security-patterns` | | _(built-in)_ | Override the built-in security check pattern list (see below) |
 
@@ -119,6 +122,19 @@ Two guards apply to the refresh:
 
 The heuristic is deliberately cheap: `main` being green does not prove the bump itself is innocent (a major bump can be red for its own reasons while `main` is fine). The cost of a wrong `Stale` verdict is one branch refresh and one CI run, after which the PR is no longer behind and is classified on its own merits.
 
+#### Cancelled builds (CircleCI auto-cancel)
+
+CircleCI cancels a running build on its own when a newer pipeline starts on the same branch (Renovate pushed a rebase or a new version while the previous build ran) or when it detects a redundant workflow. The cancelled build still posts `failure` -- "Your tests failed on CircleCI" -- to the commit it was building, and the status description carries no hint of the cancellation. Read at face value, the PR looks like a real failure and costs an operator (or a rescue agent) a diagnosis that ends in "nothing is wrong, just retry".
+
+marge looks behind the status. When **every** failing check of a PR is a commit status whose `target_url` points at a CircleCI build (`https://circleci.com/gh/<owner>/<repo>/<build>`), it fetches that build from the v1.1 API (`GET /api/v1.1/project/github/<owner>/<repo>/<build>`) and inspects its steps. Verified against the live API: an auto-cancelled build reports `status: failed` and `canceled: false` at the top level, exactly like a real failure -- but its steps are all `success` up to the cancellation and only `canceled` from there on, whereas a real failure has a step with `status: failed`. A build cancelled before any step ran reports `status: canceled` instead. Both shapes classify the PR as **`Cancelled`** rather than `Failed`:
+
+- **On the current head** -- `Cancelled (build 1263 auto-cancelled; retry needed)`: the commit has no verdict yet. With **`--retry-cancelled`** (MCP: `retry_cancelled: true`) marge calls `POST /api/v1.1/project/github/<owner>/<repo>/<build>/retry` so the same commit is built again, and reports the PR as **`Retried (re-checking; build 1263 retried as 1272)`**. The next sweep reads the real result.
+- **Behind a newer head** -- `Cancelled (build 1244 (2c0ce64) auto-cancelled; head is now 605a2d6, its build is the verdict)`: the branch moved on and the new head's own build decides. Nothing is retried.
+
+Cancelled PRs are listed in their own **Cancelled** section (and **Retried** once retried), counted separately from failures and kept out of the action-required list. The lookup is lazy -- nothing is fetched unless a failing status points at CircleCI -- and it is decided before the stale and security classifications because it rests on positive evidence about the very build that failed. A PR with a mix of a cancelled build and a genuine failure (a failing GitHub Actions check run, a CircleCI build with a failed step) stays `Failed`. `--dry-run` classifies but never retries.
+
+Public CircleCI projects can be inspected without credentials. Private projects and the retry endpoint need a CircleCI API token (see [Setup](#setup)). Without one, a private project's build cannot be inspected and the PR keeps today's `Failed` classification, annotated: `Failed (checks failed: ci/circleci: go-build; ci/circleci: go-build: build 1263 could not be inspected (HTTP 404: Build not found; no CircleCI token configured (private project?)))`. A cancelled build on the current head with `--retry-cancelled` but no token is reported as `Cancelled (...; retry skipped: no CircleCI token configured)`.
+
 #### PR age highlighting
 
 Every table and report includes an **Age** column showing how long the PR has been open (`5h`, `3d`, `2w`). PRs older than 3 days are highlighted yellow, older than 7 days red -- an old dependency PR has already survived several sweeps and is the most likely to need manual work. Failure sections are sorted oldest-first for the same reason.
@@ -152,7 +168,7 @@ Use [`marge mark`](#marge-mark-pr-url-flags) to write markers without knowing th
 
 ### `marge sweep [flags]`
 
-Processes all matching PRs without interactive grouping. After processing, prints a **Security failures** section, an **Action required** section listing any PRs that failed, have conflicts, or came from untrusted authors, a **Stale** section for PRs whose failing checks are already green on their base branch (and a **Refreshed** section once `--refresh-stale` has updated them), and a **CI unavailable (Actions budget)** section for PRs whose checks never ran because an Actions spending limit was exhausted. Security failures (e.g. govulncheck, Trivy, CodeQL) are separated so they are not mistaken for ordinary CI flakiness; stale and budget-blocked PRs are separated so they are not mistaken for genuine failures (see [Stale failures](#stale-failures-already-fixed-on-the-base-branch) and [CI unavailable (Actions budget)](#ci-unavailable-actions-budget)).
+Processes all matching PRs without interactive grouping. After processing, prints a **Security failures** section, an **Action required** section listing any PRs that failed, have conflicts, or came from untrusted authors, a **Stale** section for PRs whose failing checks are already green on their base branch (and a **Refreshed** section once `--refresh-stale` has updated them), a **Cancelled** section for PRs whose failing CircleCI builds were auto-cancelled by CircleCI (and a **Retried** section once `--retry-cancelled` has retried them), and a **CI unavailable (Actions budget)** section for PRs whose checks never ran because an Actions spending limit was exhausted. Security failures (e.g. govulncheck, Trivy, CodeQL) are separated so they are not mistaken for ordinary CI flakiness; stale, cancelled and budget-blocked PRs are separated so they are not mistaken for genuine failures (see [Stale failures](#stale-failures-already-fixed-on-the-base-branch), [Cancelled builds](#cancelled-builds-circleci-auto-cancel) and [CI unavailable (Actions budget)](#ci-unavailable-actions-budget)).
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
@@ -163,6 +179,7 @@ Processes all matching PRs without interactive grouping. After processing, print
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
 | `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are skipped) |
 | `--refresh-stale` | | `false` | Update the branch of stale PRs from their base so CI re-runs (see [Stale failures](#stale-failures-already-fixed-on-the-base-branch)) |
+| `--retry-cancelled` | | `false` | Retry CircleCI builds that CircleCI auto-cancelled on the PR head (see [Cancelled builds](#cancelled-builds-circleci-auto-cancel)) |
 | `--trusted-authors` | | `renovate[bot],dependabot[bot]` | Comma-separated list of trusted PR author logins |
 | `--security-patterns` | | _(built-in)_ | Override the built-in security check pattern list (see [Security check patterns](#security-check-patterns)) |
 
@@ -187,7 +204,7 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 Starts a stdio MCP server exposing two tools:
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `ci_unavailable`, `skipped`). Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`); `dry_run: true` still classifies them under `stale`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `ci_unavailable`, `skipped`). Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`) and `retry_cancelled: true` to retry auto-cancelled CircleCI builds on the PR head (they then appear under `retried`); `dry_run: true` still classifies them under `stale` and `cancelled`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
 
 ### Other commands
@@ -247,6 +264,12 @@ Sweep and refresh stale PRs (behind their base, failing checks already green the
 marge sweep --refresh-stale
 ```
 
+Sweep and retry CircleCI builds that CircleCI auto-cancelled on the PR head, so the same commit gets a real verdict:
+
+```bash
+marge sweep --retry-cancelled
+```
+
 ## How it works
 
 1. Searches GitHub for open PRs authored by `app/renovate` or `app/dependabot` that are either requesting your review or in your own repositories. Self-authored dependency-update PRs (e.g. from self-hosted Renovate) in your repos are also included.
@@ -254,7 +277,8 @@ marge sweep --refresh-stale
 3. Validates each PR's author against a trusted allow-list (`renovate[bot]`, `dependabot[bot]`, and the authenticated user by default). PRs from untrusted authors are refused with a clear status message. You can extend the allow-list with `--trusted-authors`.
 4. For each selected PR, processes it in parallel (up to 5 concurrent):
    - Checks combined commit status and check runs; polls every 15 seconds for up to 5 minutes if pending.
-   - On failure, checks whether the PR is behind its base branch with every failing check green on the base head; if so it is `Stale`, not `Failed`, and `--refresh-stale` updates the branch so CI re-runs.
+   - On failure, looks behind failing CircleCI statuses: a build that CircleCI itself auto-cancelled makes the PR `Cancelled`, not `Failed`, and `--retry-cancelled` retries it on the same commit.
+   - Otherwise checks whether the PR is behind its base branch with every failing check green on the base head; if so it is `Stale`, not `Failed`, and `--refresh-stale` updates the branch so CI re-runs.
    - Approves the PR if not already approved.
    - If auto-merge is enabled, lets the merge queue handle it (unless `--merge-auto` is set).
    - Otherwise merges via squash.
