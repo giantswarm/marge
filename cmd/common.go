@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/go-github/v91/github"
+	"github.com/teemow/marge/internal/circleci"
 	"github.com/teemow/marge/internal/pr"
 	"github.com/teemow/marge/internal/process"
 )
@@ -32,6 +33,7 @@ type RunOptions struct {
 	TrustedAuthors   string
 	MergeAuto        bool
 	RefreshStale     bool
+	RetryCancelled   bool
 	Org              string
 	ReposFile        string
 	Grouping         string
@@ -110,6 +112,8 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc := process.NewProcessor(client, opts.DryRun, opts.MergeAuto, login, parseTrustedAuthors(opts.TrustedAuthors))
 	proc.SecurityCheckPatterns = parseCSVList(opts.SecurityPatterns)
 	proc.RefreshStale = opts.RefreshStale
+	proc.RetryCancelled = opts.RetryCancelled
+	proc.CircleCI = circleci.NewClient()
 
 	// Build a per-repo index so we can look up each PR's status table index.
 	indexByPR := make(map[string]int, len(prs))

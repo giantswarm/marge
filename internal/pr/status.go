@@ -33,6 +33,15 @@ const (
 	// its base (the "Update branch" button); CI is running again and the
 	// next sweep decides.
 	StatusRefreshed
+	// StatusCancelled marks a failing PR whose every failing check is a
+	// CircleCI build that CircleCI itself cancelled (a newer pipeline on the
+	// branch, a redundant workflow) rather than one that failed a step.
+	// There is no verdict on the code yet: the remedy is a retry, not a
+	// rescue.
+	StatusCancelled
+	// StatusRetried marks a cancelled PR whose builds were just retried on
+	// the same commit; CI is running again and the next sweep decides.
+	StatusRetried
 )
 
 func (s StatusState) String() string {
@@ -69,6 +78,10 @@ func (s StatusState) String() string {
 		return "Stale"
 	case StatusRefreshed:
 		return "Refreshed"
+	case StatusCancelled:
+		return "Cancelled"
+	case StatusRetried:
+		return "Retried"
 	default:
 		return "Unknown"
 	}
@@ -156,15 +169,19 @@ func (s *PRStatus) Snapshot() []StatusEntry {
 // Failed covers every action-required outcome (plain and security failures,
 // conflicts, untrusted authors). Blocked (CI could not run because of an
 // Actions budget block), Stale (failing checks are green on the base branch
-// head and the PR is behind it) and Refreshed (a stale branch was just
-// updated from its base) are counted separately from Failed: none of them is
-// a genuine CI failure and none of them belongs in the rescue path.
+// head and the PR is behind it), Refreshed (a stale branch was just updated
+// from its base), Cancelled (CircleCI auto-cancelled the failing builds) and
+// Retried (those builds were just retried) are counted separately from
+// Failed: none of them is a genuine CI failure and none of them belongs in
+// the rescue path.
 type Counts struct {
 	Merged    int
 	Failed    int
 	Blocked   int
 	Stale     int
 	Refreshed int
+	Cancelled int
+	Retried   int
 	Skipped   int
 }
 
@@ -183,6 +200,10 @@ func (s *PRStatus) countsLocked() Counts {
 			c.Stale++
 		case StatusRefreshed:
 			c.Refreshed++
+		case StatusCancelled:
+			c.Cancelled++
+		case StatusRetried:
+			c.Retried++
 		case StatusSkipped:
 			c.Skipped++
 		}
@@ -214,6 +235,12 @@ func (s *PRStatus) FormatSummary() string {
 	}
 	if c.Refreshed > 0 {
 		fmt.Fprintf(&b, ", %d refreshed", c.Refreshed)
+	}
+	if c.Cancelled > 0 {
+		fmt.Fprintf(&b, ", %d cancelled", c.Cancelled)
+	}
+	if c.Retried > 0 {
+		fmt.Fprintf(&b, ", %d retried", c.Retried)
 	}
 	if c.Blocked > 0 {
 		fmt.Fprintf(&b, ", %d CI-unavailable", c.Blocked)
@@ -270,6 +297,21 @@ func (s *PRStatus) StaleEntries() []StatusEntry {
 // decides what they are.
 func (s *PRStatus) RefreshedEntries() []StatusEntry {
 	return s.entriesInState(StatusRefreshed)
+}
+
+// CancelledEntries returns entries whose every failing check is a CircleCI
+// build that CircleCI itself cancelled. Like StaleEntries these are kept
+// out of ActionRequired and the failed counts -- the remedy is "retry the
+// build and read the real verdict", not "rescue the code". Oldest PR first.
+func (s *PRStatus) CancelledEntries() []StatusEntry {
+	return s.entriesInState(StatusCancelled)
+}
+
+// RetriedEntries returns the cancelled entries whose builds were retried
+// during this run. Their CI is running again; the next sweep decides what
+// they are.
+func (s *PRStatus) RetriedEntries() []StatusEntry {
+	return s.entriesInState(StatusRetried)
 }
 
 func (s *PRStatus) entriesInState(state StatusState) []StatusEntry {

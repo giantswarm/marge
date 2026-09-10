@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/go-github/v91/github"
+	"github.com/teemow/marge/internal/circleci"
 	"github.com/teemow/marge/internal/pr"
 )
 
@@ -48,6 +49,16 @@ type Processor struct {
 	// (see classifyStale) so CI re-runs against current code. Without it a
 	// stale PR is only reported as such. Ignored in dry-run mode.
 	RefreshStale bool
+
+	// CircleCI looks behind failing "ci/circleci: <job>" commit statuses to
+	// tell an auto-cancelled build from a real failure (see
+	// classifyCancelled). Nil disables the lookup and every CircleCI
+	// failure is taken at face value.
+	CircleCI *circleci.Client
+	// RetryCancelled retries every auto-cancelled CircleCI build that ran on
+	// a PR's current head so the same commit gets a real verdict. Without it
+	// a cancelled PR is only reported as such. Ignored in dry-run mode.
+	RetryCancelled bool
 
 	staleCache
 }
@@ -148,6 +159,15 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 			status.Update(idx, pr.StatusBlockedCI, blockedDetail(outcome.blockedChecks))
 			return fmt.Errorf("ci unavailable: actions budget")
 		case "failure", "error":
+			// A CircleCI build that CircleCI itself cancelled carries no
+			// verdict on the code, so it is neither a failure nor stale.
+			// Decided first: it rests on positive evidence about this very
+			// build, where staleness is a heuristic.
+			cancelled, note := p.classifyCancelled(ctx, pullReq, outcome)
+			if cancelled != nil {
+				p.handleCancelled(ctx, cancelled, status, idx)
+				return fmt.Errorf("checks cancelled")
+			}
 			// A failure that is already fixed on the base branch is stale,
 			// not real: the branch is behind and every failing check is
 			// green on the base head. Decided before the security split so
@@ -157,9 +177,9 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 				return fmt.Errorf("checks stale")
 			}
 			if name := classifySecurityFailure(outcome.failedChecks, p.securityPatterns()); name != "" {
-				status.Update(idx, pr.StatusFailedSecurity, fmt.Sprintf("security check failed: %s", name))
+				status.Update(idx, pr.StatusFailedSecurity, withNote(fmt.Sprintf("security check failed: %s", name), note))
 			} else {
-				status.Update(idx, pr.StatusFailed, failureDetail(outcome.failedChecks))
+				status.Update(idx, pr.StatusFailed, withNote(failureDetail(outcome.failedChecks), note))
 			}
 			return fmt.Errorf("checks failed")
 		}
@@ -184,9 +204,16 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 // starting. The two are tracked separately so a billing block is never
 // reported as a real CI failure.
 type checkOutcome struct {
-	state         string
+	state string
+	// sha is the commit the statuses and check runs belong to: the PR head
+	// as GitHub resolved it for this poll.
+	sha           string
 	failedChecks  []string
 	blockedChecks []string
+	// statusTargets maps each failing commit-status context to its
+	// target_url, so the CircleCI lookup can find the build behind it.
+	// Check runs have no entry.
+	statusTargets map[string]string
 }
 
 func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (checkOutcome, error) {
@@ -237,34 +264,43 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		}
 	}
 
+	var statusTargets map[string]string
 	for _, s := range combined.Statuses {
 		state := s.GetState()
 		if state == "failure" || state == "error" {
 			if name := s.GetContext(); name != "" {
 				failedChecks = append(failedChecks, name)
+				if statusTargets == nil {
+					statusTargets = make(map[string]string)
+				}
+				statusTargets[name] = s.GetTargetURL()
 			}
 		}
 	}
 
-	if hasFailure {
-		return checkOutcome{state: "failure", failedChecks: failedChecks, blockedChecks: blockedChecks}, nil
+	out := checkOutcome{
+		sha:           combined.GetSHA(),
+		failedChecks:  failedChecks,
+		blockedChecks: blockedChecks,
+		statusTargets: statusTargets,
 	}
-	if !allComplete {
-		return checkOutcome{state: "pending"}, nil
+	switch {
+	case hasFailure:
+		out.state = "failure"
+	case !allComplete:
+		out.state = "pending"
+	case combinedState == "failure" || combinedState == "error":
+		out.state = combinedState
+	case len(blockedChecks) > 0:
+		// Every failing check was a budget block and nothing genuinely
+		// failed: the PR's CI could not run at all.
+		out.state = "blocked"
+	case combinedState == "pending" && len(combined.Statuses) > 0:
+		out.state = "pending"
+	default:
+		out.state = "success"
 	}
-	if combinedState == "failure" || combinedState == "error" {
-		return checkOutcome{state: combinedState, failedChecks: failedChecks, blockedChecks: blockedChecks}, nil
-	}
-	// Every failing check was a budget block and nothing genuinely failed:
-	// the PR's CI could not run at all.
-	if len(blockedChecks) > 0 {
-		return checkOutcome{state: "blocked", blockedChecks: blockedChecks}, nil
-	}
-	if combinedState == "pending" && len(combined.Statuses) > 0 {
-		return checkOutcome{state: "pending"}, nil
-	}
-
-	return checkOutcome{state: "success"}, nil
+	return out, nil
 }
 
 // isBudgetBlockedCheckRun reports whether a failed check run failed only
@@ -373,6 +409,16 @@ func failureDetail(failedChecks []string) string {
 		return fmt.Sprintf("checks failed: %s", strings.Join(failedChecks, ", "))
 	}
 	return fmt.Sprintf("checks failed: %s (+%d more)", strings.Join(failedChecks[:maxShow], ", "), len(failedChecks)-maxShow)
+}
+
+// withNote appends an operator note (for instance why a CircleCI build could
+// not be inspected) to a status detail. An empty note leaves the detail as
+// is.
+func withNote(detail, note string) string {
+	if note == "" {
+		return detail
+	}
+	return detail + "; " + note
 }
 
 func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) error {

@@ -36,10 +36,13 @@ returning structured JSON results instead of terminal output.`,
 		mcpServer.AddTool(
 			mcp.NewTool("sweep",
 				mcp.WithDescription("Sweep dependency update PRs: find, approve, and merge Renovate/Dependabot PRs. "+
-					"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, ci_unavailable and skipped lists. "+
+					"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable and skipped lists. "+
 					"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
 					"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
 					"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
+					"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
+					"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
+					"set retry_cancelled to retry such builds on the same commit (they are then listed under retried). "+
 					"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
 					"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
 				mcp.WithString("org",
@@ -60,6 +63,9 @@ returning structured JSON results instead of terminal output.`,
 				),
 				mcp.WithBoolean("refresh_stale",
 					mcp.Description("Update the branch of stale PRs from their base (same as GitHub's \"Update branch\" button) so CI re-runs, and report them under refreshed (default: false). Skipped for PRs carrying a non-stale ai-rescue marker."),
+				),
+				mcp.WithBoolean("retry_cancelled",
+					mcp.Description("Retry CircleCI builds that CircleCI auto-cancelled on the PR's current head so the same commit gets a real verdict, and report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
 				),
 				mcp.WithString("author",
 					mcp.Description("Filter by PR author: \"renovate\", \"dependabot\", or \"all\" (default: \"all\")"),
@@ -115,6 +121,16 @@ type SweepResult struct {
 	// Refreshed lists stale PRs whose branch was updated from its base in
 	// this run. CI is running again; the next sweep decides what they are.
 	Refreshed []SweepPREntry `json:"refreshed,omitempty"`
+	// Cancelled lists failing PRs whose every failing check is a CircleCI
+	// build that CircleCI itself auto-cancelled: there is no verdict on the
+	// code yet. The remedy is a retry (retry_cancelled), not a rescue, so
+	// they are excluded from action_required. A build cancelled behind a
+	// newer head is listed too but never retried: the new head's own build
+	// is the verdict.
+	Cancelled []SweepPREntry `json:"cancelled,omitempty"`
+	// Retried lists cancelled PRs whose builds were retried on the same
+	// commit in this run. CI is running again; the next sweep decides.
+	Retried []SweepPREntry `json:"retried,omitempty"`
 	// CIUnavailable lists PRs whose CI could not run because a GitHub Actions
 	// budget / spending-limit block prevented every job from starting. These
 	// are NOT failures: the remedy is to raise or await the Actions budget,
@@ -142,6 +158,12 @@ type SweepSummary struct {
 	// branch was updated in this run. Both are disjoint from Failed.
 	Stale     int `json:"stale"`
 	Refreshed int `json:"refreshed"`
+	// Cancelled counts failing PRs whose failing builds CircleCI itself
+	// cancelled (see SweepResult.Cancelled); Retried counts the cancelled
+	// PRs whose builds were retried in this run. Both are disjoint from
+	// Failed.
+	Cancelled int `json:"cancelled"`
+	Retried   int `json:"retried"`
 	Skipped   int `json:"skipped"`
 }
 
@@ -186,6 +208,7 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	mergeAuto := request.GetBool("merge_auto", false)
 	dryRun := request.GetBool("dry_run", false)
 	refreshStale := request.GetBool("refresh_stale", false)
+	retryCancelled := request.GetBool("retry_cancelled", false)
 	author := request.GetString("author", "all")
 	trustedAuthors := request.GetString("trusted_authors", "renovate[bot],dependabot[bot]")
 	securityPatterns := request.GetString("security_patterns", "")
@@ -233,6 +256,7 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 		DryRun:           dryRun,
 		MergeAuto:        mergeAuto,
 		RefreshStale:     refreshStale,
+		RetryCancelled:   retryCancelled,
 		Quiet:            true,
 		Author:           author,
 		TrustedAuthors:   trustedAuthors,
@@ -269,6 +293,8 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 			CIUnavailable:    counts.Blocked,
 			Stale:            counts.Stale,
 			Refreshed:        counts.Refreshed,
+			Cancelled:        counts.Cancelled,
+			Retried:          counts.Retried,
 			Skipped:          counts.Skipped,
 		},
 	}
@@ -321,6 +347,14 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 
 	for _, e := range status.RefreshedEntries() {
 		result.Refreshed = append(result.Refreshed, toEntry(e))
+	}
+
+	for _, e := range status.CancelledEntries() {
+		result.Cancelled = append(result.Cancelled, toEntry(e))
+	}
+
+	for _, e := range status.RetriedEntries() {
+		result.Retried = append(result.Retried, toEntry(e))
 	}
 
 	for _, e := range status.ActionRequired() {
