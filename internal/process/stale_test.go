@@ -31,6 +31,12 @@ type staleFixture struct {
 	// baseAsStatus reports go-build on the base head as a commit status.
 	baseAsStatus bool
 	comments     []string
+	// title, changedFiles and files describe the PR's own change: the
+	// compare response lists files (with patches) and the PR reports how
+	// many it changed. Rescue-marker fingerprints are computed from them.
+	title        string
+	changedFiles int
+	files        []*github.CommitFile
 
 	updateBranchCalls atomic.Int32
 	compareCalls      atomic.Int32
@@ -55,6 +61,8 @@ func (f *staleFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/pulls/1", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.PullRequest{
 			Number:         new(1),
+			Title:          new(f.title),
+			ChangedFiles:   new(f.changedFiles),
 			MergeableState: new("behind"),
 			User:           &github.User{Login: new("renovate[bot]")},
 			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/foo")},
@@ -94,6 +102,7 @@ func (f *staleFixture) server(t *testing.T) *httptest.Server {
 			BehindBy:   new(f.behindBy),
 			AheadBy:    new(1),
 			BaseCommit: &github.RepositoryCommit{SHA: new(fxBase)},
+			Files:      f.files,
 		})
 	})
 
@@ -167,8 +176,22 @@ func (f *staleFixture) run(t *testing.T, configure func(*Processor)) pr.StatusEn
 	return status.Snapshot()[idx]
 }
 
+// markerComment renders a legacy marker comment: head SHA only, no
+// fingerprint, as written before patch_id/change_id existed.
 func markerComment(headSHA string) string {
-	return fmt.Sprintf("**AI rescue failed** (klaus): nope\n\n<!-- ai-rescue: {\"tool\":\"klaus\",\"outcome\":\"failed\",\"reason\":\"nope\",\"head_sha\":%q,\"at\":\"2026-09-04T18:40:00Z\"} -->", headSHA)
+	return markerCommentWith(headSHA, pr.Fingerprint{})
+}
+
+// markerCommentWith renders a marker comment pinning headSHA and fp.
+func markerCommentWith(headSHA string, fp pr.Fingerprint) string {
+	extra := ""
+	if fp.PatchID != "" {
+		extra += fmt.Sprintf(",\"patch_id\":%q", fp.PatchID)
+	}
+	if fp.ChangeID != "" {
+		extra += fmt.Sprintf(",\"change_id\":%q", fp.ChangeID)
+	}
+	return fmt.Sprintf("**AI rescue failed** (klaus): nope\n\n<!-- ai-rescue: {\"tool\":\"klaus\",\"outcome\":\"failed\",\"reason\":\"nope\",\"head_sha\":%q%s,\"at\":\"2026-09-04T18:40:00Z\"} -->", headSHA, extra)
 }
 
 func TestClassifyStale_behindAndGreenOnBase(t *testing.T) {

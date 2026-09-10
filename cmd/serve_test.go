@@ -118,3 +118,23 @@ func TestBuildSweepResult_staleAndRefreshedAreSeparate(t *testing.T) {
 		t.Errorf("ActionRequired = %+v, want only #1", got.ActionRequired)
 	}
 }
+
+// TestBuildSweepResult_rescueRebased guards that the rescue object tells a
+// marker whose branch was merely rebased (still valid) apart from a stale
+// one, so orchestrators keep skipping the rebased PR.
+func TestBuildSweepResult_rescueRebased(t *testing.T) {
+	status := pr.NewPRStatus()
+	idx := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 1})
+	status.Update(idx, pr.StatusFailed, "checks failed: build")
+	status.SetRescue(idx, &pr.RescueMarker{Tool: "klaus", Outcome: "blocked", Reason: "peer dep", Rebased: true})
+
+	got := buildSweepResult(status)
+
+	if len(got.ActionRequired) != 1 || got.ActionRequired[0].Rescue == nil {
+		t.Fatalf("ActionRequired = %+v, want one entry with a rescue object", got.ActionRequired)
+	}
+	rescue := got.ActionRequired[0].Rescue
+	if rescue.Stale || !rescue.Rebased {
+		t.Errorf("rescue = %+v, want stale=false rebased=true", rescue)
+	}
+}

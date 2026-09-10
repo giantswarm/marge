@@ -499,3 +499,24 @@ func TestIsDependencyUpdateTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractTargetVersion(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		{"Bump lodash from 4.17.20 to 4.17.21", "4.17.21"},
+		{"Bump k8s.io/apimachinery from v0.33.3 to v0.35.2", "v0.35.2"},
+		{"chore(deps): update dependency typescript to v7", "v7"},
+		{"chore(deps): update eslint monorepo to v10 (major)", "v10"},
+		{"fix(deps): update all non-major dependencies", ""},
+		{"Lock file maintenance", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			if got := ExtractTargetVersion(tt.title); got != tt.want {
+				t.Errorf("ExtractTargetVersion(%q) = %q, want %q", tt.title, got, tt.want)
+			}
+		})
+	}
+}

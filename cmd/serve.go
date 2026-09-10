@@ -40,7 +40,8 @@ returning structured JSON results instead of terminal output.`,
 					"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
 					"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
 					"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
-					"Rescue tooling should act on action_required only."),
+					"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
+					"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
 				mcp.WithString("org",
 					mcp.Description("GitHub organization or user to limit the sweep to"),
 				),
@@ -76,7 +77,7 @@ returning structured JSON results instead of terminal output.`,
 
 		mcpServer.AddTool(
 			mcp.NewTool("mark",
-				mcp.WithDescription("Record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted; the marker goes stale automatically when the PR branch is updated."),
+				mcp.WithDescription("Record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
 				mcp.WithString("pr_url",
 					mcp.Required(),
 					mcp.Description("Pull request URL (https://github.com/OWNER/REPO/pull/NUMBER)"),
@@ -168,10 +169,14 @@ type SweepRescueInfo struct {
 	Outcome string `json:"outcome"`
 	Reason  string `json:"reason,omitempty"`
 	At      string `json:"at,omitempty"`
-	// Stale is true when the PR head moved since the rescue attempt --
-	// the attempt no longer describes the current code and the PR is
+	// Stale is true when the PR content changed since the rescue attempt
+	// -- the attempt no longer describes the current code and the PR is
 	// fair game for another rescue.
 	Stale bool `json:"stale"`
+	// Rebased is true when the PR head moved since the rescue attempt but
+	// the change did not (a Renovate rebase onto a newer base): the marker
+	// still describes the current code and Stale is false.
+	Rebased bool `json:"rebased"`
 }
 
 func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -289,6 +294,7 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 				Outcome: e.Rescue.Outcome,
 				Reason:  e.Rescue.Reason,
 				Stale:   e.Rescue.Stale,
+				Rebased: e.Rescue.Rebased,
 			}
 			if !e.Rescue.At.IsZero() {
 				entry.Rescue.At = e.Rescue.At.UTC().Format(time.RFC3339)
@@ -355,6 +361,12 @@ func handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 		"tool":     marker.Tool,
 		"head_sha": marker.HeadSHA,
 		"at":       marker.At.Format(time.RFC3339),
+	}
+	if marker.PatchID != "" {
+		result["patch_id"] = marker.PatchID
+	}
+	if marker.ChangeID != "" {
+		result["change_id"] = marker.ChangeID
 	}
 	jsonBytes, err := json.Marshal(result)
 	if err != nil {
