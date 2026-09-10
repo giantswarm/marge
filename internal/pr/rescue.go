@@ -17,17 +17,24 @@ import (
 //
 // HeadSHA ties the attempt to the code it was attempted against. Renovate
 // force-pushes on rebase or version change, so a marker whose head_sha no
-// longer matches the PR head describes code that no longer exists -- the
-// attempt is stale and the PR is fair game for another rescue.
+// longer matches the PR head describes code that may no longer exist. The
+// embedded Fingerprint (patch_id, change_id; optional, absent from markers
+// written before it existed) tells the two apart: when the head moved but
+// the fingerprint still matches, the branch was only rebased and the
+// attempt still stands; otherwise it is stale and the PR is fair game for
+// another rescue.
 type RescueMarker struct {
 	Tool    string    `json:"tool,omitempty"`
 	Outcome string    `json:"outcome"`
 	Reason  string    `json:"reason,omitempty"`
 	HeadSHA string    `json:"head_sha,omitempty"`
 	At      time.Time `json:"at,omitempty"`
+	Fingerprint
 
-	// Stale is computed by MarkStale, never serialized into the marker.
-	Stale bool `json:"-"`
+	// Stale and Rebased are computed by MarkStale, never serialized into
+	// the marker. Rebased is set when the head moved but the change did not.
+	Stale   bool `json:"-"`
+	Rebased bool `json:"-"`
 }
 
 var rescueMarkerRE = regexp.MustCompile(`(?s)<!--\s*ai-rescue:\s*(\{.*?\})\s*-->`)
@@ -51,16 +58,24 @@ func ParseRescueMarker(body string) *RescueMarker {
 	return nil
 }
 
-// MarkStale sets Stale by comparing the marker's recorded head SHA with
-// the PR's current head. Short-vs-full SHA prefixes match. A marker
-// without a recorded SHA cannot be aged out, so it stays non-stale until
-// a newer marker replaces it.
-func (m *RescueMarker) MarkStale(currentHeadSHA string) {
-	if m.HeadSHA == "" || currentHeadSHA == "" {
-		m.Stale = false
+// MarkStale sets Stale and Rebased by comparing the marker with the PR's
+// current head. Same head (short-vs-full SHA prefixes match): fresh. Head
+// moved: the marker stays fresh, flagged Rebased, when the change it was
+// written for is still the change on the branch -- decided by the marker's
+// fingerprint against the current one, which `current` computes on demand.
+// It is only called when the head moved and the marker carries a
+// fingerprint; nil means none can be computed. Otherwise the marker is
+// stale. A marker without a recorded SHA cannot be aged out, so it stays
+// fresh until a newer marker replaces it.
+func (m *RescueMarker) MarkStale(currentHeadSHA string, current func() Fingerprint) {
+	m.Stale, m.Rebased = false, false
+	if m.HeadSHA == "" || currentHeadSHA == "" || shaPrefixMatch(m.HeadSHA, currentHeadSHA) {
 		return
 	}
-	m.Stale = !shaPrefixMatch(m.HeadSHA, currentHeadSHA)
+	if m.Comparable() && current != nil {
+		m.Rebased = m.Matches(current())
+	}
+	m.Stale = !m.Rebased
 }
 
 func shaPrefixMatch(a, b string) bool {
@@ -88,8 +103,9 @@ func (m *RescueMarker) CommentBody() string {
 }
 
 // FormatRescue renders the marker as a short human-readable annotation
-// for status output, e.g. "rescue failed 1d ago (klaus): ESM-only" or
-// "rescue failed 3d ago (klaus), stale: new commits since".
+// for status output, e.g. "rescue failed 1d ago (klaus): ESM-only",
+// "rescue failed 3d ago (klaus), stale: new commits since" or
+// "rescue blocked 5d ago (klaus), rebased since: same change: ESM-only".
 func FormatRescue(m *RescueMarker, now time.Time) string {
 	if m == nil {
 		return ""
@@ -107,7 +123,12 @@ func FormatRescue(m *RescueMarker, now time.Time) string {
 	}
 	if m.Stale {
 		b.WriteString(", stale: new commits since")
-	} else if m.Reason != "" {
+		return b.String()
+	}
+	if m.Rebased {
+		b.WriteString(", rebased since: same change")
+	}
+	if m.Reason != "" {
 		b.WriteString(": ")
 		b.WriteString(m.Reason)
 	}
@@ -115,9 +136,10 @@ func FormatRescue(m *RescueMarker, now time.Time) string {
 }
 
 // ColorizeRescue wraps the FormatRescue annotation in ANSI colors: a
-// stale marker renders yellow (retriable -- the code changed since the
-// attempt), a fresh one bold red (a rescue already failed on exactly
-// this code; a human is needed).
+// stale marker renders yellow (retriable -- the change differs from the
+// one attempted), a fresh one bold red (a rescue already failed on exactly
+// this change, whether or not the branch was rebased since; a human is
+// needed).
 func ColorizeRescue(m *RescueMarker, now time.Time) string {
 	s := FormatRescue(m, now)
 	if s == "" {

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	gh "github.com/teemow/marge/internal/github"
 	"github.com/teemow/marge/internal/pr"
+	"github.com/teemow/marge/internal/process"
 )
 
 var markOpts struct {
@@ -45,8 +46,10 @@ var markCmd = &cobra.Command{
 Subsequent sweeps read the marker and annotate the PR's failure entry with
 the prior rescue outcome, so the operator can tell "needs a first rescue"
 apart from "an automated rescue already failed here". The marker records
-the PR's current head SHA; when the branch is later rebased or updated,
-the marker is reported as stale and the PR becomes fair game again.
+the PR's current head SHA and a fingerprint of its diff: when the branch
+later changes content (a new version, a pushed fix) the marker is reported
+as stale and the PR becomes fair game again, while a Renovate rebase that
+leaves the diff unchanged keeps it valid.
 
 Any tool that can comment on a PR can write the marker -- this command is
 a convenience so callers do not need to know the marker format.`,
@@ -65,9 +68,22 @@ a convenience so callers do not need to know the marker format.`,
 			return err
 		}
 
-		fmt.Printf("Marked %s/%s#%d: rescue %s (head %.8s)\n", owner, repo, number, marker.Outcome, marker.HeadSHA)
+		fmt.Printf("Marked %s/%s#%d: rescue %s (%s)\n", owner, repo, number, marker.Outcome, pinned(marker))
 		return nil
 	},
+}
+
+// pinned renders what the marker ties the attempt to, for the confirmation
+// line: the head SHA and whichever fingerprints could be recorded.
+func pinned(m *pr.RescueMarker) string {
+	parts := []string{fmt.Sprintf("head %.8s", m.HeadSHA)}
+	if m.PatchID != "" {
+		parts = append(parts, "patch_id "+m.PatchID)
+	}
+	if m.ChangeID != "" {
+		parts = append(parts, "change_id "+m.ChangeID)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // markRescue posts an ai-rescue marker comment on the PR and returns the
@@ -89,11 +105,12 @@ func markRescue(ctx context.Context, client *github.Client, prURL, outcome, reas
 	}
 
 	marker := &pr.RescueMarker{
-		Tool:    tool,
-		Outcome: outcome,
-		Reason:  reason,
-		HeadSHA: pullReq.GetHead().GetSHA(),
-		At:      time.Now().UTC().Truncate(time.Second),
+		Tool:        tool,
+		Outcome:     outcome,
+		Reason:      reason,
+		HeadSHA:     pullReq.GetHead().GetSHA(),
+		At:          time.Now().UTC().Truncate(time.Second),
+		Fingerprint: process.FingerprintPR(ctx, client, owner, repo, pullReq),
 	}
 
 	body := marker.CommentBody()

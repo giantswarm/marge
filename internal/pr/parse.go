@@ -98,19 +98,41 @@ var versionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bto\s+(v?\d[\w.\-+]*)(?:\s*\(.*\))?\s*$`),
 }
 
-func ExtractVersion(title string) string {
-	title = strings.TrimSpace(title)
-	title = stripConventionalCommitPrefix(title)
+// versionMatch returns the versions named in a dependency-update title
+// (without its conventional-commit prefix): [source, target] for
+// "from X to Y", [target] for "to Y", nil when the title names none.
+func versionMatch(title string) []string {
+	title = stripConventionalCommitPrefix(strings.TrimSpace(title))
 	for _, pat := range versionPatterns {
-		matches := pat.FindStringSubmatch(title)
-		if len(matches) >= 3 {
-			return matches[1] + " -> " + matches[2]
-		}
-		if len(matches) >= 2 {
-			return matches[1]
+		if m := pat.FindStringSubmatch(title); len(m) >= 2 {
+			return m[1:]
 		}
 	}
-	return ""
+	return nil
+}
+
+// ExtractVersion renders the version change named in a title for display:
+// "4.17.20 -> 4.17.21" for a from/to title, "v1.10.2" for a to-only title,
+// "" when the title names no version.
+func ExtractVersion(title string) string {
+	switch m := versionMatch(title); len(m) {
+	case 0:
+		return ""
+	case 1:
+		return m[0]
+	default:
+		return m[0] + " -> " + m[1]
+	}
+}
+
+// ExtractTargetVersion returns the version a dependency update moves to,
+// regardless of whether the title also names the version it moves from.
+func ExtractTargetVersion(title string) string {
+	m := versionMatch(title)
+	if len(m) == 0 {
+		return ""
+	}
+	return m[len(m)-1]
 }
 
 func ExtractDependencyName(title string) string {

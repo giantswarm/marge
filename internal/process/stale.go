@@ -196,11 +196,12 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 // (the same merge the "Update branch" button performs) so CI re-runs against
 // current code.
 //
-// The refresh is skipped when the PR carries a non-stale ai-rescue marker: a
-// marker pins the head SHA the rescue was attempted against, so a refresh
-// would age it out and make the PR look rescuable again although automation
-// already lost on exactly this code. The marker is attached to the entry
-// either way so the operator sees it.
+// The refresh is skipped when the PR carries a non-stale ai-rescue marker,
+// including one whose branch was merely rebased since: automation already
+// lost on exactly this change, so re-running CI against a newer base cannot
+// help, and for a marker without a content fingerprint the refresh would
+// even age it out and make the PR look rescuable again. The marker is
+// attached to the entry either way so the operator sees it.
 func (p *Processor) handleStale(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, res *staleResult, status *pr.PRStatus, idx int) {
 	detail := res.detail()
 	status.Update(idx, pr.StatusStale, detail)
@@ -210,7 +211,7 @@ func (p *Processor) handleStale(ctx context.Context, info pr.PRInfo, pullReq *gi
 	}
 
 	if marker := p.findRescueMarker(ctx, info); marker != nil {
-		marker.MarkStale(pullReq.GetHead().GetSHA())
+		p.markStale(ctx, info, pullReq, marker)
 		status.SetRescue(idx, marker)
 		if !marker.Stale {
 			status.Update(idx, pr.StatusStale, detail+"; refresh skipped: fresh rescue marker")

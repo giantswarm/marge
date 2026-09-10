@@ -56,7 +56,7 @@ export GITHUB_TOKEN="ghp_..."
 | Checks | Read | Wait for CI status |
 | Commit statuses | Read | Read combined commit status |
 | Metadata | Read | Required by default |
-| Contents | Read & write | Only with `--refresh-stale`: update a stale PR branch from its base |
+| Contents | Read (write only with `--refresh-stale`) | Compare a PR with its base (stale classification, rescue marker fingerprints); with `--refresh-stale`: update a stale PR branch from its base |
 
 ## Usage
 
@@ -115,7 +115,7 @@ Stale PRs are listed in their own **Stale** section, counted separately from fai
 Two guards apply to the refresh:
 
 - `--dry-run` prints the `Stale` classification but never calls update-branch.
-- A PR carrying a **non-stale [rescue marker](#rescue-markers-prior-ai-rescue-attempts)** is not refreshed (`Stale (...; refresh skipped: fresh rescue marker)`). The marker pins the head SHA an automated rescue already failed on; refreshing would age it out and make the PR look rescuable again. The marker is shown on the entry so the operator can decide. A stale marker (the branch already moved since the attempt) does not block the refresh.
+- A PR carrying a **non-stale [rescue marker](#rescue-markers-prior-ai-rescue-attempts)** is not refreshed (`Stale (...; refresh skipped: fresh rescue marker)`). The marker pins the change an automated rescue already failed on -- whether the branch was rebased since or not -- so re-running CI against a newer base cannot help. The marker is shown on the entry so the operator can decide. A stale marker (the PR content changed since the attempt) does not block the refresh.
 
 The heuristic is deliberately cheap: `main` being green does not prove the bump itself is innocent (a major bump can be red for its own reasons while `main` is fine). The cost of a wrong `Stale` verdict is one branch refresh and one CI run, after which the PR is no longer behind and is classified on its own merits.
 
@@ -130,14 +130,22 @@ When an automated rescue (a coding agent, a CI bot, a human with a script) tries
 ```markdown
 **AI rescue failed** (klaus): nock v14 is ESM-only and breaks Jest CJS resolution.
 
-<!-- ai-rescue: {"tool":"klaus","outcome":"failed","reason":"ESM-only breaks Jest CJS","head_sha":"d9f00bf2","at":"2026-06-09T18:40:00Z"} -->
+<!-- ai-rescue: {"tool":"klaus","outcome":"failed","reason":"ESM-only breaks Jest CJS","head_sha":"d9f00bf2","at":"2026-06-09T18:40:00Z","patch_id":"5ad45e13d66acc2b","change_id":"nock@v14"} -->
 ```
 
-On every sweep, marge reads the comments of each failing PR and annotates its entry with the most recent marker, e.g. `[rescue failed 1d ago (klaus): ESM-only breaks Jest CJS]`. The marker records the head SHA it was attempted against: when the PR branch is later rebased or gets a new version, the marker is reported as **stale** (`[rescue failed 3d ago (klaus), stale: new commits since]`) -- the attempt no longer describes the current code and the PR is fair game for another rescue.
+On every sweep, marge reads the comments of each failing PR and annotates its entry with the most recent marker, e.g. `[rescue failed 1d ago (klaus): ESM-only breaks Jest CJS]`. The marker records what it was attempted against, and the sweep decides from that whether the attempt still describes the current PR:
+
+- **`head_sha`** -- the PR head at the time. Same head: the marker is fresh.
+- **`patch_id`** (optional) -- a fingerprint of the PR's diff. When the head moved, marge recomputes it for the current head from `GET /repos/{owner}/{repo}/compare/{base}...{head}`. Same fingerprint: the branch was only rebased (Renovate does this whenever the base moves) and the marker stays fresh, annotated `[rescue blocked 5d ago (klaus), rebased since: same change: ...]`. Different fingerprint (a new version, a pushed fix): the marker is **stale** (`[rescue failed 3d ago (klaus), stale: new commits since]`) and the PR is fair game for another rescue.
+- **`change_id`** (optional) -- the cheap fallback for dependency PRs: `<dependency>@<target version>` parsed from the PR title (`typescript@v7`). It decides only when no `patch_id` can be compared, e.g. when the diff is too large for the compare API. A rebase never changes it and a new version always does, but a version update that keeps the title (7.0.1 -> 7.0.2 under "to v7") is invisible to it, which is why the diff fingerprint is preferred whenever it is available.
+
+Markers without a fingerprint (written before it existed) age out with the head SHA alone, as before.
+
+The `patch_id` is the first 16 hex characters of a SHA-256 over the compare response's files, sorted by path: per file its status, previous path and path, then every `+`/`-` line of the patch in order -- hunk headers and context lines are skipped, since both shift when the base changes around the PR's lines. A file without a patch (binary, pure rename) contributes its blob SHA. The fingerprint is left out when GitHub truncates the response (more than 300 files, or a file whose diff is too large to include a patch), so a partial diff is never mistaken for the whole change.
 
 This makes the daily triage call obvious at a glance:
 
-- **failing + fresh failed rescue** -> automation already lost; a human is needed
+- **failing + fresh failed rescue** (rebased since or not) -> automation already lost; a human is needed
 - **failing + stale or no marker** -> dispatch (another) automated rescue
 
 Use [`marge mark`](#marge-mark-pr-url-flags) to write markers without knowing the format. Any tool that can comment on a PR can participate -- there is no coupling to a specific agent framework.
@@ -160,7 +168,7 @@ Processes all matching PRs without interactive grouping. After processing, print
 
 ### `marge mark <pr-url> [flags]`
 
-Records a failed AI rescue attempt on a PR by posting an [ai-rescue marker](#rescue-markers-prior-ai-rescue-attempts) comment. The marker captures the PR's current head SHA, so it automatically goes stale when the branch changes.
+Records a failed AI rescue attempt on a PR by posting an [ai-rescue marker](#rescue-markers-prior-ai-rescue-attempts) comment. The marker captures the PR's current head SHA plus a fingerprint of its diff (`patch_id`) and, for dependency PRs, of its title (`change_id`), so it goes stale when the PR content changes but survives a Renovate rebase that leaves the diff unchanged. The confirmation line lists what was pinned, e.g. `Marked my-org/my-repo#42: rescue blocked (head 1be1ed9d, patch_id 5ad45e13d66acc2b, change_id typescript@v7)`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -179,8 +187,8 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 Starts a stdio MCP server exposing two tools:
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `ci_unavailable`, `skipped`). Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`). Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`); `dry_run: true` still classifies them under `stale`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is `failed` and not `stale`, and escalate those to a human.
-- **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `ci_unavailable`, `skipped`). Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`); `dry_run: true` still classifies them under `stale`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
 
 ### Other commands
 

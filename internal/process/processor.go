@@ -83,7 +83,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	// tell "needs a first rescue" apart from "a rescue already failed here".
 	// Deferred so every failure path is covered with one call site.
 	defer func() {
-		p.attachRescueMarker(ctx, info, pullReq.GetHead().GetSHA(), status, idx)
+		p.attachRescueMarker(ctx, info, pullReq, status, idx)
 	}()
 
 	actualAuthor := pullReq.GetUser().GetLogin()
@@ -304,8 +304,9 @@ func (p *Processor) isBudgetBlockedCheckRun(ctx context.Context, info pr.PRInfo,
 // rescue was already attempted here"), skips entries that already carry a
 // marker (the stale-refresh path looks it up first), and degrades silently
 // on API errors -- a comment-listing failure must never change a sweep
-// result.
-func (p *Processor) attachRescueMarker(ctx context.Context, info pr.PRInfo, headSHA string, status *pr.PRStatus, idx int) {
+// result. Staleness is decided against the PR's current head and content
+// (see markStale).
+func (p *Processor) attachRescueMarker(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, status *pr.PRStatus, idx int) {
 	switch status.StateAt(idx) {
 	case pr.StatusFailed, pr.StatusFailedSecurity, pr.StatusConflict, pr.StatusStale, pr.StatusRefreshed:
 	default:
@@ -319,14 +320,14 @@ func (p *Processor) attachRescueMarker(ctx context.Context, info pr.PRInfo, head
 	if marker == nil {
 		return
 	}
-	marker.MarkStale(headSHA)
+	p.markStale(ctx, info, pullReq, marker)
 	status.SetRescue(idx, marker)
 }
 
 // findRescueMarker returns the newest ai-rescue marker among the PR's
 // comments, or nil when there is none or the comments cannot be listed.
-// Staleness is left to the caller (MarkStale against the head SHA it
-// cares about).
+// Staleness is left to the caller (markStale against the PR it cares
+// about).
 func (p *Processor) findRescueMarker(ctx context.Context, info pr.PRInfo) *pr.RescueMarker {
 	opts := &github.IssueListCommentsOptions{
 		ListOptions: github.ListOptions{PerPage: 100},
