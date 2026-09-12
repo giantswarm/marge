@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,10 @@ func newSelfUpdateCmd() *cobra.Command {
 		Use:   "self-update",
 		Short: "Update marge to the latest version",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkReleased(version); err != nil {
+				return err
+			}
+
 			source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
 			if err != nil {
 				return fmt.Errorf("creating update source: %w", err)
@@ -56,4 +61,14 @@ func newSelfUpdateCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// checkReleased rejects a build version that cannot be compared with a
+// release. Binaries built without ldflags carry "dev", and go-selfupdate
+// panics when asked to compare anything that is not a semantic version.
+func checkReleased(v string) error {
+	if _, err := semver.NewVersion(v); err != nil {
+		return fmt.Errorf("self-update is only available for released builds (current version: %s)", v)
+	}
+	return nil
 }

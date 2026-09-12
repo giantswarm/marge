@@ -3,6 +3,7 @@ module github.com/teemow/marge
 go 1.26.0
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/google/go-github/v91 v91.0.0
 	github.com/manifoldco/promptui v0.9.0
@@ -13,7 +14,6 @@ require (
 require (
 	code.gitea.io/sdk/gitea v0.23.2 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
-	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
