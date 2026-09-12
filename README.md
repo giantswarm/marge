@@ -40,7 +40,13 @@ make install
 
 ## Setup
 
-Marge requires a GitHub personal access token. Export it as an environment variable:
+Marge needs a GitHub token and looks for one in this order:
+
+1. the `GITHUB_TOKEN` environment variable
+2. the `GH_TOKEN` environment variable
+3. the [GitHub CLI](https://cli.github.com/)'s active login (`gh auth token`)
+
+If you are logged in with `gh auth login`, no further setup is needed. Otherwise export a personal access token:
 
 ```bash
 export GITHUB_TOKEN="ghp_..."
