@@ -3,7 +3,7 @@ package cmd
 import (
 	"testing"
 
-	"github.com/teemow/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // TestBuildSweepResult_failedAndSecurityAreDisjoint guards the contract

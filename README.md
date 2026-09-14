@@ -22,18 +22,20 @@ It searches GitHub for open bot PRs, groups them interactively, waits for CI che
 
 ### From GitHub releases
 
-Download the latest binary from the [releases page](https://github.com/teemow/marge/releases) for your platform (Linux, macOS, Windows; amd64 and arm64).
+Download the latest binary from the [releases page](https://github.com/giantswarm/marge/releases) for your platform (Linux, macOS, Windows; amd64 and arm64).
+
+> marge moved here from `teemow/marge`. Binaries installed from there (v0.7.2 and older) verify release signatures against that former home and refuse releases built here, so `marge self-update` cannot carry them across the move. Install once from the releases page above; from then on `self-update` works again.
 
 ### From source
 
 ```bash
-go install github.com/teemow/marge@latest
+go install github.com/giantswarm/marge@latest
 ```
 
 Or clone and build locally:
 
 ```bash
-git clone https://github.com/teemow/marge.git
+git clone https://github.com/giantswarm/marge.git
 cd marge
 make install
 ```

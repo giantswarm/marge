@@ -7,8 +7,8 @@ import (
 	"strings"
 	"syscall"
 
+	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/spf13/cobra"
-	gh "github.com/teemow/marge/internal/github"
 )
 
 var sweepOpts RunOptions

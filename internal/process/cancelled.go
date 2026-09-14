@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/giantswarm/marge/internal/circleci"
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
-	"github.com/teemow/marge/internal/circleci"
-	"github.com/teemow/marge/internal/pr"
 )
 
 // cancelledResult describes why a failing PR was classified as cancelled
