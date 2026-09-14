@@ -39,7 +39,6 @@ type RunOptions struct {
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
-	OnComplete       func(*pr.PRStatus)
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
@@ -157,17 +156,13 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	default:
 		pr.UpdateTable(os.Stdout, status.Snapshot(), cols)
 		// Restore wrapping before any post-table prose so long lines
-		// (e.g. failure URLs in the summary) are not clipped by the
-		// disabled-wrap mode that protected the table redraws.
+		// are not clipped by the disabled-wrap mode that protected the
+		// table redraws.
 		pr.EnableLineWrap(os.Stdout)
 	}
 
 	if !opts.Quiet {
 		fmt.Fprintf(os.Stderr, "\n%s\n", status.FormatSummary())
-	}
-
-	if opts.OnComplete != nil {
-		opts.OnComplete(status)
 	}
 
 	return status, nil
