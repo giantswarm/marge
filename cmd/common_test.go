@@ -132,9 +132,8 @@ func TestProcessOnceWithStatus_quietWritesNothing(t *testing.T) {
 	}
 
 	// Quiet on its own (without NoTUI): nothing may reach stdout or stderr,
-	// while the PRs are still processed and OnComplete still fires.
-	var completed bool
-	stdout, stderr, status = run(RunOptions{Quiet: true, OnComplete: func(*pr.PRStatus) { completed = true }})
+	// while the PRs are still processed.
+	stdout, stderr, status = run(RunOptions{Quiet: true})
 	if stdout != "" {
 		t.Errorf("quiet stdout = %q, want empty", stdout)
 	}
@@ -143,9 +142,6 @@ func TestProcessOnceWithStatus_quietWritesNothing(t *testing.T) {
 	}
 	if got := status.Summary().Failed; got != len(prs) {
 		t.Errorf("quiet Failed = %d, want %d (processing must still happen)", got, len(prs))
-	}
-	if !completed {
-		t.Error("quiet run must still invoke OnComplete")
 	}
 }
 

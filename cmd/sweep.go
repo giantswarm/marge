@@ -3,15 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	gh "github.com/teemow/marge/internal/github"
-	"github.com/teemow/marge/internal/pr"
 )
 
 var sweepOpts RunOptions
@@ -36,8 +33,9 @@ var sweepCmd = &cobra.Command{
 	Use:   "sweep",
 	Short: "Merge all dependency update PRs, report failures",
 	Long: `Automatically attempt to merge every open Renovate and Dependabot PR
-that requests your review. After processing, a summary lists the PRs
-that could not be merged so you can fix them manually.
+that requests your review. The live table shows every PR's outcome and a
+one-line summary follows it; PRs that could not be merged stay in the
+table so you can fix them manually.
 
 A failing PR whose head is behind its base branch and whose every failing
 check is green on the base branch head is reported as "Stale" instead of
@@ -85,51 +83,8 @@ cannot be inspected and the PR stays "Failed", annotated.`,
 				prs = filtered
 			}
 
-			opts := sweepOpts
-			if !opts.NoTUI {
-				opts.OnComplete = func(status *pr.PRStatus) {
-					security, other := pr.SplitActionRequired(status.ActionRequired())
-					printSweepFailures(os.Stderr, "Security failures", security)
-					printSweepFailures(os.Stderr, "Action required", other)
-					printSweepFailures(os.Stderr, pr.StaleGroupHeader, status.StaleEntries())
-					printSweepFailures(os.Stderr, pr.RefreshedGroupHeader, status.RefreshedEntries())
-					printSweepFailures(os.Stderr, pr.CancelledGroupHeader, status.CancelledEntries())
-					printSweepFailures(os.Stderr, pr.RetriedGroupHeader, status.RetriedEntries())
-					printSweepFailures(os.Stderr, "CI unavailable (Actions budget)", status.BlockedEntries())
-				}
-			}
-
-			_, err = processOnceWithStatus(ctx, client, login, prs, opts)
+			_, err = processOnceWithStatus(ctx, client, login, prs, sweepOpts)
 			return err
 		})
 	},
-}
-
-// printSweepFailures emits a header and one stanza per failure entry,
-// formatted for the TUI summary that follows the live table. It is a
-// no-op for empty groups, so callers can pass either failure bucket
-// without guarding.
-func printSweepFailures(w *os.File, header string, entries []pr.StatusEntry) {
-	if len(entries) == 0 {
-		return
-	}
-	_, _ = fmt.Fprintf(w, "\n%s (%d):\n\n", header, len(entries))
-	now := time.Now()
-	for _, e := range entries {
-		repoLine := fmt.Sprintf("  #%-6d %s/%s", e.PR.Number, e.PR.Owner, e.PR.Repo)
-		if age := pr.FormatAge(e.PR.CreatedAt, now); age != "" {
-			ageStr := fmt.Sprintf("(%s old)", age)
-			if code := pr.AgeColorCode(e.PR.CreatedAt, now); code != "" {
-				ageStr = code + ageStr + "\033[0m"
-			}
-			repoLine += "  " + ageStr
-		}
-		_, _ = fmt.Fprintln(w, repoLine)
-		_, _ = fmt.Fprintf(w, "         %s\n", e.PR.Title)
-		statusLine := fmt.Sprintf("         %s  %s", e.PR.URL, pr.ColorizeStatus(e.State, e.Detail))
-		if e.Rescue != nil {
-			statusLine += "  " + pr.ColorizeRescue(e.Rescue, now)
-		}
-		_, _ = fmt.Fprintf(w, "%s\n\n", statusLine)
-	}
 }
