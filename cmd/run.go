@@ -9,7 +9,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/google/go-github/v91/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 

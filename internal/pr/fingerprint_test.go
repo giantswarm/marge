@@ -3,7 +3,7 @@ package pr
 import (
 	"testing"
 
-	"github.com/google/go-github/v91/github"
+	"github.com/google/go-github/v92/github"
 )
 
 func commitFile(name, status string, changes int, patch string) *github.CommitFile {
