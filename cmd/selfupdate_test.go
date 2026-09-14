@@ -55,7 +55,7 @@ func TestSelfUpdateDevBuild(t *testing.T) {
 
 func TestReleaseIdentityPinsWorkflowIssuerAndRepository(t *testing.T) {
 	identity := releaseIdentity(repository)
-	// The fields a real release certificate carries (marge v0.6.1).
+	// The fields a real release certificate carries (marge v0.8.0).
 	ok := certificate.Summary{
 		SubjectAlternativeName: releaseWorkflow,
 		Extensions: certificate.Extensions{
@@ -104,8 +104,9 @@ const formerRepository = "teemow/marge"
 // covers, so the check runs by digest.
 //
 // Each bundle verifies as a release of the repository it was built in and of
-// no other. The v0.6.1 bundle was built at marge's former home, so it is
-// refused for the current repository: a binary from before the move cannot
+// no other. The v0.8.0 bundle was built here, so it verifies with the identity
+// self-update ships. The v0.6.1 bundle was built at marge's former home, so it
+// is refused for the current repository: a binary from before the move cannot
 // self-update across it, and a release from the former home cannot be
 // installed by a binary built here.
 func TestPublishedBundlesVerifyForTheirRepository(t *testing.T) {
@@ -126,6 +127,7 @@ func TestPublishedBundlesVerifyForTheirRepository(t *testing.T) {
 		file       string
 		repository string
 	}{
+		{"testdata/marge-v0.8.0-linux-amd64.bundle", repository},
 		{"testdata/marge-v0.6.1-linux-amd64.bundle", formerRepository},
 	} {
 		t.Run(filepath.Base(fixture.file), func(t *testing.T) {
