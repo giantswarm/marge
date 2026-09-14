@@ -1,0 +1,25 @@
+apiVersion: v2
+name: marge
+description: A housekeeping tool for dependency update PRs, served as an MCP server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/giantswarm/marge
+icon: https://s.giantswarm.io/app-icons/giantswarm/1/dark.svg
+sources:
+  - https://github.com/giantswarm/marge
+keywords:
+  - mcp
+  - renovate
+  - dependabot
+  - model-context-protocol
+maintainers:
+  - name: Giant Swarm
+    email: team-bumblebee@giantswarm.io
+annotations:
+  # Team ownership (OCI-compliant format)
+  io.giantswarm.application.team: bumblebee
+  # Target audience: Giant Swarm platforms (the sweep engine runs behind muster)
+  io.giantswarm.application.audience: customers
+  # App is managed/supported by Giant Swarm
+  io.giantswarm.application.managed: "true"

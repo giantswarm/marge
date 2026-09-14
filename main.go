@@ -5,12 +5,11 @@ import (
 	"os"
 
 	"github.com/giantswarm/marge/cmd"
+	"github.com/giantswarm/marge/pkg/project"
 )
 
-var version = "dev"
-
 func main() {
-	cmd.SetVersion(version)
+	cmd.SetVersion(project.Version())
 
 	if err := cmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

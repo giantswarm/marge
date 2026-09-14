@@ -1,0 +1,20 @@
+{{ template "chart.header" . }}
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+Runs `marge serve --transport streamable-http`: the `sweep` and `mark` MCP tools on `/mcp`, with `/healthz` and `/readyz` for the probes. Register the Service as a streamable-http MCP server in muster to make the tools available to people and agents.
+
+marge needs a GitHub token with the permissions listed in the [repository README](https://github.com/giantswarm/marge#setup). Pass it inline (`marge.github.token`, the chart writes a Secret) or point at an existing Secret (`marge.github.existingSecret`, key `marge.github.existingSecretKey`). A CircleCI token (`marge.circleci.*`) is optional; it lets marge inspect private CircleCI projects and retry auto-cancelled builds.
+
+{{ template "chart.homepageLine" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}

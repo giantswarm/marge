@@ -3,62 +3,164 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
-	gh "github.com/giantswarm/marge/internal/github"
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
+
+	gh "github.com/giantswarm/marge/internal/github"
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 func init() {
+	serveCmd.Flags().StringVar(&serveOpts.transport, "transport", transportStdio, "Transport: stdio or streamable-http")
+	serveCmd.Flags().StringVar(&serveOpts.httpAddr, "http-addr", ":8080", "Listen address for the streamable-http transport")
 	rootCmd.AddCommand(serveCmd)
+}
+
+const (
+	transportStdio          = "stdio"
+	transportStreamableHTTP = "streamable-http"
+	// mcpEndpoint is the path the streamable HTTP transport is served on;
+	// /healthz and /readyz answer the Kubernetes probes next to it.
+	mcpEndpoint = "/mcp"
+	// shutdownGrace bounds how long a stopping server waits for in-flight
+	// requests -- a sweep can run for minutes, but a terminating pod gets
+	// seconds.
+	shutdownGrace = 10 * time.Second
+)
+
+var serveOpts struct {
+	transport string
+	httpAddr  string
 }
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start a stdio MCP server exposing sweep and mark as tools",
-	Long: `Start a Model Context Protocol (MCP) server over stdio.
+	Short: "Start an MCP server exposing sweep and mark as tools",
+	Long: `Start a Model Context Protocol (MCP) server.
 The server exposes a "sweep" tool that mirrors the sweep CLI command,
 returning structured JSON results instead of terminal output, and a "mark"
-tool that mirrors the mark CLI command.`,
+tool that mirrors the mark CLI command.
+
+Transports:
+  stdio            JSON-RPC over stdin/stdout, for a local MCP client that
+                   starts marge itself (default)
+  streamable-http  the MCP Streamable HTTP transport on --http-addr, with the
+                   endpoint at ` + mcpEndpoint + ` and liveness/readiness probes
+                   at /healthz and /readyz; this is what the Helm chart runs`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mcpServer := server.NewMCPServer(
-			"marge",
-			version,
-			server.WithToolCapabilities(true),
-		)
-
-		mcpServer.AddTool(sweepTool(), handleSweep)
-
-		mcpServer.AddTool(
-			mcp.NewTool("mark",
-				mcp.WithDescription("Record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
-				mcp.WithString("pr_url",
-					mcp.Required(),
-					mcp.Description("Pull request URL (https://github.com/OWNER/REPO/pull/NUMBER)"),
-				),
-				mcp.WithString("outcome",
-					mcp.Description("Rescue outcome (default: \"failed\")"),
-					mcp.Enum("failed", "blocked"),
-				),
-				mcp.WithString("reason",
-					mcp.Description("Short explanation of why the rescue did not succeed"),
-				),
-				mcp.WithString("tool",
-					mcp.Description("Name of the tool/agent that attempted the rescue (default: \"ai\")"),
-				),
-			),
-			handleMark,
-		)
-
-		return server.ServeStdio(mcpServer)
+		mcpServer := newMCPServer()
+		switch serveOpts.transport {
+		case transportStdio:
+			return server.ServeStdio(mcpServer)
+		case transportStreamableHTTP:
+			return serveHTTP(cmd.Context(), mcpServer, serveOpts.httpAddr, cmd.ErrOrStderr())
+		default:
+			return fmt.Errorf("unknown transport %q: use %s or %s", serveOpts.transport, transportStdio, transportStreamableHTTP)
+		}
 	},
+}
+
+// newMCPServer builds the MCP server with the sweep and mark tools; the
+// transport is chosen by the caller.
+func newMCPServer() *server.MCPServer {
+	mcpServer := server.NewMCPServer(
+		"marge",
+		version,
+		server.WithToolCapabilities(true),
+	)
+
+	mcpServer.AddTool(sweepTool(), handleSweep)
+
+	mcpServer.AddTool(
+		mcp.NewTool("mark",
+			mcp.WithDescription("Record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
+			mcp.WithString("pr_url",
+				mcp.Required(),
+				mcp.Description("Pull request URL (https://github.com/OWNER/REPO/pull/NUMBER)"),
+			),
+			mcp.WithString("outcome",
+				mcp.Description("Rescue outcome (default: \"failed\")"),
+				mcp.Enum("failed", "blocked"),
+			),
+			mcp.WithString("reason",
+				mcp.Description("Short explanation of why the rescue did not succeed"),
+			),
+			mcp.WithString("tool",
+				mcp.Description("Name of the tool/agent that attempted the rescue (default: \"ai\")"),
+			),
+		),
+		handleMark,
+	)
+
+	return mcpServer
+}
+
+// httpHandler routes the MCP endpoint and the probe paths. Everything else
+// is a 404, so a misconfigured client gets a clear answer instead of an MCP
+// error.
+func httpHandler(mcpServer *server.MCPServer) (http.Handler, *server.StreamableHTTPServer) {
+	streamable := server.NewStreamableHTTPServer(mcpServer, server.WithEndpointPath(mcpEndpoint))
+	ok := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok\n"))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", ok)
+	mux.HandleFunc("/readyz", ok)
+	mux.Handle(mcpEndpoint, streamable)
+	return mux, streamable
+}
+
+// serveHTTP serves the MCP server over Streamable HTTP until ctx is done or
+// SIGINT/SIGTERM arrives, then drains in-flight requests for shutdownGrace.
+// No write timeout is set on purpose: a sweep tool call streams for as long
+// as the sweep runs.
+func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, addr string, log io.Writer) error {
+	handler, streamable := httpHandler(mcpServer)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	errc := make(chan error, 1)
+	go func() {
+		_, _ = fmt.Fprintf(log, "marge %s serving MCP over streamable HTTP on %s%s\n", version, addr, mcpEndpoint)
+		errc <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errc:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serving on %s: %w", addr, err)
+	case <-ctx.Done():
+	}
+
+	_, _ = fmt.Fprintln(log, "shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	streamable.CloseSessions(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutting down: %w", err)
+	}
+	return nil
 }
 
 // sweepTool declares the sweep tool and its arguments. parseSweepRequest

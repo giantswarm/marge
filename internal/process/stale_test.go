@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
+
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // staleFixture wires a fake GitHub API for one Renovate PR (org/repo#1,

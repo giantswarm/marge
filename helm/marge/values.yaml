@@ -1,0 +1,102 @@
+# Default values for marge.
+
+# -- Number of marge replicas. The MCP transport is stateful per session, so keep it at 1 unless a client-affine load balancer sits in front.
+replicaCount: 1
+
+image:
+  # -- Registry of the marge image
+  registry: gsoci.azurecr.io
+  # -- Repository of the marge image
+  repository: giantswarm/marge
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+# -- Image pull secrets for the pod
+imagePullSecrets: []
+# -- Overrides the chart name in resource names
+nameOverride: ""
+# -- Overrides the fully qualified resource name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount for the pod. marge talks to GitHub and CircleCI only, so it needs no Kubernetes API access.
+  create: true
+  # -- Mount the ServiceAccount token into the pod
+  automount: false
+  # -- Annotations to add to the ServiceAccount
+  annotations: {}  # @schema additionalProperties: true
+  # -- Name of the ServiceAccount to use. Generated from the fullname when empty and create is true.
+  name: ""
+
+# -- Annotations to add to the pod
+podAnnotations: {}  # @schema additionalProperties: true
+# -- Labels to add to the pod
+podLabels: {}  # @schema additionalProperties: true
+
+# -- Pod-level security context (restricted Pod Security Standard)
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context (restricted Pod Security Standard)
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Service port; the container listens on 8080
+  port: 8080
+
+# -- Container resources
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# -- Node selector for the pod
+nodeSelector: {}  # @schema additionalProperties: true
+# -- Tolerations for the pod
+tolerations: []
+# -- Affinity for the pod
+affinity: {}  # @schema additionalProperties: true
+
+marge:
+  github:
+    # -- GitHub token marge uses (needs the permissions listed in the repository README). The chart writes it into a Secret; prefer existingSecret in production.
+    token: ""
+    # -- Name of an existing Secret holding the GitHub token. Takes precedence over token.
+    existingSecret: ""
+    # -- Key of the GitHub token inside existingSecret
+    existingSecretKey: "token"
+  circleci:
+    # -- CircleCI API token, optional: lets marge inspect private CircleCI projects and retry auto-cancelled builds. The chart writes it into a Secret; prefer existingSecret in production.
+    token: ""
+    # -- Name of an existing Secret holding the CircleCI token. Takes precedence over token.
+    existingSecret: ""
+    # -- Key of the CircleCI token inside existingSecret
+    existingSecretKey: "token"
+
+networkPolicy:
+  # -- Create a NetworkPolicy: ingress to the MCP port from the selected namespaces, egress to DNS and HTTPS only (GitHub, CircleCI).
+  enabled: true
+  # -- Namespaces allowed to reach the MCP port; an empty selector allows every namespace of the cluster.
+  ingressNamespaceSelector: {}  # @schema additionalProperties: true

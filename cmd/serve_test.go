@@ -4,8 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // TestBuildSweepResult_failedAndSecurityAreDisjoint guards the contract

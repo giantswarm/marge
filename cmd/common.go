@@ -9,10 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-github/v91/github"
+
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
-	"github.com/google/go-github/v91/github"
 )
 
 // RunOptions holds the configuration shared between the run and sweep commands.
