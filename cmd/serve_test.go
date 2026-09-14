@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // TestBuildSweepResult_failedAndSecurityAreDisjoint guards the contract
@@ -169,5 +171,78 @@ func TestBuildSweepResult_rescueRebased(t *testing.T) {
 	rescue := got.ActionRequired[0].Rescue
 	if rescue.Stale || !rescue.Rebased {
 		t.Errorf("rescue = %+v, want stale=false rebased=true", rescue)
+	}
+}
+
+// sweepArguments sets every argument the sweep tool declares to a value
+// that differs from its default, so a parsed request shows whether each one
+// was read.
+var sweepArguments = map[string]any{
+	"query":             "typescript",
+	"org":               "my-org",
+	"repos_file":        "/tmp/repos.txt",
+	"repos":             []any{"my-org/a", "my-org/b"},
+	"merge_auto":        true,
+	"dry_run":           true,
+	"refresh_stale":     true,
+	"retry_cancelled":   true,
+	"author":            "renovate",
+	"trusted_authors":   "bot[bot]",
+	"security_patterns": "Trivy,Analyze",
+}
+
+// TestParseSweepRequest_readsEveryDeclaredArgument guards the tool schema
+// against its parser: an argument declared but never read would be
+// silently ignored by the server, and one read but never declared would be
+// invisible to clients. Both directions are checked through sweepArguments.
+func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
+	declared := sweepTool().InputSchema.Properties
+	for name := range declared {
+		if _, ok := sweepArguments[name]; !ok {
+			t.Errorf("sweep tool declares %q but sweepArguments does not set it", name)
+		}
+	}
+	for name := range sweepArguments {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("sweepArguments sets %q but the sweep tool does not declare it", name)
+		}
+	}
+
+	got := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: sweepArguments}})
+	want := sweepRequest{
+		Query:     "typescript",
+		ReposFile: "/tmp/repos.txt",
+		Repos:     []string{"my-org/a", "my-org/b"},
+		Opts: RunOptions{
+			DryRun:           true,
+			MergeAuto:        true,
+			RefreshStale:     true,
+			RetryCancelled:   true,
+			Quiet:            true,
+			Org:              "my-org",
+			Author:           "renovate",
+			TrustedAuthors:   "bot[bot]",
+			SecurityPatterns: "Trivy,Analyze",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseSweepRequest = %+v, want %+v", got, want)
+	}
+}
+
+// TestParseSweepRequest_defaultsMatchSweepCommand guards that a call with no
+// arguments behaves like a bare `marge sweep`: every PR author, the default
+// trusted authors, no query, and Quiet because stdout is the transport.
+func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
+	got := parseSweepRequest(mcp.CallToolRequest{})
+	want := sweepRequest{
+		Opts: RunOptions{
+			Quiet:          true,
+			Author:         "all",
+			TrustedAuthors: "renovate[bot],dependabot[bot]",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseSweepRequest(empty) = %+v, want %+v", got, want)
 	}
 }
