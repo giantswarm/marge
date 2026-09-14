@@ -68,14 +68,19 @@ func TestReleaseIdentityIsTheRepositorysCircleCIPipeline(t *testing.T) {
 	}
 }
 
-// TestGitHubActionsEraBundlesAreRefused checks the bundles the former GitHub
-// Actions release workflow published (v0.6.1 at teemow/marge, v0.8.0 at
-// giantswarm/marge) against a snapshot of the Sigstore public-good trust root,
-// offline. Releases are built by this repository's CircleCI pipeline now, so
-// self-update must refuse both: a binary built here never installs a release
-// of the Actions era, whichever repository signed it. The first bundle
-// published by the CircleCI pipeline is the positive fixture to add here.
-func TestGitHubActionsEraBundlesAreRefused(t *testing.T) {
+// TestPublishedBundlesVerifyForTheCircleCIPipelineOnly checks bundles the
+// release pipelines published next to marge-linux-amd64 against a snapshot of
+// the Sigstore public-good trust root, offline. The binaries stay out of the
+// repository: their SHA-256, recorded in each bundle, is what the signature
+// covers, so the check runs by digest.
+//
+// The v0.9.0 bundle is the first one this repository's CircleCI pipeline
+// signed: it verifies with the identity self-update ships. The two bundles
+// the former GitHub Actions release workflow published (v0.6.1 at the
+// repository's former home, v0.8.0 here) are genuine Sigstore bundles but are
+// refused: a binary built here never installs a release of the Actions era,
+// whichever repository signed it.
+func TestPublishedBundlesVerifyForTheCircleCIPipelineOnly(t *testing.T) {
 	material, err := root.NewTrustedRootFromJSON(read(t, "testdata/trusted_root.json"))
 	if err != nil {
 		t.Fatalf("loading the trust root snapshot: %v", err)
@@ -88,19 +93,27 @@ func TestGitHubActionsEraBundlesAreRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preparing the verifier: %v", err)
 	}
+	identity := verify.WithCertificateIdentity(selfupdatecosign.Identity(repository))
 
-	for _, fixture := range []string{
-		"testdata/marge-v0.6.1-linux-amd64.bundle",
-		"testdata/marge-v0.8.0-linux-amd64.bundle",
+	for _, fixture := range []struct {
+		file     string
+		accepted bool
+	}{
+		{"testdata/marge-v0.9.0-linux-amd64.bundle", true},
+		{"testdata/marge-v0.8.0-linux-amd64.bundle", false},
+		{"testdata/marge-v0.6.1-linux-amd64.bundle", false},
 	} {
-		t.Run(filepath.Base(fixture), func(t *testing.T) {
-			b, artifact := fixtureBundle(t, fixture)
+		t.Run(filepath.Base(fixture.file), func(t *testing.T) {
+			b, artifact := fixtureBundle(t, fixture.file)
 			// The bundle is genuine: it verifies without an identity pin.
 			if _, err := verifier.Verify(b, verify.NewPolicy(artifact, verify.WithoutIdentitiesUnsafe())); err != nil {
 				t.Fatalf("the fixture must be a valid Sigstore bundle: %v", err)
 			}
-			// ... and refused as a release of this repository's CircleCI pipeline.
-			if _, err := verifier.Verify(b, verify.NewPolicy(artifact, verify.WithCertificateIdentity(selfupdatecosign.Identity(repository)))); err == nil {
+			_, err := verifier.Verify(b, verify.NewPolicy(artifact, identity))
+			switch {
+			case fixture.accepted && err != nil:
+				t.Fatalf("the bundle signed by this repository's CircleCI pipeline must verify: %v", err)
+			case !fixture.accepted && err == nil:
 				t.Fatal("a bundle signed by GitHub Actions must not verify as a CircleCI build of " + repository)
 			}
 		})

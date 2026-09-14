@@ -45,7 +45,7 @@ make install
 The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm/giantswarm-catalog) runs `marge serve` over the MCP Streamable HTTP transport behind a `ClusterIP` Service, ready to be registered as a streamable-http MCP server in [muster](https://github.com/giantswarm/muster). It takes the GitHub token from `marge.github.token` or an existing Secret (`marge.github.existingSecret`); see [helm/marge/README.md](helm/marge/README.md) for every value.
 
 ```bash
-helm install marge oci://gsoci.azurecr.io/giantswarm/marge-chart \
+helm install marge oci://gsoci.azurecr.io/charts/giantswarm/marge --version 0.9.0 \
   --set marge.github.existingSecret=marge-github-token
 ```
 
