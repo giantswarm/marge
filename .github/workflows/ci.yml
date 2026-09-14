@@ -9,9 +9,9 @@ jobs:
     with:
       runs-on: ubuntu-latest
   gitleaks:
-    uses: teemow/github-workflows/.github/workflows/gitleaks.yml@main
-    with:
-      runs-on: ubuntu-latest
+    # gitleaks/gitleaks-action demands a paid license key for repositories
+    # in an organization; the Giant Swarm shared workflow scans with the
+    # org's own gitleaks action and reports under the same check name.
+    uses: giantswarm/github-workflows/.github/workflows/gitleaks.yaml@main
     permissions:
       contents: read
-      pull-requests: write
