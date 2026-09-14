@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v91/github"
+	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/pr"
