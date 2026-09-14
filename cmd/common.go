@@ -36,10 +36,20 @@ type RunOptions struct {
 	RefreshStale     bool
 	RetryCancelled   bool
 	Org              string
-	ReposFile        string
+	ReposFile        string // repositories to scan instead of searching GitHub; see repoList
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
+}
+
+// repoList returns the repositories a run is restricted to: the entries of
+// ReposFile when one was given. Nil means no restriction, so the PRs come
+// from the GitHub search.
+func (o RunOptions) repoList() ([]string, error) {
+	if o.ReposFile == "" {
+		return nil, nil
+	}
+	return readReposFile(o.ReposFile)
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
@@ -213,4 +223,43 @@ func parseTrustedAuthors(csv string) map[string]bool {
 		m[a] = true
 	}
 	return m
+}
+
+// readReposFile returns the "owner/name" entries listed in the file at
+// path, one per line and trimmed. Blank lines and lines starting with #
+// are ignored. A file that lists no repository is an error: the caller
+// would otherwise fall back to searching all of GitHub, which is never
+// what a repos file asks for.
+func readReposFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading repos file: %w", err)
+	}
+	var repos []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		repos = append(repos, line)
+	}
+	if len(repos) == 0 {
+		return nil, fmt.Errorf("repos file %s lists no repositories", path)
+	}
+	return repos, nil
+}
+
+// filterByOrg keeps the PRs whose owner is org, compared case-insensitively
+// like GitHub does. An empty org keeps every PR.
+func filterByOrg(prs []pr.PRInfo, org string) []pr.PRInfo {
+	if org == "" {
+		return prs
+	}
+	var filtered []pr.PRInfo
+	for _, p := range prs {
+		if strings.EqualFold(p.Owner, org) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
 }
