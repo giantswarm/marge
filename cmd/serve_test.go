@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -211,9 +214,8 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 
 	got := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: sweepArguments}})
 	want := sweepRequest{
-		Query:     "typescript",
-		ReposFile: "/tmp/repos.txt",
-		Repos:     []string{"my-org/a", "my-org/b"},
+		Query: "typescript",
+		Repos: []string{"my-org/a", "my-org/b"},
 		Opts: RunOptions{
 			DryRun:           true,
 			MergeAuto:        true,
@@ -221,6 +223,7 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 			RetryCancelled:   true,
 			Quiet:            true,
 			Org:              "my-org",
+			ReposFile:        "/tmp/repos.txt",
 			Author:           "renovate",
 			TrustedAuthors:   "bot[bot]",
 			SecurityPatterns: "Trivy,Analyze",
@@ -246,4 +249,80 @@ func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseSweepRequest(empty) = %+v, want %+v", got, want)
 	}
+}
+
+// TestMergeRepos guards the repos plus repos_file merge: entries are
+// trimmed, duplicates (GitHub names are case-insensitive) collapse onto
+// their first spelling, order is kept, and no entry at all yields nil so
+// the GitHub search still runs.
+func TestMergeRepos(t *testing.T) {
+	tests := []struct {
+		name  string
+		lists [][]string
+		want  []string
+	}{
+		{"no lists is nil", nil, nil},
+		{"empty lists are nil", [][]string{nil, {}}, nil},
+		{"blank entries are dropped", [][]string{{"", "  "}}, nil},
+		{"one list is kept in order", [][]string{{"o/b", "o/a"}}, []string{"o/b", "o/a"}},
+		{"lists are concatenated", [][]string{{"o/a"}, {"o/b"}}, []string{"o/a", "o/b"}},
+		{"entries are trimmed", [][]string{{" o/a "}}, []string{"o/a"}},
+		{"duplicates keep the first spelling", [][]string{{"o/a", "O/A"}, {"o/A", "o/b"}}, []string{"o/a", "o/b"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeRepos(tt.lists...)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("mergeRepos(%v) = %v, want %v", tt.lists, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSweepRequest_repoList guards that the sweep tool honours repos and
+// repos_file together instead of dropping one: the merged list holds the
+// explicit entries first, then the file's entries, without duplicates and
+// without ever touching a temporary file.
+func TestSweepRequest_repoList(t *testing.T) {
+	reposFile := filepath.Join(t.TempDir(), "repos.txt")
+	content := "# team repos\n\nmy-org/a\n  My-Org/c  \nother/d\n"
+	if err := os.WriteFile(reposFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing repos file: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		req  sweepRequest
+		want []string
+	}{
+		{"neither is nil", sweepRequest{}, nil},
+		{"repos only", sweepRequest{Repos: []string{"my-org/b", "my-org/a"}}, []string{"my-org/b", "my-org/a"}},
+		{"repos_file only", sweepRequest{Opts: RunOptions{ReposFile: reposFile}}, []string{"my-org/a", "My-Org/c", "other/d"}},
+		{
+			"both are merged without duplicates",
+			sweepRequest{Repos: []string{"my-org/b", "my-org/c"}, Opts: RunOptions{ReposFile: reposFile}},
+			[]string{"my-org/b", "my-org/c", "my-org/a", "other/d"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.req.repoList()
+			if err != nil {
+				t.Fatalf("repoList: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("repoList = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("unreadable repos_file is an error", func(t *testing.T) {
+		req := sweepRequest{Repos: []string{"my-org/b"}, Opts: RunOptions{ReposFile: filepath.Join(t.TempDir(), "missing.txt")}}
+		got, err := req.repoList()
+		if err == nil || !strings.Contains(err.Error(), "reading repos file") {
+			t.Fatalf("repoList = %v, %v; want a reading repos file error", got, err)
+		}
+	})
 }
