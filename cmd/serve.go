@@ -21,10 +21,11 @@ func init() {
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start a stdio MCP server exposing sweep as a tool",
+	Short: "Start a stdio MCP server exposing sweep and mark as tools",
 	Long: `Start a Model Context Protocol (MCP) server over stdio.
 The server exposes a "sweep" tool that mirrors the sweep CLI command,
-returning structured JSON results instead of terminal output.`,
+returning structured JSON results instead of terminal output, and a "mark"
+tool that mirrors the mark CLI command.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mcpServer := server.NewMCPServer(
@@ -33,53 +34,7 @@ returning structured JSON results instead of terminal output.`,
 			server.WithToolCapabilities(true),
 		)
 
-		mcpServer.AddTool(
-			mcp.NewTool("sweep",
-				mcp.WithDescription("Sweep dependency update PRs: find, approve, and merge Renovate/Dependabot PRs. "+
-					"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable and skipped lists. "+
-					"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
-					"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
-					"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
-					"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
-					"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
-					"set retry_cancelled to retry such builds on the same commit (they are then listed under retried). "+
-					"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
-					"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
-				mcp.WithString("org",
-					mcp.Description("GitHub organization or user to limit the sweep to"),
-				),
-				mcp.WithString("repos_file",
-					mcp.Description("Path to a file listing org/repo entries (one per line) to scan for bot PRs"),
-				),
-				mcp.WithArray("repos",
-					mcp.Description("Explicit list of repos (org/repo format) to sweep"),
-					mcp.WithStringItems(),
-				),
-				mcp.WithBoolean("merge_auto",
-					mcp.Description("Also merge PRs that have auto-merge enabled (default: false)"),
-				),
-				mcp.WithBoolean("dry_run",
-					mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
-				),
-				mcp.WithBoolean("refresh_stale",
-					mcp.Description("Update the branch of stale PRs from their base (same as GitHub's \"Update branch\" button) so CI re-runs, and report them under refreshed (default: false). Skipped for PRs carrying a non-stale ai-rescue marker."),
-				),
-				mcp.WithBoolean("retry_cancelled",
-					mcp.Description("Retry CircleCI builds that CircleCI auto-cancelled on the PR's current head so the same commit gets a real verdict, and report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
-				),
-				mcp.WithString("author",
-					mcp.Description("Filter by PR author: \"renovate\", \"dependabot\", or \"all\" (default: \"all\")"),
-					mcp.Enum("renovate", "dependabot", "all"),
-				),
-				mcp.WithString("trusted_authors",
-					mcp.Description("Comma-separated list of trusted PR author logins (default: \"renovate[bot],dependabot[bot]\")"),
-				),
-				mcp.WithString("security_patterns",
-					mcp.Description("Comma-separated list of case-insensitive substrings used to flag failing CI checks as security-related (defaults to a built-in list)"),
-				),
-			),
-			handleSweep,
-		)
+		mcpServer.AddTool(sweepTool(), handleSweep)
 
 		mcpServer.AddTool(
 			mcp.NewTool("mark",
@@ -104,6 +59,92 @@ returning structured JSON results instead of terminal output.`,
 
 		return server.ServeStdio(mcpServer)
 	},
+}
+
+// sweepTool declares the sweep tool and its arguments. parseSweepRequest
+// reads exactly these arguments; the serve tests keep the two in step.
+func sweepTool() mcp.Tool {
+	return mcp.NewTool("sweep",
+		mcp.WithDescription("Sweep dependency update PRs: find, approve, and merge Renovate/Dependabot PRs. "+
+			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable and skipped lists. "+
+			"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
+			"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
+			"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
+			"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
+			"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
+			"set retry_cancelled to retry such builds on the same commit (they are then listed under retried). "+
+			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
+			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
+		mcp.WithString("query",
+			mcp.Description("Narrow the sweep the way `marge [query]` does. Without repos/repos_file the text becomes part of the GitHub search, "+
+				"so it can be free text matched against the PR (a dependency name such as \"typescript\") or search qualifiers (\"repo:my-org/my-repo\"). "+
+				"With repos or repos_file it keeps only the listed repositories whose org/repo contains the text (case-insensitive)."),
+		),
+		mcp.WithString("org",
+			mcp.Description("GitHub organization or user to limit the sweep to"),
+		),
+		mcp.WithString("repos_file",
+			mcp.Description("Path to a file listing org/repo entries (one per line) to scan for bot PRs"),
+		),
+		mcp.WithArray("repos",
+			mcp.Description("Explicit list of repos (org/repo format) to sweep"),
+			mcp.WithStringItems(),
+		),
+		mcp.WithBoolean("merge_auto",
+			mcp.Description("Also merge PRs that have auto-merge enabled (default: false)"),
+		),
+		mcp.WithBoolean("dry_run",
+			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
+		),
+		mcp.WithBoolean("refresh_stale",
+			mcp.Description("Update the branch of stale PRs from their base (same as GitHub's \"Update branch\" button) so CI re-runs, and report them under refreshed (default: false). Skipped for PRs carrying a non-stale ai-rescue marker."),
+		),
+		mcp.WithBoolean("retry_cancelled",
+			mcp.Description("Retry CircleCI builds that CircleCI auto-cancelled on the PR's current head so the same commit gets a real verdict, and report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
+		),
+		mcp.WithString("author",
+			mcp.Description("Filter by PR author: \"renovate\", \"dependabot\", or \"all\" (default: \"all\")"),
+			mcp.Enum("renovate", "dependabot", "all"),
+		),
+		mcp.WithString("trusted_authors",
+			mcp.Description("Comma-separated list of trusted PR author logins (default: \"renovate[bot],dependabot[bot]\")"),
+		),
+		mcp.WithString("security_patterns",
+			mcp.Description("Comma-separated list of case-insensitive substrings used to flag failing CI checks as security-related (defaults to a built-in list)"),
+		),
+	)
+}
+
+// sweepRequest is what one call of the sweep tool asks for: the search
+// inputs and the processing options, defaulting like the sweep CLI command.
+type sweepRequest struct {
+	Query     string
+	ReposFile string
+	Repos     []string
+	Opts      RunOptions
+}
+
+// parseSweepRequest reads the arguments declared by sweepTool. Quiet is
+// always set: stdout is the MCP stdio transport, so no table, plain-text
+// results or progress chatter may be written; the JSON result carries the
+// same data.
+func parseSweepRequest(request mcp.CallToolRequest) sweepRequest {
+	return sweepRequest{
+		Query:     request.GetString("query", ""),
+		ReposFile: request.GetString("repos_file", ""),
+		Repos:     request.GetStringSlice("repos", nil),
+		Opts: RunOptions{
+			DryRun:           request.GetBool("dry_run", false),
+			MergeAuto:        request.GetBool("merge_auto", false),
+			RefreshStale:     request.GetBool("refresh_stale", false),
+			RetryCancelled:   request.GetBool("retry_cancelled", false),
+			Quiet:            true,
+			Org:              request.GetString("org", ""),
+			Author:           request.GetString("author", "all"),
+			TrustedAuthors:   request.GetString("trusted_authors", "renovate[bot],dependabot[bot]"),
+			SecurityPatterns: request.GetString("security_patterns", ""),
+		},
+	}
 }
 
 // SweepResult is the structured JSON output returned by the sweep MCP tool.
@@ -202,21 +243,12 @@ type SweepRescueInfo struct {
 }
 
 func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Extract parameters from the request.
-	org := request.GetString("org", "")
-	reposFile := request.GetString("repos_file", "")
-	mergeAuto := request.GetBool("merge_auto", false)
-	dryRun := request.GetBool("dry_run", false)
-	refreshStale := request.GetBool("refresh_stale", false)
-	retryCancelled := request.GetBool("retry_cancelled", false)
-	author := request.GetString("author", "all")
-	trustedAuthors := request.GetString("trusted_authors", "renovate[bot],dependabot[bot]")
-	securityPatterns := request.GetString("security_patterns", "")
-	reposParam := request.GetStringSlice("repos", nil)
+	req := parseSweepRequest(request)
 
 	// Create a temporary repos file if repos array was provided.
-	if len(reposParam) > 0 && reposFile == "" {
-		tmpFile, err := createTempReposFile(reposParam)
+	reposFile := req.ReposFile
+	if len(req.Repos) > 0 && reposFile == "" {
+		tmpFile, err := createTempReposFile(req.Repos)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("creating temp repos file: %v", err)), nil
 		}
@@ -234,36 +266,22 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	}
 	login := me.GetLogin()
 
-	prs, err := searchPRs(ctx, client, "", login, author, reposFile)
+	prs, err := searchPRs(ctx, client, req.Query, login, req.Opts.Author, reposFile)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("searching PRs: %v", err)), nil
 	}
 
-	if org != "" {
+	if req.Opts.Org != "" {
 		filtered := prs[:0]
 		for _, p := range prs {
-			if strings.EqualFold(p.Owner, org) {
+			if strings.EqualFold(p.Owner, req.Opts.Org) {
 				filtered = append(filtered, p)
 			}
 		}
 		prs = filtered
 	}
 
-	// Quiet: stdout is the MCP stdio transport, so no table, plain-text
-	// results or progress chatter may be written; the JSON result below
-	// carries the same data.
-	opts := RunOptions{
-		DryRun:           dryRun,
-		MergeAuto:        mergeAuto,
-		RefreshStale:     refreshStale,
-		RetryCancelled:   retryCancelled,
-		Quiet:            true,
-		Author:           author,
-		TrustedAuthors:   trustedAuthors,
-		SecurityPatterns: securityPatterns,
-	}
-
-	status, err := processOnceWithStatus(ctx, client, login, prs, opts)
+	status, err := processOnceWithStatus(ctx, client, login, prs, req.Opts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("processing PRs: %v", err)), nil
 	}
