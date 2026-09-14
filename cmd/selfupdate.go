@@ -13,7 +13,7 @@ import (
 )
 
 // repository is the GitHub repository marge releases are published from.
-const repository = "teemow/marge"
+const repository = "giantswarm/marge"
 
 // Releases are signed keyless with cosign by the shared release workflow.
 // These are the identity fields Fulcio records in the signing certificate.
@@ -33,7 +33,7 @@ func newSelfUpdateCmd() *cobra.Command {
 		Long: `Downloads the latest release of marge and replaces this binary with it.
 
 The download is installed only after its cosign signature bundle verifies as
-a build of teemow/marge by the shared release workflow; otherwise the
+a build of ` + repository + ` by the shared release workflow; otherwise the
 installed binary is left untouched.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkReleased(version); err != nil {

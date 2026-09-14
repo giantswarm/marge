@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
-	"github.com/teemow/marge/internal/pr"
 )
 
 func TestParseCSVList(t *testing.T) {

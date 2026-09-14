@@ -70,11 +70,14 @@ func TestReleaseIdentityPinsWorkflowIssuerAndRepository(t *testing.T) {
 	}
 
 	for name, change := range map[string]func(*certificate.Summary){
-		"another repository":       func(s *certificate.Summary) { s.SourceRepositoryURI = "https://github.com/teemow/patty" },
+		"another repository": func(s *certificate.Summary) { s.SourceRepositoryURI = "https://github.com/teemow/patty" },
+		"the repository's former home": func(s *certificate.Summary) {
+			s.SourceRepositoryURI = "https://github.com/" + formerRepository
+		},
 		"a fork of the repository": func(s *certificate.Summary) { s.SourceRepositoryURI = "https://github.com/someone/marge" },
 		"no source repository":     func(s *certificate.Summary) { s.SourceRepositoryURI = "" },
 		"the repository's own CI": func(s *certificate.Summary) {
-			s.SubjectAlternativeName = "https://github.com/teemow/marge/.github/workflows/ci.yml@refs/heads/main"
+			s.SubjectAlternativeName = "https://github.com/" + repository + "/.github/workflows/ci.yml@refs/heads/main"
 		},
 		"the workflow from a branch": func(s *certificate.Summary) {
 			s.SubjectAlternativeName = strings.Replace(releaseWorkflow, "refs/heads/main", "refs/heads/feature", 1)
@@ -90,13 +93,65 @@ func TestReleaseIdentityPinsWorkflowIssuerAndRepository(t *testing.T) {
 	}
 }
 
-// TestPublishedBundleVerifiesForThisRepository checks the bundle the release
-// workflow published next to marge_linux_amd64 of v0.6.1 against a snapshot
-// of the Sigstore public-good trust root, offline. The binary stays out of the
-// repository: its SHA-256, recorded in the bundle, is what the signature
+// formerRepository is where marge lived, and where its releases up to v0.7.2
+// were built, before it moved to giantswarm/marge.
+const formerRepository = "teemow/marge"
+
+// TestPublishedBundlesVerifyForTheirRepository checks bundles the release
+// workflow published next to marge_linux_amd64 against a snapshot of the
+// Sigstore public-good trust root, offline. The binaries stay out of the
+// repository: their SHA-256, recorded in each bundle, is what the signature
 // covers, so the check runs by digest.
-func TestPublishedBundleVerifiesForThisRepository(t *testing.T) {
-	raw := read(t, "testdata/marge-v0.6.1-linux-amd64.bundle")
+//
+// Each bundle verifies as a release of the repository it was built in and of
+// no other. The v0.6.1 bundle was built at marge's former home, so it is
+// refused for the current repository: a binary from before the move cannot
+// self-update across it, and a release from the former home cannot be
+// installed by a binary built here.
+func TestPublishedBundlesVerifyForTheirRepository(t *testing.T) {
+	material, err := root.NewTrustedRootFromJSON(read(t, "testdata/trusted_root.json"))
+	if err != nil {
+		t.Fatalf("loading the trust root snapshot: %v", err)
+	}
+	verifier, err := verify.NewVerifier(material,
+		verify.WithTransparencyLog(1),
+		verify.WithObserverTimestamps(1),
+		verify.WithSignedCertificateTimestamps(1),
+	)
+	if err != nil {
+		t.Fatalf("preparing the verifier: %v", err)
+	}
+
+	for _, fixture := range []struct {
+		file       string
+		repository string
+	}{
+		{"testdata/marge-v0.6.1-linux-amd64.bundle", formerRepository},
+	} {
+		t.Run(filepath.Base(fixture.file), func(t *testing.T) {
+			b, artifact := fixtureBundle(t, fixture.file)
+			if _, err := verifier.Verify(b, verify.NewPolicy(artifact, verify.WithCertificateIdentity(releaseIdentity(fixture.repository)))); err != nil {
+				t.Fatalf("the published bundle must verify as a release of %s: %v", fixture.repository, err)
+			}
+			// The same bundle, checked as a release of any other repository the
+			// same workflow signs for: refused.
+			for _, other := range []string{repository, formerRepository, "teemow/patty"} {
+				if other == fixture.repository {
+					continue
+				}
+				if _, err := verifier.Verify(b, verify.NewPolicy(artifact, verify.WithCertificateIdentity(releaseIdentity(other)))); err == nil {
+					t.Errorf("a bundle for %s must not verify as a release of %s", fixture.repository, other)
+				}
+			}
+		})
+	}
+}
+
+// fixtureBundle parses a published bundle and returns it with the artifact
+// policy for the binary it signs, taken from the digest the bundle records.
+func fixtureBundle(t *testing.T, name string) (*bundle.Bundle, verify.ArtifactPolicyOption) {
+	t.Helper()
+	raw := read(t, name)
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(raw); err != nil {
 		t.Fatalf("parsing the bundle: %v", err)
@@ -115,28 +170,7 @@ func TestPublishedBundleVerifiesForThisRepository(t *testing.T) {
 	if err != nil || len(digest) != 32 {
 		t.Fatalf("the bundle should record the binary's SHA-256: %v", err)
 	}
-	material, err := root.NewTrustedRootFromJSON(read(t, "testdata/trusted_root.json"))
-	if err != nil {
-		t.Fatalf("loading the trust root snapshot: %v", err)
-	}
-	verifier, err := verify.NewVerifier(material,
-		verify.WithTransparencyLog(1),
-		verify.WithObserverTimestamps(1),
-		verify.WithSignedCertificateTimestamps(1),
-	)
-	if err != nil {
-		t.Fatalf("preparing the verifier: %v", err)
-	}
-	artifact := verify.WithArtifactDigest("sha256", digest)
-
-	if _, err := verifier.Verify(&b, verify.NewPolicy(artifact, verify.WithCertificateIdentity(releaseIdentity(repository)))); err != nil {
-		t.Fatalf("the published bundle must verify as a release of %s: %v", repository, err)
-	}
-	// The same bundle, checked as a release of another repository the same
-	// workflow signs for: refused.
-	if _, err := verifier.Verify(&b, verify.NewPolicy(artifact, verify.WithCertificateIdentity(releaseIdentity("teemow/patty")))); err == nil {
-		t.Fatal("a bundle for this repository must not verify as a release of another")
-	}
+	return &b, verify.WithArtifactDigest("sha256", digest)
 }
 
 func read(t *testing.T, name string) []byte {

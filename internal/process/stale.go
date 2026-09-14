@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
-	"github.com/teemow/marge/internal/pr"
 )
 
 // staleResult describes why a failing PR was classified as stale: its head

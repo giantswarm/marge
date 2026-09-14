@@ -8,11 +8,11 @@ import (
 	"syscall"
 	"time"
 
+	gh "github.com/giantswarm/marge/internal/github"
+	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/process"
 	"github.com/google/go-github/v91/github"
 	"github.com/spf13/cobra"
-	gh "github.com/teemow/marge/internal/github"
-	"github.com/teemow/marge/internal/pr"
-	"github.com/teemow/marge/internal/process"
 )
 
 var markOpts struct {

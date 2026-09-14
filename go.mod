@@ -1,4 +1,4 @@
-module github.com/teemow/marge
+module github.com/giantswarm/marge
 
 go 1.26.0
 

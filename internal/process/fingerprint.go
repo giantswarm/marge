@@ -3,8 +3,8 @@ package process
 import (
 	"context"
 
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
-	"github.com/teemow/marge/internal/pr"
 )
 
 // FingerprintPR computes the content fingerprint of a PR at its current

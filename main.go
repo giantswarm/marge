@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/teemow/marge/cmd"
+	"github.com/giantswarm/marge/cmd"
 )
 
 var version = "dev"

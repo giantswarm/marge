@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
+	gh "github.com/giantswarm/marge/internal/github"
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
-	gh "github.com/teemow/marge/internal/github"
-	"github.com/teemow/marge/internal/pr"
 )
 
 func init() {
