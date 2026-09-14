@@ -87,8 +87,8 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            # The sweep tool writes the `repos` argument to a temporary file;
-            # the root filesystem is read-only.
+            # The root filesystem is read-only; keep a writable /tmp for
+            # scratch files (marge itself writes none today).
             - name: tmp
               mountPath: /tmp
       volumes:

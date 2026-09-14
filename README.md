@@ -92,7 +92,9 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 | `--grouping` | | `repo` | Group by `repo` or `dependency` |
 | `--author` | | `all` | Filter by PR author: `renovate`, `dependabot`, or `all` |
 | `--org` | | | Limit to repos owned by this org or user |
+| `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan for bot PRs instead of searching GitHub. A query then keeps only the listed repos whose `org/repo` contains it (case-insensitive) |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
+| `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are skipped) |
 | `--refresh-stale` | | `false` | Update the branch of stale PRs from their base so CI re-runs (see [Stale failures](#stale-failures-already-fixed-on-the-base-branch)) |
 | `--retry-cancelled` | | `false` | Retry CircleCI builds that CircleCI auto-cancelled on the PR head (see [Cancelled builds](#cancelled-builds-circleci-auto-cancel)) |
 | `--trusted-authors` | | `renovate[bot],dependabot[bot]` | Comma-separated list of trusted PR author logins |
@@ -193,6 +195,7 @@ Processes all matching PRs without interactive grouping. The live table shows ev
 | `--watch` | `-w` | `false` | Keep polling for new PRs every 60 seconds |
 | `--author` | | `all` | Filter by PR author: `renovate`, `dependabot`, or `all` |
 | `--org` | | | Limit to repos owned by this org or user |
+| `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan for bot PRs instead of searching GitHub |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
 | `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are skipped) |
 | `--refresh-stale` | | `false` | Update the branch of stale PRs from their base so CI re-runs (see [Stale failures](#stale-failures-already-fixed-on-the-base-branch)) |
@@ -221,7 +224,7 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 Starts an MCP server exposing two tools:
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `ci_unavailable`, `skipped`). `query` narrows the sweep the way `marge [query]` does: a dependency name, a repo name, or GitHub search qualifiers such as `repo:my-org/my-repo`. Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`) and `retry_cancelled: true` to retry auto-cancelled CircleCI builds on the PR head (they then appear under `retried`); `dry_run: true` still classifies them under `stale` and `cancelled`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `ci_unavailable`, `skipped`). `query` narrows the sweep the way `marge [query]` does: a dependency name, a repo name, or GitHub search qualifiers such as `repo:my-org/my-repo`. `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) scan exactly the listed repositories instead of searching GitHub; given together they are merged without duplicates, and `query` then filters the listed repositories by name. Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`) and `retry_cancelled: true` to retry auto-cancelled CircleCI builds on the PR head (they then appear under `retried`); `dry_run: true` still classifies them under `stale` and `cancelled`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
 
 | Flag | Default | Description |
@@ -301,7 +304,7 @@ marge sweep --retry-cancelled
 
 ## How it works
 
-1. Searches GitHub for open PRs authored by `app/renovate` or `app/dependabot` that are either requesting your review or in your own repositories. Self-authored dependency-update PRs (e.g. from self-hosted Renovate) in your repos are also included.
+1. Searches GitHub for open PRs authored by `app/renovate` or `app/dependabot` that are either requesting your review or in your own repositories. Self-authored dependency-update PRs (e.g. from self-hosted Renovate) in your repos are also included. With `--repos-file`, the open bot PRs of the listed repositories are collected instead of running the search.
 2. In interactive mode, groups results by repository (or dependency) and presents a selector.
 3. Validates each PR's author against a trusted allow-list (`renovate[bot]`, `dependabot[bot]`, and the authenticated user by default). PRs from untrusted authors are refused with a clear status message. You can extend the allow-list with `--trusted-authors`.
 4. For each selected PR, processes it in parallel (up to 5 concurrent):

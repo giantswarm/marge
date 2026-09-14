@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -186,10 +185,12 @@ func sweepTool() mcp.Tool {
 			mcp.Description("GitHub organization or user to limit the sweep to"),
 		),
 		mcp.WithString("repos_file",
-			mcp.Description("Path to a file listing org/repo entries (one per line) to scan for bot PRs"),
+			mcp.Description("Path to a file listing org/repo entries (one per line; blank lines and # comments are ignored) to scan for bot PRs instead of searching GitHub. "+
+				"When repos is given too, both lists are merged and duplicates dropped."),
 		),
 		mcp.WithArray("repos",
-			mcp.Description("Explicit list of repos (org/repo format) to sweep"),
+			mcp.Description("Explicit list of repos (org/repo format) to scan for bot PRs instead of searching GitHub. "+
+				"When repos_file is given too, both lists are merged and duplicates dropped."),
 			mcp.WithStringItems(),
 		),
 		mcp.WithBoolean("merge_auto",
@@ -219,11 +220,44 @@ func sweepTool() mcp.Tool {
 
 // sweepRequest is what one call of the sweep tool asks for: the search
 // inputs and the processing options, defaulting like the sweep CLI command.
+// The repos_file argument lands in Opts.ReposFile, where the CLI flag of the
+// same meaning lives.
 type sweepRequest struct {
-	Query     string
-	ReposFile string
-	Repos     []string
-	Opts      RunOptions
+	Query string
+	Repos []string
+	Opts  RunOptions
+}
+
+// repoList returns the repositories the sweep is restricted to: the repos
+// argument merged with the entries of repos_file, without duplicates. Nil
+// means no restriction, so the PRs come from the GitHub search.
+func (r sweepRequest) repoList() ([]string, error) {
+	fromFile, err := r.Opts.repoList()
+	if err != nil {
+		return nil, err
+	}
+	return mergeRepos(r.Repos, fromFile), nil
+}
+
+// mergeRepos joins repository lists into one, trimmed and without
+// duplicates, keeping the first spelling of each entry in order. GitHub
+// treats owner and repository names case-insensitively, so the comparison
+// does too. It returns nil when the lists hold no entry.
+func mergeRepos(lists ...[]string) []string {
+	seen := make(map[string]bool)
+	var merged []string
+	for _, list := range lists {
+		for _, repo := range list {
+			repo = strings.TrimSpace(repo)
+			key := strings.ToLower(repo)
+			if repo == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, repo)
+		}
+	}
+	return merged
 }
 
 // parseSweepRequest reads the arguments declared by sweepTool. Quiet is
@@ -232,9 +266,8 @@ type sweepRequest struct {
 // same data.
 func parseSweepRequest(request mcp.CallToolRequest) sweepRequest {
 	return sweepRequest{
-		Query:     request.GetString("query", ""),
-		ReposFile: request.GetString("repos_file", ""),
-		Repos:     request.GetStringSlice("repos", nil),
+		Query: request.GetString("query", ""),
+		Repos: request.GetStringSlice("repos", nil),
 		Opts: RunOptions{
 			DryRun:           request.GetBool("dry_run", false),
 			MergeAuto:        request.GetBool("merge_auto", false),
@@ -242,6 +275,7 @@ func parseSweepRequest(request mcp.CallToolRequest) sweepRequest {
 			RetryCancelled:   request.GetBool("retry_cancelled", false),
 			Quiet:            true,
 			Org:              request.GetString("org", ""),
+			ReposFile:        request.GetString("repos_file", ""),
 			Author:           request.GetString("author", "all"),
 			TrustedAuthors:   request.GetString("trusted_authors", "renovate[bot],dependabot[bot]"),
 			SecurityPatterns: request.GetString("security_patterns", ""),
@@ -347,14 +381,9 @@ type SweepRescueInfo struct {
 func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	req := parseSweepRequest(request)
 
-	// Create a temporary repos file if repos array was provided.
-	reposFile := req.ReposFile
-	if len(req.Repos) > 0 && reposFile == "" {
-		tmpFile, err := createTempReposFile(req.Repos)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("creating temp repos file: %v", err)), nil
-		}
-		reposFile = tmpFile
+	repos, err := req.repoList()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	client, err := gh.NewClient(ctx)
@@ -368,20 +397,11 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	}
 	login := me.GetLogin()
 
-	prs, err := searchPRs(ctx, client, req.Query, login, req.Opts.Author, reposFile)
+	prs, err := searchPRs(ctx, client, req.Query, login, req.Opts.Author, repos)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("searching PRs: %v", err)), nil
 	}
-
-	if req.Opts.Org != "" {
-		filtered := prs[:0]
-		for _, p := range prs {
-			if strings.EqualFold(p.Owner, req.Opts.Org) {
-				filtered = append(filtered, p)
-			}
-		}
-		prs = filtered
-	}
+	prs = filterByOrg(prs, req.Opts.Org)
 
 	status, err := processOnceWithStatus(ctx, client, login, prs, req.Opts)
 	if err != nil {
@@ -527,24 +547,4 @@ func handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("marshaling result: %v", err)), nil
 	}
 	return mcp.NewToolResultText(string(jsonBytes)), nil
-}
-
-func createTempReposFile(repos []string) (string, error) {
-	f, err := os.CreateTemp("", "marge-repos-*.txt")
-	if err != nil {
-		return "", err
-	}
-
-	for _, repo := range repos {
-		if _, err := fmt.Fprintln(f, repo); err != nil {
-			_ = f.Close()
-			return "", err
-		}
-	}
-
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-
-	return f.Name(), nil
 }

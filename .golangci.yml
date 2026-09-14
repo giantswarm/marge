@@ -32,10 +32,11 @@ linters:
         linters:
           - gosec
         text: "G101"
-      # Reading the operator-given --repos-file and the CircleCI CLI's own
-      # ~/.circleci/cli.yml is the feature: both paths are chosen by the
-      # person running marge on their own machine, never by remote input.
-      - path: (cmd/run\.go|internal/circleci/circleci\.go)
+      # Reading the operator-given --repos-file (readReposFile) and the
+      # CircleCI CLI's own ~/.circleci/cli.yml is the feature: both paths are
+      # chosen by the person running marge on their own machine, never by
+      # remote input.
+      - path: (cmd/common\.go|internal/circleci/circleci\.go)
         linters:
           - gosec
         text: "G304"

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,6 +35,122 @@ func TestParseCSVList(t *testing.T) {
 			got := parseCSVList(tt.input)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseCSVList(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReadReposFile guards the repos file format shared by the --repos-file
+// flags and the sweep tool's repos_file argument: one trimmed owner/name
+// entry per line, blank lines and # comments ignored, and an error rather
+// than an empty list when the file names no repository (an empty list
+// would silently widen the run to the GitHub search).
+func TestReadReposFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+		return path
+	}
+
+	tests := []struct {
+		name    string
+		path    string
+		want    []string
+		wantErr string
+	}{
+		{
+			name: "entries are trimmed, comments and blank lines skipped",
+			path: write("repos.txt", "# team repos\n\n  my-org/a  \nmy-org/b\n\t# trailing comment\nother/c"),
+			want: []string{"my-org/a", "my-org/b", "other/c"},
+		},
+		{
+			name: "windows line endings",
+			path: write("crlf.txt", "my-org/a\r\nmy-org/b\r\n"),
+			want: []string{"my-org/a", "my-org/b"},
+		},
+		{
+			name:    "only comments is an error",
+			path:    write("comments.txt", "# nothing here\n\n"),
+			wantErr: "lists no repositories",
+		},
+		{
+			name:    "missing file is an error",
+			path:    filepath.Join(dir, "missing.txt"),
+			wantErr: "reading repos file",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readReposFile(tt.path)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("readReposFile = %v, %v; want error containing %q", got, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readReposFile: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("readReposFile = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunOptions_repoList guards the optional flag: no --repos-file means
+// no restriction (nil), a file means its entries.
+func TestRunOptions_repoList(t *testing.T) {
+	got, err := RunOptions{}.repoList()
+	if err != nil || got != nil {
+		t.Errorf("RunOptions{}.repoList() = %v, %v; want nil, nil", got, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "repos.txt")
+	if err := os.WriteFile(path, []byte("my-org/a\n"), 0o600); err != nil {
+		t.Fatalf("writing repos file: %v", err)
+	}
+	got, err = RunOptions{ReposFile: path}.repoList()
+	if err != nil || !reflect.DeepEqual(got, []string{"my-org/a"}) {
+		t.Errorf("repoList() = %v, %v; want [my-org/a], nil", got, err)
+	}
+}
+
+// TestFilterByOrg guards the --org / org filter shared by run, sweep and
+// the sweep tool: it matches the PR owner case-insensitively and an empty
+// org keeps everything.
+func TestFilterByOrg(t *testing.T) {
+	prs := []pr.PRInfo{
+		{Owner: "my-org", Repo: "a", Number: 1},
+		{Owner: "Other", Repo: "b", Number: 2},
+		{Owner: "My-Org", Repo: "c", Number: 3},
+	}
+	tests := []struct {
+		name string
+		prs  []pr.PRInfo
+		org  string
+		want []int
+	}{
+		{"empty org keeps every PR", prs, "", []int{1, 2, 3}},
+		{"exact owner", prs, "Other", []int{2}},
+		{"owner is matched case-insensitively", prs, "MY-ORG", []int{1, 3}},
+		{"no owner matches", prs, "nobody", nil},
+		{"no PRs", nil, "my-org", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []int
+			for _, p := range filterByOrg(tt.prs, tt.org) {
+				got = append(got, p.Number)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("filterByOrg(%q) kept %v, want %v", tt.org, got, tt.want)
 			}
 		})
 	}

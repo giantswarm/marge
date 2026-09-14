@@ -25,7 +25,7 @@ func init() {
 	runCmd.Flags().StringVar(&runOpts.Grouping, "grouping", "repo", "Group by \"repo\" or \"dependency\"")
 	runCmd.Flags().StringVar(&runOpts.Author, "author", "all", "Filter by PR author: \"renovate\", \"dependabot\", or \"all\"")
 	runCmd.Flags().StringVar(&runOpts.Org, "org", "", "Limit to repos owned by this org or user")
-	runCmd.Flags().StringVar(&runOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to also scan for bot PRs")
+	runCmd.Flags().StringVar(&runOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to scan for bot PRs instead of searching GitHub")
 	runCmd.Flags().BoolVar(&runOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	runCmd.Flags().BoolVar(&runOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
 	runCmd.Flags().BoolVar(&runOpts.RefreshStale, "refresh-stale", false, "Update the branch of stale PRs (behind base, failing checks green on base) so CI re-runs")
@@ -67,20 +67,16 @@ optionally group them interactively, then approve and merge them.`,
 		}
 
 		return watchLoop(ctx, runOpts.Watch, func(ctx context.Context) error {
-			prs, err := searchPRs(ctx, client, query, login, runOpts.Author, runOpts.ReposFile)
+			repos, err := runOpts.repoList()
+			if err != nil {
+				return err
+			}
+
+			prs, err := searchPRs(ctx, client, query, login, runOpts.Author, repos)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
-
-			if runOpts.Org != "" {
-				filtered := prs[:0]
-				for _, p := range prs {
-					if strings.EqualFold(p.Owner, runOpts.Org) {
-						filtered = append(filtered, p)
-					}
-				}
-				prs = filtered
-			}
+			prs = filterByOrg(prs, runOpts.Org)
 
 			opts := runOpts
 			opts.Cols = pr.FullColumns()
@@ -113,10 +109,15 @@ optionally group them interactively, then approve and merge them.`,
 	},
 }
 
-func searchPRs(ctx context.Context, client *github.Client, query string, login string, authorFilter string, reposFile string) ([]pr.PRInfo, error) {
-	if reposFile != "" {
+// searchPRs finds the open dependency update PRs to process. With a repo
+// list ("owner/name" entries) it lists the bot PRs of exactly those
+// repositories and query is a case-insensitive substring filter on the
+// repository names; without one it runs the GitHub search, where query
+// becomes part of the search string.
+func searchPRs(ctx context.Context, client *github.Client, query string, login string, authorFilter string, repos []string) ([]pr.PRInfo, error) {
+	if len(repos) > 0 {
 		seen := make(map[string]bool)
-		return listRepoPRs(ctx, client, reposFile, query, authorFilter, seen)
+		return listRepoPRs(ctx, client, repos, query, authorFilter, seen)
 	}
 
 	var authorFilters []string
@@ -236,12 +237,7 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 	return allPRs, nil
 }
 
-func listRepoPRs(ctx context.Context, client *github.Client, reposFile, query, authorFilter string, seen map[string]bool) ([]pr.PRInfo, error) {
-	data, err := os.ReadFile(reposFile)
-	if err != nil {
-		return nil, fmt.Errorf("reading repos file: %w", err)
-	}
-
+func listRepoPRs(ctx context.Context, client *github.Client, repos []string, query, authorFilter string, seen map[string]bool) ([]pr.PRInfo, error) {
 	botAuthors := make(map[string]bool)
 	switch authorFilter {
 	case "renovate":
@@ -254,22 +250,17 @@ func listRepoPRs(ctx context.Context, client *github.Client, reposFile, query, a
 	}
 
 	type repoRef struct{ Owner, Name string }
-	var repos []repoRef
+	var refs []repoRef
 	queryLower := strings.ToLower(query)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+	for _, entry := range repos {
+		owner, name, ok := strings.Cut(strings.TrimSpace(entry), "/")
+		if !ok {
 			continue
 		}
-		parts := strings.SplitN(line, "/", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		owner, name := parts[0], parts[1]
 		if query != "" && !strings.Contains(strings.ToLower(owner+"/"+name), queryLower) {
 			continue
 		}
-		repos = append(repos, repoRef{owner, name})
+		refs = append(refs, repoRef{owner, name})
 	}
 
 	var (
@@ -279,7 +270,7 @@ func listRepoPRs(ctx context.Context, client *github.Client, reposFile, query, a
 	)
 	sem := make(chan struct{}, 10)
 
-	for _, repo := range repos {
+	for _, ref := range refs {
 		wg.Add(1)
 		go func(owner, name string) {
 			defer wg.Done()
@@ -329,7 +320,7 @@ func listRepoPRs(ctx context.Context, client *github.Client, reposFile, query, a
 				}
 				opts.Page = resp.NextPage
 			}
-		}(repo.Owner, repo.Name)
+		}(ref.Owner, ref.Name)
 	}
 
 	wg.Wait()

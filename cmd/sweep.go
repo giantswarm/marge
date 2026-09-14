@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -19,7 +18,7 @@ func init() {
 	sweepCmd.Flags().BoolVarP(&sweepOpts.Watch, "watch", "w", false, "Keep polling for new PRs (every 60s)")
 	sweepCmd.Flags().StringVar(&sweepOpts.Author, "author", "all", "Filter by PR author: \"renovate\", \"dependabot\", or \"all\"")
 	sweepCmd.Flags().StringVar(&sweepOpts.Org, "org", "", "Limit to repos owned by this org or user")
-	sweepCmd.Flags().StringVar(&sweepOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to also scan for bot PRs")
+	sweepCmd.Flags().StringVar(&sweepOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to scan for bot PRs instead of searching GitHub")
 	sweepCmd.Flags().BoolVar(&sweepOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	sweepCmd.Flags().BoolVar(&sweepOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
 	sweepCmd.Flags().BoolVar(&sweepOpts.RefreshStale, "refresh-stale", false, "Update the branch of stale PRs (behind base, failing checks green on base) so CI re-runs")
@@ -69,20 +68,16 @@ cannot be inspected and the PR stays "Failed", annotated.`,
 		login := me.GetLogin()
 
 		return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
-			prs, err := searchPRs(ctx, client, "", login, sweepOpts.Author, sweepOpts.ReposFile)
+			repos, err := sweepOpts.repoList()
+			if err != nil {
+				return err
+			}
+
+			prs, err := searchPRs(ctx, client, "", login, sweepOpts.Author, repos)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
-
-			if sweepOpts.Org != "" {
-				filtered := prs[:0]
-				for _, p := range prs {
-					if strings.EqualFold(p.Owner, sweepOpts.Org) {
-						filtered = append(filtered, p)
-					}
-				}
-				prs = filtered
-			}
+			prs = filterByOrg(prs, sweepOpts.Org)
 
 			_, err = processOnceWithStatus(ctx, client, login, prs, sweepOpts)
 			return err
