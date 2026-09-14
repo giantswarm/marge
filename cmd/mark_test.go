@@ -10,8 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
+
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // markFixture fakes the three GitHub calls marge mark makes: fetch the PR,

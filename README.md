@@ -22,9 +22,9 @@ It searches GitHub for open bot PRs, groups them interactively, waits for CI che
 
 ### From GitHub releases
 
-Download the latest binary from the [releases page](https://github.com/giantswarm/marge/releases) for your platform (Linux, macOS, Windows; amd64 and arm64).
+Download the binary for your platform (Linux, macOS, Windows; amd64 and arm64) from the [releases page](https://github.com/giantswarm/marge/releases): the assets are named `marge-<os>-<arch>`, each next to its cosign signature bundle (`marge-<os>-<arch>.bundle`). Releases are built and signed by the repository's CircleCI pipeline; `marge self-update` installs a newer release only after that bundle verifies.
 
-> marge moved here from `teemow/marge`. Binaries installed from there (v0.7.2 and older) verify release signatures against that former home and refuse releases built here, so `marge self-update` cannot carry them across the move. Install once from the releases page above; from then on `self-update` works again.
+> marge moved here from a personal namespace, and its release pipeline moved from GitHub Actions to CircleCI. Binaries up to v0.8.1 verify release signatures against the former pipeline and refuse releases built here, so `marge self-update` cannot carry them across. Install once from the releases page above; from then on `self-update` works again.
 
 ### From source
 
@@ -32,12 +32,21 @@ Download the latest binary from the [releases page](https://github.com/giantswar
 go install github.com/giantswarm/marge@latest
 ```
 
-Or clone and build locally:
+Or clone and build locally (`make build` stamps the version with [gitsemver](https://github.com/giantswarm/gitsemver); `make install` puts the binary into `$(go env GOPATH)/bin`):
 
 ```bash
 git clone https://github.com/giantswarm/marge.git
 cd marge
 make install
+```
+
+### On Kubernetes
+
+The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm/giantswarm-catalog) runs `marge serve` over the MCP Streamable HTTP transport behind a `ClusterIP` Service, ready to be registered as a streamable-http MCP server in [muster](https://github.com/giantswarm/muster). It takes the GitHub token from `marge.github.token` or an existing Secret (`marge.github.existingSecret`); see [helm/marge/README.md](helm/marge/README.md) for every value.
+
+```bash
+helm install marge oci://gsoci.azurecr.io/giantswarm/marge-chart \
+  --set marge.github.existingSecret=marge-github-token
 ```
 
 ## Setup
@@ -208,12 +217,24 @@ marge mark https://github.com/my-org/my-repo/pull/42 \
 
 Requires the token to have **Issues: Read & write** (comment) permission in addition to the permissions listed under [Setup](#setup).
 
-### `marge serve`
+### `marge serve [flags]`
 
-Starts a stdio MCP server exposing two tools:
+Starts an MCP server exposing two tools:
 
 - **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `ci_unavailable`, `skipped`). `query` narrows the sweep the way `marge [query]` does: a dependency name, a repo name, or GitHub search qualifiers such as `repo:my-org/my-repo`. Each PR entry includes `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Pass `refresh_stale: true` to update stale branches from their base (they then appear under `refreshed`) and `retry_cancelled: true` to retry auto-cancelled CircleCI builds on the PR head (they then appear under `retried`); `dry_run: true` still classifies them under `stale` and `cancelled`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--transport` | `stdio` | `stdio` (JSON-RPC over stdin/stdout, for an MCP client that starts marge itself) or `streamable-http` (the MCP Streamable HTTP transport, what the Helm chart runs) |
+| `--http-addr` | `:8080` | Listen address for `streamable-http` |
+
+Over `streamable-http` the MCP endpoint is `/mcp`; `/healthz` and `/readyz` answer the Kubernetes probes. The server stops on `SIGTERM`/`SIGINT` after draining in-flight requests for up to ten seconds. The GitHub token is read per tool call, so the server starts without one and reports the missing token on the first `sweep` or `mark`.
+
+```bash
+marge serve                                        # stdio, for a local MCP client
+marge serve --transport streamable-http --http-addr :8080
+```
 
 ### Other commands
 

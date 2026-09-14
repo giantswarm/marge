@@ -2,3 +2,21 @@
 /dist/
 /scripts/
 /graphify-out/
+
+# Build outputs and CI scratch files, all written next to the sources: the
+# devctl Makefile's marge-v<version>-<os>-<arch> and bin-dist/, the architect
+# CI's .ldflags, .platforms and marge-<os>-<arch> (six of them, built
+# concurrently), app-build-suite's build/. Untracked, any of these flips Go's
+# VCS stamp to vcs.modified=true and the binaries built after it report
+# vX.Y.Z+dirty (pkg/project reads that stamp).
+/marge-*
+/bin-dist/
+/build/
+.ldflags
+.platforms
+
+# app-test-suite reports
+tests/ats/*.xml
+
+# Local Claude Code worktrees
+.claude/worktrees/

@@ -1,0 +1,313 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "affinity": {
+            "type": "object",
+            "description": "Affinity for the pod",
+            "additionalProperties": true
+        },
+        "baseDomain": {
+            "type": "string"
+        },
+        "bootstrapMode": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "chartOperator": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "ciliumNetworkPolicy": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "cluster": {
+            "type": "object",
+            "additionalProperties": true
+        },
+        "clusterCA": {
+            "type": "string"
+        },
+        "clusterCIDR": {
+            "type": "string"
+        },
+        "clusterDNSIP": {
+            "type": "string"
+        },
+        "clusterID": {
+            "type": "string"
+        },
+        "fullnameOverride": {
+            "type": "string",
+            "description": "Overrides the fully qualified resource name"
+        },
+        "gcpProject": {
+            "type": "string"
+        },
+        "global": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "description": "Global values shared between all subcharts",
+            "$comment": "Added automatically by 'helm schema' to allow this chart to be used as a Helm dependency, as this schema would otherwise not allow Helm's special 'global' values key."
+        },
+        "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pullPolicy": {
+                    "type": "string",
+                    "description": "Image pull policy"
+                },
+                "registry": {
+                    "type": "string",
+                    "description": "Registry of the marge image"
+                },
+                "repository": {
+                    "type": "string",
+                    "description": "Repository of the marge image"
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Overrides the image tag whose default is the chart appVersion."
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "description": "Image pull secrets for the pod"
+        },
+        "marge": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "circleci": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "existingSecret": {
+                            "type": "string",
+                            "description": "Name of an existing Secret holding the CircleCI token. Takes precedence over token."
+                        },
+                        "existingSecretKey": {
+                            "type": "string",
+                            "description": "Key of the CircleCI token inside existingSecret"
+                        },
+                        "token": {
+                            "type": "string",
+                            "description": "CircleCI API token, optional: lets marge inspect private CircleCI projects and retry auto-cancelled builds. The chart writes it into a Secret; prefer existingSecret in production."
+                        }
+                    }
+                },
+                "github": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "existingSecret": {
+                            "type": "string",
+                            "description": "Name of an existing Secret holding the GitHub token. Takes precedence over token."
+                        },
+                        "existingSecretKey": {
+                            "type": "string",
+                            "description": "Key of the GitHub token inside existingSecret"
+                        },
+                        "token": {
+                            "type": "string",
+                            "description": "GitHub token marge uses (needs the permissions listed in the repository README). The chart writes it into a Secret; prefer existingSecret in production."
+                        }
+                    }
+                }
+            }
+        },
+        "nameOverride": {
+            "type": "string",
+            "description": "Overrides the chart name in resource names"
+        },
+        "networkPolicy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Create a NetworkPolicy: ingress to the MCP port from the selected namespaces, egress to DNS and HTTPS only (GitHub, CircleCI)."
+                },
+                "ingressNamespaceSelector": {
+                    "type": "object",
+                    "description": "Namespaces allowed to reach the MCP port; an empty selector allows every namespace of the cluster.",
+                    "additionalProperties": true
+                }
+            }
+        },
+        "nodeSelector": {
+            "type": "object",
+            "description": "Node selector for the pod",
+            "additionalProperties": true
+        },
+        "podAnnotations": {
+            "type": "object",
+            "description": "Annotations to add to the pod",
+            "additionalProperties": true
+        },
+        "podLabels": {
+            "type": "object",
+            "description": "Labels to add to the pod",
+            "additionalProperties": true
+        },
+        "podSecurityContext": {
+            "type": "object",
+            "description": "Pod-level security context (restricted Pod Security Standard)",
+            "additionalProperties": false,
+            "properties": {
+                "fsGroup": {
+                    "type": "integer"
+                },
+                "runAsGroup": {
+                    "type": "integer"
+                },
+                "runAsNonRoot": {
+                    "type": "boolean"
+                },
+                "runAsUser": {
+                    "type": "integer"
+                },
+                "seccompProfile": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "provider": {
+            "type": "string"
+        },
+        "replicaCount": {
+            "type": "integer",
+            "description": "Number of marge replicas. The MCP transport is stateful per session, so keep it at 1 unless a client-affine load balancer sits in front."
+        },
+        "resources": {
+            "type": "object",
+            "description": "Container resources",
+            "additionalProperties": false,
+            "properties": {
+                "limits": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "requests": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "cpu": {
+                            "type": "string"
+                        },
+                        "memory": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "securityContext": {
+            "type": "object",
+            "description": "Container security context (restricted Pod Security Standard)",
+            "additionalProperties": false,
+            "properties": {
+                "allowPrivilegeEscalation": {
+                    "type": "boolean"
+                },
+                "capabilities": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "drop": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "readOnlyRootFilesystem": {
+                    "type": "boolean"
+                },
+                "runAsGroup": {
+                    "type": "integer"
+                },
+                "runAsNonRoot": {
+                    "type": "boolean"
+                },
+                "runAsUser": {
+                    "type": "integer"
+                },
+                "seccompProfile": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "service": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": "Service type"
+                },
+                "port": {
+                    "type": "integer",
+                    "description": "Service port; the container listens on 8080"
+                }
+            }
+        },
+        "serviceAccount": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "annotations": {
+                    "type": "object",
+                    "description": "Annotations to add to the ServiceAccount",
+                    "additionalProperties": true
+                },
+                "automount": {
+                    "type": "boolean",
+                    "description": "Mount the ServiceAccount token into the pod"
+                },
+                "create": {
+                    "type": "boolean",
+                    "description": "Create a ServiceAccount for the pod. marge talks to GitHub and CircleCI only, so it needs no Kubernetes API access."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Name of the ServiceAccount to use. Generated from the fullname when empty and create is true."
+                }
+            }
+        },
+        "subscriptionID": {
+            "type": "string"
+        },
+        "tolerations": {
+            "type": "array",
+            "description": "Tolerations for the pod"
+        }
+    }
+}

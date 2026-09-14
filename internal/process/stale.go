@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
+
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // staleResult describes why a failing PR was classified as stale: its head
@@ -155,7 +156,7 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 			if at.IsZero() {
 				at = s.GetCreatedAt().Time
 			}
-			record(s.GetContext(), state == "success", state == "failure" || state == "error", at)
+			record(s.GetContext(), state == stateSuccess, state == stateFailure || state == stateError, at)
 		}
 		if resp == nil || resp.NextPage == 0 {
 			break
@@ -170,14 +171,14 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 			return nil, err
 		}
 		for _, cr := range runs.CheckRuns {
-			if cr.GetStatus() != "completed" {
+			if cr.GetStatus() != statusCompleted {
 				// Still running on the base branch: neither green nor red.
 				record(cr.GetName(), false, false, time.Time{})
 				continue
 			}
 			conclusion := cr.GetConclusion()
-			failed := conclusion == "failure" || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled"
-			record(cr.GetName(), conclusion == "success", failed, cr.GetCompletedAt().Time)
+			failed := conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled"
+			record(cr.GetName(), conclusion == stateSuccess, failed, cr.GetCompletedAt().Time)
 		}
 		if resp == nil || resp.NextPage == 0 {
 			break

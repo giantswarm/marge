@@ -1,0 +1,5 @@
+# Values for the app-test-suite smoke test on the CI kind cluster. The chart
+# installs without a GitHub token: marge serve starts and answers its probes,
+# and only a tool call needs the token.
+networkPolicy:
+  enabled: false

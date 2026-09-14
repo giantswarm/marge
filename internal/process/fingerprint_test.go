@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
+
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // Recorded-style compare payloads for a Renovate "typescript to v7" PR.

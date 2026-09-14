@@ -9,11 +9,12 @@ import (
 	"sync"
 	"syscall"
 
-	gh "github.com/giantswarm/marge/internal/github"
-	"github.com/giantswarm/marge/internal/pr"
 	"github.com/google/go-github/v91/github"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
+
+	gh "github.com/giantswarm/marge/internal/github"
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 var runOpts RunOptions

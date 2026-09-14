@@ -13,9 +13,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-github/v91/github"
+
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/pr"
-	"github.com/google/go-github/v91/github"
 )
 
 // The CircleCI fixtures are the recorded v1.1 builds from giantswarm/mcp-capi

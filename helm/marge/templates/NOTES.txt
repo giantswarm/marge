@@ -1,0 +1,12 @@
+marge {{ .Chart.AppVersion }} is serving the MCP Streamable HTTP transport at
+
+  http://{{ include "marge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/mcp
+
+Register that URL as a streamable-http MCP server in muster to expose the
+`sweep` and `mark` tools.
+{{- if not (or .Values.marge.github.token .Values.marge.github.existingSecret) }}
+
+No GitHub token is configured: the server starts and answers its probes, but
+every tool call fails until marge.github.token or marge.github.existingSecret
+is set.
+{{- end }}

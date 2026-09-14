@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-github/v91/github"
+
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/pr"
-	"github.com/google/go-github/v91/github"
 )
 
 const (
@@ -149,7 +150,7 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 		}
 
 		switch outcome.state {
-		case "success":
+		case stateSuccess:
 			return nil
 		case "blocked":
 			// CI never ran because a GitHub Actions budget / spending-limit
@@ -158,7 +159,7 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 			// of the rescue path.
 			status.Update(idx, pr.StatusBlockedCI, blockedDetail(outcome.blockedChecks))
 			return fmt.Errorf("ci unavailable: actions budget")
-		case "failure", "error":
+		case stateFailure, stateError:
 			// A CircleCI build that CircleCI itself cancelled carries no
 			// verdict on the code, so it is neither a failure nor stale.
 			// Decided first: it rests on positive evidence about this very
@@ -232,7 +233,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 
 	if checkRuns.GetTotal() == 0 && len(combined.Statuses) == 0 {
 		// No checks configured -- treat as success
-		return checkOutcome{state: "success"}, nil
+		return checkOutcome{state: stateSuccess}, nil
 	}
 
 	var failedChecks []string
@@ -240,12 +241,12 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	allComplete := true
 	hasFailure := false
 	for _, cr := range checkRuns.CheckRuns {
-		if cr.GetStatus() != "completed" {
+		if cr.GetStatus() != statusCompleted {
 			allComplete = false
 			continue
 		}
 		conclusion := cr.GetConclusion()
-		if conclusion == "failure" || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled" {
+		if conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled" {
 			name := cr.GetName()
 			// A job that never started because of an Actions budget /
 			// spending-limit block is not a real failure -- route it to the
@@ -267,7 +268,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	var statusTargets map[string]string
 	for _, s := range combined.Statuses {
 		state := s.GetState()
-		if state == "failure" || state == "error" {
+		if state == stateFailure || state == stateError {
 			if name := s.GetContext(); name != "" {
 				failedChecks = append(failedChecks, name)
 				if statusTargets == nil {
@@ -286,19 +287,19 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	}
 	switch {
 	case hasFailure:
-		out.state = "failure"
+		out.state = stateFailure
 	case !allComplete:
-		out.state = "pending"
-	case combinedState == "failure" || combinedState == "error":
+		out.state = statePending
+	case combinedState == stateFailure || combinedState == stateError:
 		out.state = combinedState
 	case len(blockedChecks) > 0:
 		// Every failing check was a budget block and nothing genuinely
 		// failed: the PR's CI could not run at all.
 		out.state = "blocked"
-	case combinedState == "pending" && len(combined.Statuses) > 0:
-		out.state = "pending"
+	case combinedState == statePending && len(combined.Statuses) > 0:
+		out.state = statePending
 	default:
-		out.state = "success"
+		out.state = stateSuccess
 	}
 	return out, nil
 }
