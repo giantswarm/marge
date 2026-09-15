@@ -79,7 +79,7 @@ Two more results from the same test, both permanent:
 ## Credentials
 
 Three secrets come out of the registration. All three live in 1Password, in
-the Bumblebee vault, in one item named `marge sweep GitHub App`.
+the `Team Bumblebee` vault, in one item named `marge sweep GitHub App`.
 
 | Secret | Used by | Note |
 |---|---|---|
