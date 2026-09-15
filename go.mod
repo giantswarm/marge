@@ -8,7 +8,7 @@ require (
 	github.com/giantswarm/selfupdate-cosign v0.2.0
 	github.com/google/go-github/v92 v92.0.0
 	github.com/manifoldco/promptui v0.9.0
-	github.com/mark3labs/mcp-go v1.0.0
+	github.com/mark3labs/mcp-go v1.1.0
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
