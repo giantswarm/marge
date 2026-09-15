@@ -24,8 +24,11 @@ import (
 // attempt still stands; otherwise it is stale and the PR is fair game for
 // another rescue.
 type RescueMarker struct {
-	Tool    string    `json:"tool,omitempty"`
-	Outcome string    `json:"outcome"`
+	Tool    string `json:"tool,omitempty"`
+	Outcome string `json:"outcome"`
+	// Kind tells a rescue record ("" or "rescue") from a sweep evidence
+	// record ("evidence"). Evidence never counts as a prior rescue attempt.
+	Kind    string    `json:"kind,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
 	HeadSHA string    `json:"head_sha,omitempty"`
 	At      time.Time `json:"at,omitempty"`
@@ -38,6 +41,18 @@ type RescueMarker struct {
 }
 
 var rescueMarkerRE = regexp.MustCompile(`(?s)<!--\s*ai-rescue:\s*(\{.*?\})\s*-->`)
+
+// MarkerKindEvidence marks a comment the sweep wrote as evidence of a guard
+// decision or an action it performed. Evidence carries the head SHA and the
+// fingerprint like a rescue marker so a later sweep can tell whether the
+// same evidence already stands for the current change.
+const MarkerKindEvidence = "evidence"
+
+// IsEvidence reports whether the marker is sweep evidence rather than the
+// record of a rescue attempt.
+func (m *RescueMarker) IsEvidence() bool {
+	return m.Kind == MarkerKindEvidence
+}
 
 // ParseRescueMarker extracts the last ai-rescue marker from a comment
 // body. It returns nil when the body contains no parseable marker; a
@@ -94,6 +109,9 @@ func (m *RescueMarker) CommentBody() string {
 		tool = "ai"
 	}
 	human := fmt.Sprintf("**AI rescue %s** (%s)", m.Outcome, tool)
+	if m.IsEvidence() {
+		human = fmt.Sprintf("**Sweep: %s** (%s)", m.Outcome, tool)
+	}
 	if m.Reason != "" {
 		human += ": " + m.Reason
 	}

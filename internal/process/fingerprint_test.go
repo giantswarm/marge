@@ -160,7 +160,7 @@ func TestClassifyStale_refreshSkippedForRebasedMarker(t *testing.T) {
 		files:    tsFiles("^7.0.0", 24, `"prettier": "^3.7.0",`),
 		comments: []string{markerBeforeRebase},
 	}
-	got := f.run(t, func(p *Processor) { p.RefreshStale = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true} })
 
 	if got.State != pr.StatusStale {
 		t.Fatalf("state = %v (%s), want StatusStale (refresh skipped)", got.State, got.Detail)

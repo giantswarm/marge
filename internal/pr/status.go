@@ -53,6 +53,19 @@ const (
 	// diff changes nothing that executes. Both want closing, not rescuing.
 	// The entry's ObsoleteReason says which, and Detail says why.
 	StatusObsolete
+	// StatusWaitingChecks marks a PR whose required status checks have not
+	// all reported: a required context is missing or pending. The sweep
+	// waits; it never merges past a required check.
+	StatusWaitingChecks
+	// StatusAwaitingApproval marks a green PR that GitHub refused to merge
+	// for a review reason the sweep's own approval did not satisfy.
+	StatusAwaitingApproval
+	// StatusHeld marks a green PR the sweep policy leaves to a person, for
+	// instance a major update or one whose update type could not be read.
+	StatusHeld
+	// StatusEligible marks a green eligible PR the sweep did not merge
+	// because the merge action was not selected.
+	StatusEligible
 )
 
 func (s StatusState) String() string {
@@ -97,6 +110,14 @@ func (s StatusState) String() string {
 		return "CI unavailable (no verdict)"
 	case StatusObsolete:
 		return "Obsolete"
+	case StatusWaitingChecks:
+		return "Waiting for checks"
+	case StatusAwaitingApproval:
+		return "Awaiting approval"
+	case StatusHeld:
+		return "Held"
+	case StatusEligible:
+		return "Eligible"
 	default:
 		return "Unknown"
 	}
@@ -111,6 +132,13 @@ type StatusEntry struct {
 	PR     PRInfo
 	State  StatusState
 	Detail string
+	// Kind and UpdateType are set once the PR has been read; both are
+	// empty for a PR the sweep could not fetch.
+	Kind       Kind
+	UpdateType UpdateType
+	// Label is the bot-prs-sweep/<class> label that is on the PR after the
+	// sweep; empty when none was written (dry run, or the write failed).
+	Label string
 	// Rescue is the most recent prior automated rescue attempt found on
 	// the PR, if any. Only populated for failure-state entries.
 	Rescue *RescueMarker
@@ -164,6 +192,26 @@ func (s *PRStatus) MarkObsolete(idx int, reason ObsoleteReason, detail string) {
 		s.entries[idx].State = StatusObsolete
 		s.entries[idx].Detail = detail
 		s.entries[idx].ObsoleteReason = reason
+	}
+}
+
+// SetClassification records what kind of bot PR the entry is and the size
+// of the update it carries.
+func (s *PRStatus) SetClassification(idx int, kind Kind, updateType UpdateType) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.entries) {
+		s.entries[idx].Kind = kind
+		s.entries[idx].UpdateType = updateType
+	}
+}
+
+// SetLabel records the classification label that is on the PR.
+func (s *PRStatus) SetLabel(idx int, label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.entries) {
+		s.entries[idx].Label = label
 	}
 }
 
@@ -228,6 +276,7 @@ type Counts struct {
 	Cancelled int
 	Retried   int
 	Obsolete  int
+	Waiting   int
 	Skipped   int
 }
 
@@ -238,12 +287,14 @@ func (s *PRStatus) countsLocked() Counts {
 		switch e.State {
 		case StatusMerged, StatusAlreadyMerged, StatusAutoMerge:
 			c.Merged++
-		case StatusFailed, StatusFailedSecurity, StatusConflict, StatusUntrustedAuthor:
+		case StatusFailed, StatusFailedSecurity, StatusConflict, StatusUntrustedAuthor, StatusHeld, StatusAwaitingApproval:
 			c.Failed++
 		case StatusBlockedCI:
 			c.Blocked++
 		case StatusNoVerdict:
 			c.NoVerdict++
+		case StatusWaitingChecks:
+			c.Waiting++
 		case StatusStale:
 			c.Stale++
 		case StatusRefreshed:
@@ -301,6 +352,9 @@ func (s *PRStatus) FormatSummary() string {
 	if c.NoVerdict > 0 {
 		fmt.Fprintf(&b, ", %d no-verdict", c.NoVerdict)
 	}
+	if c.Waiting > 0 {
+		fmt.Fprintf(&b, ", %d waiting", c.Waiting)
+	}
 	fmt.Fprintf(&b, ", %d skipped", c.Skipped)
 	return b.String()
 }
@@ -315,12 +369,18 @@ func (s *PRStatus) ActionRequired() []StatusEntry {
 	var result []StatusEntry
 	for _, e := range s.entries {
 		switch e.State {
-		case StatusFailed, StatusFailedSecurity, StatusConflict, StatusUntrustedAuthor:
+		case StatusFailed, StatusFailedSecurity, StatusConflict, StatusUntrustedAuthor, StatusHeld, StatusAwaitingApproval:
 			result = append(result, e)
 		}
 	}
 	sortOldestFirst(result)
 	return result
+}
+
+// WaitingEntries returns entries whose required checks have not all
+// reported. They are kept out of ActionRequired: the remedy is time.
+func (s *PRStatus) WaitingEntries() []StatusEntry {
+	return s.entriesInState(StatusWaitingChecks)
 }
 
 // BlockedEntries returns entries whose CI could not run because a GitHub

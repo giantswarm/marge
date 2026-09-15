@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/go-github/v92/github"
+	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/pr"
@@ -29,12 +31,18 @@ type RunOptions struct {
 	// PRStatus instead. `marge serve` sets it because stdout is the MCP
 	// stdio transport there and must carry nothing but JSON-RPC. Quiet
 	// implies NoTUI.
-	Quiet            bool
-	Author           string
-	TrustedAuthors   string
-	MergeAuto        bool
-	RefreshStale     bool
-	RetryCancelled   bool
+	Quiet     bool
+	MergeAuto bool
+	// Team scopes the sweep to the repositories listed in that team's file
+	// in giantswarm/github. Empty means the query scope.
+	Team string
+	// Query is the GitHub search text of the query scope.
+	Query string
+	// Actions selects the sweep steps; see process.ParseActions.
+	Actions process.ActionSet
+	// CheckTimeout is how long one PR waits for pending checks; zero means
+	// no wait.
+	CheckTimeout     time.Duration
 	Org              string
 	ReposFile        string // repositories to scan instead of searching GitHub; see repoList
 	Grouping         string
@@ -42,14 +50,83 @@ type RunOptions struct {
 	Cols             []pr.TableColumn
 }
 
-// repoList returns the repositories a run is restricted to: the entries of
-// ReposFile when one was given. Nil means no restriction, so the PRs come
-// from the GitHub search.
-func (o RunOptions) repoList() ([]string, error) {
+// repoList returns the repositories a run is restricted to: the team's
+// repositories under the team scope, else the entries of ReposFile when
+// one was given. Nil means no restriction, so the PRs come from the GitHub
+// search.
+func (o RunOptions) repoList(ctx context.Context, client *github.Client) ([]string, error) {
+	if o.Team != "" {
+		return teamRepos(ctx, client, o.Team)
+	}
 	if o.ReposFile == "" {
 		return nil, nil
 	}
 	return readReposFile(o.ReposFile)
+}
+
+// teamFileRepoEnv names the owner/repo that holds one file per team
+// listing the repositories the team owns; defaultTeamFileRepo applies when
+// it is unset.
+const (
+	teamFileRepoEnv     = "MARGE_TEAM_FILE_REPO"
+	defaultTeamFileRepo = "giantswarm/github"
+)
+
+// teamFileRepo returns the owner and name of the team-file repository.
+func teamFileRepo() (owner, name string, err error) {
+	spec := strings.TrimSpace(os.Getenv(teamFileRepoEnv))
+	if spec == "" {
+		spec = defaultTeamFileRepo
+	}
+	owner, name, ok := strings.Cut(spec, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", "", fmt.Errorf("%s=%q: want owner/repo", teamFileRepoEnv, spec)
+	}
+	return owner, name, nil
+}
+
+// teamRepos resolves a team's repositories from repositories/team-<name>.yaml
+// in the team-file repository. Only each entry's name is read; every other
+// key of the team file belongs to the generators and changes without
+// notice. The repositories live under the team-file repository's owner.
+func teamRepos(ctx context.Context, client *github.Client, team string) ([]string, error) {
+	owner, name, err := teamFileRepo()
+	if err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("repositories/team-%s.yaml", team)
+	file, _, resp, err := client.Repositories.GetContents(ctx, owner, name, path, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("no team file for %q: %s/%s has no %s", team, owner, name, path)
+		}
+		return nil, fmt.Errorf("reading team file %s: %w", path, err)
+	}
+	content, err := file.GetContent()
+	if err != nil {
+		return nil, fmt.Errorf("decoding team file %s: %w", path, err)
+	}
+	return parseTeamFile(content, owner, path)
+}
+
+// parseTeamFile returns the owner/name entries of a team file's content.
+func parseTeamFile(content, owner, path string) ([]string, error) {
+	var entries []struct {
+		Name string `yaml:"name"`
+	}
+	if err := yaml.Unmarshal([]byte(content), &entries); err != nil {
+		return nil, fmt.Errorf("parsing team file %s: %w", path, err)
+	}
+	var repos []string
+	for _, e := range entries {
+		if name := strings.TrimSpace(e.Name); name != "" {
+			repos = append(repos, owner+"/"+name)
+		}
+	}
+	if len(repos) == 0 {
+		return nil, fmt.Errorf("team file %s lists no repositories", path)
+	}
+	return repos, nil
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
@@ -119,10 +196,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		close(refreshStopped)
 	}
 
-	proc := process.NewProcessor(client, opts.DryRun, opts.MergeAuto, login, parseTrustedAuthors(opts.TrustedAuthors))
+	proc := process.NewProcessor(client, opts.DryRun, opts.MergeAuto, login)
 	proc.SecurityCheckPatterns = parseCSVList(opts.SecurityPatterns)
-	proc.RefreshStale = opts.RefreshStale
-	proc.RetryCancelled = opts.RetryCancelled
+	proc.Actions = opts.Actions
+	proc.CheckTimeout = opts.CheckTimeout
 	proc.CircleCI = circleci.NewClient()
 	// Cross-PR knowledge, so it is computed once from the whole list before
 	// the per-PR processing starts, and read without locking afterwards.
@@ -217,15 +294,6 @@ func parseCSVList(csv string) []string {
 		}
 	}
 	return out
-}
-
-func parseTrustedAuthors(csv string) map[string]bool {
-	entries := parseCSVList(csv)
-	m := make(map[string]bool, len(entries))
-	for _, a := range entries {
-		m[a] = true
-	}
-	return m
 }
 
 // readReposFile returns the "owner/name" entries listed in the file at

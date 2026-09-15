@@ -66,13 +66,13 @@ func TestMerge_SuccessOnFirstAttempt(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClient(t, server)
-	proc := NewProcessor(client, false, false, "testuser", DefaultTrustedAuthors)
+	proc := NewProcessor(client, false, false, "testuser")
 
 	status := pr.NewPRStatus()
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	proc.merge(context.Background(), info, status, idx)
+	proc.merge(context.Background(), &prRun{info: info, pull: &github.PullRequest{}, status: status, idx: idx})
 
 	snap := status.Snapshot()
 	if snap[idx].State != pr.StatusMerged {
@@ -119,7 +119,6 @@ func TestMerge_RetriesOnBaseBranchModified(t *testing.T) {
 		DryRun:         false,
 		MergeAutoMerge: false,
 		Login:          "testuser",
-		TrustedAuthors: DefaultTrustedAuthors,
 		MergeRetryWait: 1 * time.Millisecond,
 	}
 
@@ -127,7 +126,7 @@ func TestMerge_RetriesOnBaseBranchModified(t *testing.T) {
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	proc.merge(context.Background(), info, status, idx)
+	proc.merge(context.Background(), &prRun{info: info, pull: &github.PullRequest{}, status: status, idx: idx})
 
 	mu.Lock()
 	attempts := mergeAttempts
@@ -161,13 +160,13 @@ func TestMerge_PermanentErrorNoRetry(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClient(t, server)
-	proc := NewProcessor(client, false, false, "testuser", DefaultTrustedAuthors)
+	proc := NewProcessor(client, false, false, "testuser")
 
 	status := pr.NewPRStatus()
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	proc.merge(context.Background(), info, status, idx)
+	proc.merge(context.Background(), &prRun{info: info, pull: &github.PullRequest{}, status: status, idx: idx})
 
 	mu.Lock()
 	attempts := mergeAttempts
@@ -212,7 +211,6 @@ func TestMerge_ExhaustsRetries(t *testing.T) {
 		DryRun:         false,
 		MergeAutoMerge: false,
 		Login:          "testuser",
-		TrustedAuthors: DefaultTrustedAuthors,
 		MergeRetryWait: 1 * time.Millisecond,
 	}
 
@@ -220,7 +218,7 @@ func TestMerge_ExhaustsRetries(t *testing.T) {
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	proc.merge(context.Background(), info, status, idx)
+	proc.merge(context.Background(), &prRun{info: info, pull: &github.PullRequest{}, status: status, idx: idx})
 
 	mu.Lock()
 	attempts := mergeAttempts
@@ -268,7 +266,6 @@ func TestMerge_MergedBetweenRetries(t *testing.T) {
 		DryRun:         false,
 		MergeAutoMerge: false,
 		Login:          "testuser",
-		TrustedAuthors: DefaultTrustedAuthors,
 		MergeRetryWait: 1 * time.Millisecond,
 	}
 
@@ -276,7 +273,7 @@ func TestMerge_MergedBetweenRetries(t *testing.T) {
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	proc.merge(context.Background(), info, status, idx)
+	proc.merge(context.Background(), &prRun{info: info, pull: &github.PullRequest{}, status: status, idx: idx})
 
 	mu.Lock()
 	attempts := mergeAttempts
@@ -329,7 +326,6 @@ func TestMerge_CancelledDuringRetry(t *testing.T) {
 		DryRun:         false,
 		MergeAutoMerge: false,
 		Login:          "testuser",
-		TrustedAuthors: DefaultTrustedAuthors,
 		MergeRetryWait: 5 * time.Second,
 	}
 
@@ -357,7 +353,7 @@ func TestMerge_CancelledDuringRetry(t *testing.T) {
 		cancel()
 	}()
 
-	proc.merge(ctx, info, status, idx)
+	proc.merge(ctx, &prRun{info: info, pull: &github.PullRequest{}, status: status, idx: idx})
 	<-firstAttemptDone
 
 	snap := status.Snapshot()

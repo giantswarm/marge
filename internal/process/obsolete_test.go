@@ -22,6 +22,9 @@ const commentOnlyPatch = `@@ -12,7 +12,7 @@ jobs:
        - name: Build
          run: make build`
 
+// fxSourceVersion is the version the fixture's Renovate PR updates from.
+const fxSourceVersion = "v5.0.0"
+
 const realPatch = `@@ -12,7 +12,7 @@ jobs:
      steps:
 -      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -54,10 +57,13 @@ func (f *siblingFixture) run(t *testing.T) pr.StatusEntry {
 	if mergeable == "" {
 		mergeable = "clean"
 	}
+	body := fmt.Sprintf("| `actions/checkout` | action | minor | `%s` -> `%s` |",
+		fxSourceVersion, pr.ExtractTargetVersion(f.title))
 	mux.HandleFunc("GET /repos/org/repo/pulls/29", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.PullRequest{
 			Number:         new(29),
 			Title:          new(f.title),
+			Body:           new(body),
 			MergeableState: new(mergeable),
 			User:           &github.User{Login: new("renovate[bot]")},
 			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/actions-checkout-5.x")},
@@ -104,6 +110,15 @@ func (f *siblingFixture) run(t *testing.T) pr.StatusEntry {
 	mux.HandleFunc("GET /repos/org/repo/issues/29/comments", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []*github.IssueComment{})
 	})
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("GET /repos/org/repo/commits/"+fxBase+"/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, github.CombinedStatus{State: new("success")})
+	})
+	mux.HandleFunc("GET /repos/org/repo/commits/"+fxBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, github.ListCheckRunsResults{Total: new(0)})
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)
@@ -112,7 +127,7 @@ func (f *siblingFixture) run(t *testing.T) pr.StatusEntry {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	proc := NewProcessor(newTestClient(t, srv), true, false, "me", DefaultTrustedAuthors)
+	proc := NewProcessor(newTestClient(t, srv), true, false, "me")
 	proc.SupersededBy = f.supersedes
 	status := pr.NewPRStatus()
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 29, Title: f.title, Author: "renovate[bot]"}

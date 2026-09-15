@@ -114,11 +114,27 @@ func TestProcessorSecurityPatterns_defaultWhenNil(t *testing.T) {
 	}
 }
 
-func TestProcessorSecurityPatterns_emptyDisablesClassification(t *testing.T) {
+// TestProcessorSecurityPatterns_extraOnlyWidens guards that the security
+// guard cannot be narrowed: the caller's patterns are added to the built-in
+// list, and an empty list leaves the built-in list intact.
+func TestProcessorSecurityPatterns_extraOnlyWidens(t *testing.T) {
+	defaults := len((&Processor{}).securityPatterns())
+
 	p := &Processor{SecurityCheckPatterns: []string{}}
+	if got := p.securityPatterns(); len(got) != defaults {
+		t.Fatalf("empty extra list: got %d patterns, want the %d built-in ones", len(got), defaults)
+	}
+
+	p = &Processor{SecurityCheckPatterns: []string{"Analyze"}}
 	got := p.securityPatterns()
-	if len(got) != 0 {
-		t.Fatalf("expected empty slice to be preserved (classification disabled); got %v", got)
+	if len(got) != defaults+1 {
+		t.Fatalf("one extra pattern: got %d patterns, want %d", len(got), defaults+1)
+	}
+	if classifySecurityFailure([]string{"Analyze (go)"}, got) == "" {
+		t.Fatal("the extra pattern must classify a matching check as security")
+	}
+	if classifySecurityFailure([]string{"govulncheck"}, got) == "" {
+		t.Fatal("the built-in patterns must still apply")
 	}
 }
 

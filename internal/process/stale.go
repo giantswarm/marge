@@ -2,7 +2,6 @@ package process
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -53,6 +52,27 @@ type contextState struct {
 // both a passing status and a failing check run is not green.
 func (c contextState) green() bool {
 	return c.success && !c.failed
+}
+
+// recordContext folds one observation of a check name into states: a name
+// stays failed once anything under it failed, and keeps its newest time.
+func recordContext(states map[string]contextState, name string, success, failed bool, at time.Time) {
+	if name == "" {
+		return
+	}
+	st := states[name]
+	st.success = st.success || success
+	st.failed = st.failed || failed
+	if at.After(st.at) {
+		st.at = at
+	}
+	states[name] = st
+}
+
+// isFailedConclusion reports whether a completed check run's conclusion
+// counts as red.
+func isFailedConclusion(conclusion string) bool {
+	return conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled"
 }
 
 // classifyStale decides whether a PR's check failure is stale rather than
@@ -123,16 +143,7 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 
 	states := make(map[string]contextState)
 	record := func(name string, success, failed bool, at time.Time) {
-		if name == "" {
-			return
-		}
-		st := states[name]
-		st.success = st.success || success
-		st.failed = st.failed || failed
-		if at.After(st.at) {
-			st.at = at
-		}
-		states[name] = st
+		recordContext(states, name, success, failed, at)
 	}
 
 	statusOpts := &github.ListOptions{PerPage: 100}
@@ -168,8 +179,7 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 				continue
 			}
 			conclusion := cr.GetConclusion()
-			failed := conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled"
-			record(cr.GetName(), conclusion == stateSuccess, failed, cr.GetCompletedAt().Time)
+			record(cr.GetName(), conclusion == stateSuccess, isFailedConclusion(conclusion), cr.GetCompletedAt().Time)
 		}
 		if resp == nil || resp.NextPage == 0 {
 			break
@@ -183,43 +193,35 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 	return states, nil
 }
 
-// handleStale records the stale classification and, when refreshing is
-// enabled and this is not a dry run, updates the PR branch from its base
-// (the same merge the "Update branch" button performs) so CI re-runs against
-// current code.
+// handleStale records the stale classification and, when the refresh
+// action is selected and this is not a dry run, updates the PR branch from
+// its base (the same merge the "Update branch" button performs) so CI
+// re-runs against current code.
 //
-// The refresh is skipped when the PR carries a non-stale ai-rescue marker,
+// The refresh is skipped when the PR carries a non-stale rescue marker,
 // including one whose branch was merely rebased since: automation already
 // lost on exactly this change, so re-running CI against a newer base cannot
 // help, and for a marker without a content fingerprint the refresh would
 // even age it out and make the PR look rescuable again. The marker is
 // attached to the entry either way so the operator sees it.
-func (p *Processor) handleStale(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, res *staleResult, status *pr.PRStatus, idx int) {
+func (p *Processor) handleStale(ctx context.Context, run *prRun, res *staleResult) {
 	detail := res.detail()
-	status.Update(idx, pr.StatusStale, detail)
+	run.set(pr.StatusStale, detail)
 
-	if !p.RefreshStale || p.DryRun {
+	if !p.Actions.Has(ActionRefresh) || p.DryRun {
 		return
 	}
 
-	if marker := p.findRescueMarker(ctx, info); marker != nil {
-		p.markStale(ctx, info, pullReq, marker)
-		status.SetRescue(idx, marker)
+	if marker := run.rescueMarker(ctx, p); marker != nil {
+		p.markStale(ctx, run.info, run.pull, marker)
+		run.status.SetRescue(run.idx, marker)
 		if !marker.Stale {
-			status.Update(idx, pr.StatusStale, detail+"; refresh skipped: fresh rescue marker")
+			run.set(pr.StatusStale, detail+"; refresh skipped: fresh rescue marker")
 			return
 		}
 	}
 
-	_, _, err := p.Client.PullRequests.UpdateBranch(ctx, info.Owner, info.Repo, info.Number, nil)
-	// GitHub schedules the update in the background and answers 202, which
-	// go-github surfaces as an AcceptedError. That is the success path.
-	var accepted *github.AcceptedError
-	if err != nil && !errors.As(err, &accepted) {
-		status.Update(idx, pr.StatusStale, detail+"; "+ghErrorDetail("refresh failed", err))
-		return
-	}
-	status.Update(idx, pr.StatusRefreshed, "re-checking; "+detail)
+	p.updateBranch(ctx, run, detail)
 }
 
 // staleCache is the per-Processor memo used by baseContextStates. It lives

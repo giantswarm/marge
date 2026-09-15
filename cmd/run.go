@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,23 +16,23 @@ import (
 
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/process"
 )
 
 var runOpts RunOptions
 
+var runActions string
+
 func init() {
 	runCmd.Flags().BoolVar(&runOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
+	runCmd.Flags().StringVar(&runActions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
 	runCmd.Flags().BoolVarP(&runOpts.Watch, "watch", "w", false, "Keep polling for new PRs (every 60s)")
 	runCmd.Flags().StringVar(&runOpts.Grouping, "grouping", "repo", "Group by \"repo\" or \"dependency\"")
-	runCmd.Flags().StringVar(&runOpts.Author, "author", "all", "Filter by PR author: \"renovate\", \"dependabot\", or \"all\"")
 	runCmd.Flags().StringVar(&runOpts.Org, "org", "", "Limit to repos owned by this org or user")
 	runCmd.Flags().StringVar(&runOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to scan for bot PRs instead of searching GitHub")
 	runCmd.Flags().BoolVar(&runOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	runCmd.Flags().BoolVar(&runOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
-	runCmd.Flags().BoolVar(&runOpts.RefreshStale, "refresh-stale", false, "Update the branch of stale PRs (behind base, failing checks green on base) so CI re-runs")
-	runCmd.Flags().BoolVar(&runOpts.RetryCancelled, "retry-cancelled", false, "Rerun the CircleCI workflow of builds that CircleCI auto-cancelled on the PR head, from its failed jobs, so the same commit gets a real verdict")
-	runCmd.Flags().StringVar(&runOpts.TrustedAuthors, "trusted-authors", "renovate[bot],dependabot[bot]", "Comma-separated list of trusted PR author logins")
-	runCmd.Flags().StringVar(&runOpts.SecurityPatterns, "security-patterns", "", "Comma-separated list of case-insensitive substrings used to flag failing CI checks as security-related (defaults to a built-in list)")
+	runCmd.Flags().StringVar(&runOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(runCmd)
 
@@ -42,13 +43,21 @@ func init() {
 
 var runCmd = &cobra.Command{
 	Use:   "run [query]",
-	Short: "Find, approve, and merge dependency update PRs",
-	Long: `Search for open Renovate and Dependabot PRs requesting your review,
-optionally group them interactively, then approve and merge them.`,
+	Short: "Find, approve, and merge bot PRs interactively",
+	Long: `Search for open bot PRs (Renovate, Align files, Herald, Dependabot)
+requesting your review, optionally group them interactively, then approve
+and merge the eligible green ones.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
+
+		actions, err := process.ParseActions(runActions)
+		if err != nil {
+			return err
+		}
+		runOpts.Actions = actions
+		runOpts.CheckTimeout = interactiveCheckTimeout
 
 		client, err := gh.NewClient(ctx)
 		if err != nil {
@@ -67,16 +76,19 @@ optionally group them interactively, then approve and merge them.`,
 		}
 
 		return watchLoop(ctx, runOpts.Watch, func(ctx context.Context) error {
-			repos, err := runOpts.repoList()
+			repos, err := runOpts.repoList(ctx, client)
 			if err != nil {
 				return err
 			}
 
-			prs, err := searchPRs(ctx, client, query, login, runOpts.Author, repos)
+			found, err := searchPRs(ctx, client, query, login, repos)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
-			prs = filterByOrg(prs, runOpts.Org)
+			for _, f := range found.Failed {
+				fmt.Fprintf(os.Stderr, "repository %s not listed: %s\n", f.Repo, f.Err)
+			}
+			prs := filterByOrg(found.PRs, runOpts.Org)
 
 			opts := runOpts
 			opts.Cols = pr.FullColumns()
@@ -109,25 +121,28 @@ optionally group them interactively, then approve and merge them.`,
 	},
 }
 
-// searchPRs finds the open dependency update PRs to process. With a repo
-// list ("owner/name" entries) it lists the bot PRs of exactly those
+// discovery is what a PR search found: the bot PRs to process and the
+// repositories whose PRs could not be listed. A repository that fails to
+// list is reported, never silently dropped from the sweep.
+type discovery struct {
+	PRs    []pr.PRInfo
+	Failed []repoFailure
+}
+
+type repoFailure struct {
+	Repo string
+	Err  string
+}
+
+// searchPRs finds the open bot PRs to process. With a repo list
+// ("owner/name" entries) it lists the bot PRs of exactly those
 // repositories and query is a case-insensitive substring filter on the
 // repository names; without one it runs the GitHub search, where query
-// becomes part of the search string.
-func searchPRs(ctx context.Context, client *github.Client, query string, login string, authorFilter string, repos []string) ([]pr.PRInfo, error) {
+// becomes part of the search string. Only PRs by the four trusted bots
+// are returned.
+func searchPRs(ctx context.Context, client *github.Client, query string, login string, repos []string) (discovery, error) {
 	if len(repos) > 0 {
-		seen := make(map[string]bool)
-		return listRepoPRs(ctx, client, repos, query, authorFilter, seen)
-	}
-
-	var authorFilters []string
-	switch authorFilter {
-	case "renovate":
-		authorFilters = []string{"author:app/renovate"}
-	case "dependabot":
-		authorFilters = []string{"author:app/dependabot"}
-	default:
-		authorFilters = []string{"author:app/renovate", "author:app/dependabot"}
+		return listRepoPRs(ctx, client, repos, query)
 	}
 
 	scopeFilters := []string{
@@ -136,11 +151,12 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 	}
 
 	seen := make(map[string]bool)
-	var allPRs []pr.PRInfo
+	var found discovery
 
 	for _, scope := range scopeFilters {
-		for _, af := range authorFilters {
-			searchQuery := fmt.Sprintf("%s is:pr is:open archived:false %s %s", query, scope, af)
+		for _, botLogin := range pr.TrustedLogins() {
+			authorFilter := "author:app/" + strings.TrimSuffix(botLogin, "[bot]")
+			searchQuery := fmt.Sprintf("%s is:pr is:open archived:false %s %s", query, scope, authorFilter)
 			searchQuery = strings.TrimSpace(searchQuery)
 
 			opts := &github.SearchOptions{
@@ -151,7 +167,7 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 			for {
 				result, resp, err := client.Search.Issues(ctx, searchQuery, opts)
 				if err != nil {
-					return nil, fmt.Errorf("search failed: %w", err)
+					return discovery{}, fmt.Errorf("search failed: %w", err)
 				}
 
 				for _, issue := range result.Issues {
@@ -166,7 +182,7 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 						continue
 					}
 
-					allPRs = append(allPRs, pr.PRInfo{
+					found.PRs = append(found.PRs, pr.PRInfo{
 						Owner:     owner,
 						Repo:      repo,
 						Number:    issue.GetNumber(),
@@ -185,70 +201,10 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 		}
 	}
 
-	selfQuery := fmt.Sprintf("%s is:pr is:open archived:false user:%s author:%s", query, login, login)
-	selfQuery = strings.TrimSpace(selfQuery)
-
-	selfOpts := &github.SearchOptions{
-		Sort:        "updated",
-		ListOptions: github.ListOptions{PerPage: 100},
-	}
-
-	for {
-		result, resp, err := client.Search.Issues(ctx, selfQuery, selfOpts)
-		if err != nil {
-			return nil, fmt.Errorf("search failed: %w", err)
-		}
-
-		for _, issue := range result.Issues {
-			url := issue.GetHTMLURL()
-			if seen[url] {
-				continue
-			}
-
-			title := issue.GetTitle()
-			if !pr.IsDependencyUpdateTitle(title) {
-				continue
-			}
-
-			seen[url] = true
-
-			owner, repo, err := pr.ExtractOwnerRepo(url)
-			if err != nil {
-				continue
-			}
-
-			allPRs = append(allPRs, pr.PRInfo{
-				Owner:     owner,
-				Repo:      repo,
-				Number:    issue.GetNumber(),
-				Title:     title,
-				URL:       url,
-				Author:    issue.GetUser().GetLogin(),
-				CreatedAt: issue.GetCreatedAt().Time,
-			})
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		selfOpts.Page = resp.NextPage
-	}
-
-	return allPRs, nil
+	return found, nil
 }
 
-func listRepoPRs(ctx context.Context, client *github.Client, repos []string, query, authorFilter string, seen map[string]bool) ([]pr.PRInfo, error) {
-	botAuthors := make(map[string]bool)
-	switch authorFilter {
-	case "renovate":
-		botAuthors["renovate[bot]"] = true
-	case "dependabot":
-		botAuthors["dependabot[bot]"] = true
-	default:
-		botAuthors["renovate[bot]"] = true
-		botAuthors["dependabot[bot]"] = true
-	}
-
+func listRepoPRs(ctx context.Context, client *github.Client, repos []string, query string) (discovery, error) {
 	type repoRef struct{ Owner, Name string }
 	var refs []repoRef
 	queryLower := strings.ToLower(query)
@@ -264,9 +220,10 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 	}
 
 	var (
-		mu     sync.Mutex
-		allPRs []pr.PRInfo
-		wg     sync.WaitGroup
+		mu    sync.Mutex
+		seen  = make(map[string]bool)
+		found discovery
+		wg    sync.WaitGroup
 	)
 	sem := make(chan struct{}, 10)
 
@@ -282,17 +239,19 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 				Sort:        "updated",
 				ListOptions: github.ListOptions{PerPage: 100},
 			}
+			var batch []pr.PRInfo
 			for {
 				pulls, resp, err := client.PullRequests.List(ctx, owner, name, opts)
 				if err != nil {
+					mu.Lock()
+					found.Failed = append(found.Failed, repoFailure{Repo: owner + "/" + name, Err: err.Error()})
+					mu.Unlock()
 					return
 				}
 
-				var batch []pr.PRInfo
 				for _, pull := range pulls {
-					url := pull.GetHTMLURL()
 					author := pull.GetUser().GetLogin()
-					if !botAuthors[author] {
+					if pr.KindOf(author) == "" {
 						continue
 					}
 					batch = append(batch, pr.PRInfo{
@@ -300,32 +259,33 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 						Repo:      name,
 						Number:    pull.GetNumber(),
 						Title:     pull.GetTitle(),
-						URL:       url,
+						URL:       pull.GetHTMLURL(),
 						Author:    author,
 						CreatedAt: pull.GetCreatedAt().Time,
 						BaseRef:   pull.GetBase().GetRef(),
 					})
 				}
 
-				mu.Lock()
-				for _, p := range batch {
-					if !seen[p.URL] {
-						seen[p.URL] = true
-						allPRs = append(allPRs, p)
-					}
-				}
-				mu.Unlock()
-
 				if resp.NextPage == 0 {
 					break
 				}
 				opts.Page = resp.NextPage
 			}
+
+			mu.Lock()
+			for _, p := range batch {
+				if !seen[p.URL] {
+					seen[p.URL] = true
+					found.PRs = append(found.PRs, p)
+				}
+			}
+			mu.Unlock()
 		}(ref.Owner, ref.Name)
 	}
 
 	wg.Wait()
-	return allPRs, nil
+	sort.Slice(found.Failed, func(i, j int) bool { return found.Failed[i].Repo < found.Failed[j].Repo })
+	return found, nil
 }
 
 func interactiveSelect(prs []pr.PRInfo, grouping string) ([]pr.PRInfo, bool, error) {
