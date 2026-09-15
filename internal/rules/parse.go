@@ -158,12 +158,6 @@ func (r *Rule) validateRefusals() error {
 }
 
 func (r *Rule) validateEvidence() error {
-	if strings.TrimSpace(r.Evidence.Outcome) == "" {
-		return errors.New("evidence.outcome is required")
-	}
-	if !nameRE.MatchString(r.Evidence.Outcome) {
-		return fmt.Errorf("evidence.outcome %q must be lower-case words joined by hyphens", r.Evidence.Outcome)
-	}
 	if strings.TrimSpace(r.Evidence.Reason) == "" {
 		return errors.New("evidence.reason is required: the PR must say why the action ran")
 	}

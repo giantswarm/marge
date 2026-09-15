@@ -26,8 +26,10 @@ type Subject struct {
 	// BaseState says what the base head reported for each failing check.
 	// A name absent from the map is CheckAbsent, and absent is not green.
 	BaseState map[string]CheckState
-	// Files are the paths of the PR diff.
-	Files []string
+	// Files returns the paths of the PR diff. It is called only for a rule
+	// that carries a file signal, so a catalogue without one costs no
+	// comparison. Nil returns no files, and such a rule does not match.
+	Files func() []string
 	// Log returns a bounded excerpt of one check's log. A rule with a log
 	// signal never matches when Log is nil or reports false: an unreadable
 	// log leaves the failure as it was classified.
@@ -128,9 +130,17 @@ func (r *Rule) matchPRMetadata(subject *Subject) bool {
 	if re := r.TitlePattern(); re != nil && !re.MatchString(subject.Title) {
 		return false
 	}
-	for _, re := range r.FilePatterns() {
+	patterns := r.FilePatterns()
+	if len(patterns) == 0 {
+		return true
+	}
+	if subject.Files == nil {
+		return false
+	}
+	files := subject.Files()
+	for _, re := range patterns {
 		matched := false
-		for _, file := range subject.Files {
+		for _, file := range files {
 			if re.MatchString(file) {
 				matched = true
 				break

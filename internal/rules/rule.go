@@ -103,11 +103,11 @@ type Action struct {
 	Name remedy.Name `yaml:"name"`
 }
 
-// Evidence is the marker the sweep writes when the action applied.
+// Evidence is the marker the sweep writes when the action applied. The
+// marker's outcome is the action name, so a later sweep recognises what ran
+// on this change whichever rule selected it.
 type Evidence struct {
-	// Outcome is the marker outcome, the key a later sweep deduplicates on.
-	Outcome string `yaml:"outcome"`
-	// Reason is a template over the rule's match context.
+	// Reason is the line written on the PR under the action name.
 	Reason string `yaml:"reason"`
 }
 
@@ -181,4 +181,14 @@ var refusals = map[string]func(remedy.Name) remedy.Guard{
 	"no-security-failure":   func(remedy.Name) remedy.Guard { return remedy.NoSecurityFailure },
 	"no-generated-edit":     func(remedy.Name) remedy.Guard { return remedy.NoGeneratedEdit },
 	"once-per-change":       remedy.OncePerChange,
+}
+
+// Remediable reports whether a rule may act on a classification.
+func Remediable(state pr.StatusState) bool {
+	for _, remediable := range remediableStates {
+		if remediable == state {
+			return true
+		}
+	}
+	return false
 }

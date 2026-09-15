@@ -27,7 +27,6 @@ match:
 action:
   name: ` + action + `
 evidence:
-  outcome: ` + name + `
   reason: y
 `
 }

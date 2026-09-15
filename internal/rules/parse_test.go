@@ -50,7 +50,6 @@ refuse:
   - once-per-change
   - log-matched
 evidence:
-  outcome: circleci-retry
   reason: "retried the auto-cancelled build"
 `
 
@@ -100,7 +99,6 @@ match:
 action:
   name: merge-everything
 evidence:
-  outcome: x
   reason: y
 `,
 			wantErr: `unknown action "merge-everything"`,
@@ -116,7 +114,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: "match needs a check, log or pr signal",
@@ -134,7 +131,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: `unknown state "merged"`,
@@ -152,7 +148,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: `unknown kind "quentin"`,
@@ -170,7 +165,6 @@ action:
   name: close
 refuse: [skip-guards]
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: `unknown refusal "skip-guards"`,
@@ -188,7 +182,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: "match.log.pattern",
@@ -206,7 +199,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: `unknown log source "jenkins"`,
@@ -225,7 +217,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: "out of range",
@@ -241,7 +232,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `,
 			wantErr: "source is required",
@@ -258,7 +248,7 @@ match:
 action:
   name: close
 `,
-			wantErr: "evidence.outcome is required",
+			wantErr: "evidence.reason is required",
 		},
 		{
 			name:    "two documents in one file",
@@ -301,7 +291,6 @@ action:
   name: close
 refuse: [log-matched, log-matched]
 evidence:
-  outcome: closed
   reason: y
 `
 	_, err := Parse("repeated-refusal.yaml", []byte(doc), testRegistry())
@@ -319,7 +308,6 @@ match:
 action:
   name: update-branch
 evidence:
-  outcome: updated
   reason: y
 `
 	rule, err := Parse("any-state.yaml", []byte(doc), testRegistry())

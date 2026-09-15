@@ -34,7 +34,6 @@ match:
 action:
   name: circleci-retry
 evidence:
-  outcome: circleci-retry
   reason: retried
 `
 
@@ -49,9 +48,12 @@ match:
 action:
   name: update-branch
 evidence:
-  outcome: update-branch
   reason: refreshed
 `
+
+func fileList(paths ...string) func() []string {
+	return func() []string { return paths }
+}
 
 func logReturning(body string) func(LogSource, string, int) (string, bool) {
 	return func(LogSource, string, int) (string, bool) { return body, true }
@@ -151,7 +153,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `
 	first := `
@@ -165,7 +166,6 @@ match:
 action:
   name: update-branch
 evidence:
-  outcome: updated
   reason: y
 `
 	cat := catalogue(t, second, first)
@@ -188,16 +188,16 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `
 	cat := catalogue(t, doc)
 
-	require.Nil(t, cat.Match(&Subject{State: pr.StatusFailed, Files: []string{"helm/marge/values.yaml"}}))
+	require.Nil(t, cat.Match(&Subject{State: pr.StatusFailed, Files: fileList("helm/marge/values.yaml")}))
 	require.NotNil(t, cat.Match(&Subject{
 		State: pr.StatusFailed,
-		Files: []string{"helm/marge/charts/sub/Chart.yaml"},
+		Files: fileList("helm/marge/charts/sub/Chart.yaml"),
 	}))
+	require.Nil(t, cat.Match(&Subject{State: pr.StatusFailed}), "a diff that cannot be read never matches a file signal")
 }
 
 func TestMatchTitlePattern(t *testing.T) {
@@ -212,7 +212,6 @@ match:
 action:
   name: close
 evidence:
-  outcome: closed
   reason: y
 `
 	cat := catalogue(t, doc)

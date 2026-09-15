@@ -673,6 +673,6 @@ func TestParseActions(t *testing.T) {
 
 	_, err = ParseActions("rescue")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "classify, approve, merge, refresh, retry, mark")
+	require.Contains(t, err.Error(), "classify, approve, merge, refresh, retry, remedy, mark")
 	require.True(t, strings.Contains(err.Error(), fmt.Sprintf("%q", "rescue")))
 }

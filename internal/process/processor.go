@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/remedy"
+	"github.com/giantswarm/marge/internal/rules"
 )
 
 const (
@@ -44,6 +46,14 @@ type Processor struct {
 
 	// Actions selects the steps this sweep performs. Nil performs all.
 	Actions ActionSet
+
+	// Rules is the catalogue loaded at the start of the sweep. Nil refuses
+	// every remedy and leaves classification, approval and merging as they
+	// are.
+	Rules *rules.Catalogue
+	// Remedies is the action vocabulary a rule may name. Nil refuses every
+	// remedy.
+	Remedies *remedy.Registry
 
 	// Policies is the resolved bot PR sweep policy of the scope, read from
 	// the policy files before the sweep starts. Nil applies the company
@@ -103,6 +113,20 @@ type prRun struct {
 	// off. Such a repository receives no write at all, the classification
 	// label included.
 	untouched bool
+
+	// kind and updateType are the classification of the PR's author and its
+	// dependency change.
+	kind       pr.Kind
+	updateType pr.UpdateType
+	// failing names the red checks on the head that produced a verdict.
+	failing []string
+	// required is what the head reported for the base branch's required
+	// contexts.
+	required remedy.Required
+	// files are the paths of the PR diff, fetched once and only for a rule
+	// that carries a file signal.
+	files       []string
+	filesLoaded bool
 }
 
 func (r *prRun) set(state pr.StatusState, detail string) {
@@ -195,6 +219,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
+	run.kind, run.updateType = kind, updateType
 	status.SetClassification(idx, kind, updateType)
 
 	if pullReq.GetMerged() {
@@ -274,6 +299,7 @@ func (p *Processor) finish(ctx context.Context, run *prRun) {
 	if run.untouched {
 		return
 	}
+	p.applyRule(ctx, run)
 	p.attachRescueMarker(ctx, run)
 	state := run.status.StateAt(run.idx)
 	if class := pr.LabelClass(state); class != "" && !p.DryRun {
@@ -327,6 +353,8 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 			return false
 		}
 		required := evaluateRequired(prot.Contexts, outcome.reported)
+		run.failing = outcome.failedChecks
+		run.required = remedy.Required(required)
 
 		if len(required.Failed) > 0 || outcome.state == stateFailure || outcome.state == stateError {
 			if !p.classifyFailure(ctx, run, outcome, prot) {

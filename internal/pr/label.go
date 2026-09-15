@@ -29,6 +29,8 @@ func LabelClass(s StatusState) string {
 		return "awaiting-approval"
 	case StatusEligible:
 		return "eligible"
+	case StatusRemedied:
+		return "remedied"
 	case StatusSkipped, StatusUntrustedAuthor:
 		return "skipped"
 	default:

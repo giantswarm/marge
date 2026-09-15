@@ -66,6 +66,10 @@ const (
 	// StatusEligible marks a green eligible PR the sweep did not merge
 	// because the merge action was not selected.
 	StatusEligible
+	// StatusRemedied marks a PR a rule of the catalogue acted on. The
+	// action's evidence names the rule and what it did; the next sweep
+	// classifies the result.
+	StatusRemedied
 )
 
 func (s StatusState) String() string {
@@ -118,6 +122,8 @@ func (s StatusState) String() string {
 		return "Held"
 	case StatusEligible:
 		return "Eligible"
+	case StatusRemedied:
+		return "Remedied"
 	default:
 		return "Unknown"
 	}
@@ -289,6 +295,7 @@ type Counts struct {
 	Cancelled int
 	Retried   int
 	Obsolete  int
+	Remedied  int
 	Waiting   int
 	Skipped   int
 }
@@ -318,6 +325,8 @@ func (s *PRStatus) countsLocked() Counts {
 			c.Retried++
 		case StatusObsolete:
 			c.Obsolete++
+		case StatusRemedied:
+			c.Remedied++
 		case StatusSkipped:
 			c.Skipped++
 		}
@@ -358,6 +367,9 @@ func (s *PRStatus) FormatSummary() string {
 	}
 	if c.Obsolete > 0 {
 		fmt.Fprintf(&b, ", %d obsolete", c.Obsolete)
+	}
+	if c.Remedied > 0 {
+		fmt.Fprintf(&b, ", %d remedied", c.Remedied)
 	}
 	if c.Blocked > 0 {
 		fmt.Fprintf(&b, ", %d CI-unavailable", c.Blocked)
