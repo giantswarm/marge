@@ -31,6 +31,11 @@ import (
 // Document is one policy file. Every field is optional and an absent field
 // keeps what the file before it said. UpdateTypes replaces the list of the
 // kinds it names and leaves every other kind alone.
+//
+// The names a file writes are also held in their resolved form, which
+// ParseDocument fills. Only ParseDocument builds a Document, so a Document
+// that exists has been resolved, and applying one needs no second pass over
+// the names and no error a caller has to discard.
 type Document struct {
 	UpdateTypes  map[string][]string  `yaml:"updateTypes"`
 	Schedule     *string              `yaml:"schedule"`
@@ -38,6 +43,9 @@ type Document struct {
 	Concurrency  *ConcurrencyDocument `yaml:"concurrency"`
 	ModelConfig  *string              `yaml:"modelConfig"`
 	SlackChannel *string              `yaml:"slackChannel"`
+
+	// updateTypes is UpdateTypes with every name resolved.
+	updateTypes map[pr.Kind][]pr.UpdateType
 }
 
 // RescueDocument is the rescue section of a policy file.
@@ -47,6 +55,9 @@ type RescueDocument struct {
 	Weekly  *int            `yaml:"weekly"`
 	Budget  *BudgetDocument `yaml:"budget"`
 	Confirm *string         `yaml:"confirm"`
+
+	// timeout is Timeout resolved. It is zero when Timeout is absent.
+	timeout time.Duration
 }
 
 // BudgetDocument is the rescue budget in US dollars. Neither figure is
@@ -109,25 +120,33 @@ func ParseDocument(path, content string) (*Document, error) {
 	if err := strictUnmarshal(content, &doc); err != nil {
 		return nil, fmt.Errorf("parsing policy file %s: %w", path, err)
 	}
-	if err := doc.validate(); err != nil {
+	if err := doc.resolve(); err != nil {
 		return nil, fmt.Errorf("policy file %s: %w", path, err)
 	}
 	return &doc, nil
 }
 
-func (d *Document) validate() error {
-	for kind, types := range d.UpdateTypes {
-		if _, ok := knownKinds[kind]; !ok {
+// resolve checks every value the document names and holds the result, so
+// apply reads a resolved document and never parses a name again.
+func (d *Document) resolve() error {
+	if len(d.UpdateTypes) > 0 {
+		d.updateTypes = make(map[pr.Kind][]pr.UpdateType, len(d.UpdateTypes))
+	}
+	for kind, names := range d.UpdateTypes {
+		known, ok := knownKinds[kind]
+		if !ok {
 			return fmt.Errorf("updateTypes: unknown bot PR kind %q: known kinds are %s", kind, sortedNames(knownKinds))
 		}
-		if _, err := updateTypes(types); err != nil {
+		types, err := updateTypes(names)
+		if err != nil {
 			return fmt.Errorf("updateTypes.%s: %w", kind, err)
 		}
+		d.updateTypes[known] = types
 	}
 	if d.Schedule != nil && *d.Schedule != scheduleEnabled && *d.Schedule != scheduleDisabled {
 		return fmt.Errorf("schedule: %q is neither %s nor %s", *d.Schedule, scheduleEnabled, scheduleDisabled)
 	}
-	if err := d.Rescue.validate(); err != nil {
+	if err := d.Rescue.resolve(); err != nil {
 		return err
 	}
 	if c := d.Concurrency; c != nil {
@@ -141,7 +160,7 @@ func (d *Document) validate() error {
 	return nil
 }
 
-func (r *RescueDocument) validate() error {
+func (r *RescueDocument) resolve() error {
 	if r == nil {
 		return nil
 	}
@@ -153,6 +172,7 @@ func (r *RescueDocument) validate() error {
 		if timeout <= 0 {
 			return fmt.Errorf("rescue.timeout: %s is not a positive duration", *r.Timeout)
 		}
+		r.timeout = timeout
 	}
 	if r.Weekly != nil && *r.Weekly < 0 {
 		return fmt.Errorf("rescue.weekly: %d is negative", *r.Weekly)
@@ -175,11 +195,18 @@ func (r *RescueDocument) validate() error {
 	return nil
 }
 
-func (e Exception) validate(repo string) error {
-	if _, err := updateTypes(e.UpdateTypes); err != nil {
-		return fmt.Errorf("botPRsSweep.updateTypes of repository %s: %w", repo, err)
+// resolve checks the exception's update type names and returns them
+// resolved. The list is nil when the exception names none, which is what
+// tells apply to leave the team's lists alone.
+func (e Exception) resolve(repo string) ([]pr.UpdateType, error) {
+	if e.UpdateTypes == nil {
+		return nil, nil
 	}
-	return nil
+	types, err := updateTypes(e.UpdateTypes)
+	if err != nil {
+		return nil, fmt.Errorf("botPRsSweep.updateTypes of repository %s: %w", repo, err)
+	}
+	return types, nil
 }
 
 // updateTypes maps the names of an update type list to the types.

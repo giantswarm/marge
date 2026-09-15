@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -88,11 +87,8 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 	out := base.Clone()
 	out.Sources = append(out.Sources, path)
 
-	for kind, names := range doc.UpdateTypes {
-		// Both maps were validated at parse time, so neither lookup can
-		// fail here.
-		types, _ := updateTypes(names)
-		out.UpdateTypes[knownKinds[kind]] = types
+	for kind, types := range doc.updateTypes {
+		out.UpdateTypes[kind] = slices.Clone(types)
 	}
 	if doc.Schedule != nil {
 		out.Schedule = *doc.Schedule == scheduleEnabled
@@ -102,8 +98,7 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 			out.Rescue.Enabled = *r.Enabled
 		}
 		if r.Timeout != nil {
-			timeout, _ := time.ParseDuration(*r.Timeout)
-			out.Rescue.Timeout = timeout
+			out.Rescue.Timeout = r.timeout
 		}
 		if r.Weekly != nil {
 			out.Rescue.Weekly = *r.Weekly
@@ -145,7 +140,8 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 // version. The sweep itself has no team-level switch, so enabled sets it
 // either way.
 func (e Exception) apply(base pr.Policy, repo string) (pr.Policy, error) {
-	if err := e.validate(repo); err != nil {
+	allowed, err := e.resolve(repo)
+	if err != nil {
 		return pr.Policy{}, err
 	}
 	out := base.Clone()
@@ -160,8 +156,7 @@ func (e Exception) apply(base pr.Policy, repo string) (pr.Policy, error) {
 		}
 		out.Rescue.Enabled = *e.Rescue
 	}
-	if e.UpdateTypes != nil {
-		allowed, _ := updateTypes(e.UpdateTypes)
+	if allowed != nil {
 		for _, updateType := range allowed {
 			if !base.AllowsUpdate(updateType) {
 				return pr.Policy{}, fmt.Errorf("botPRsSweep.updateTypes of repository %s: the team merges no %s update, and an exception cannot add one", repo, updateType)

@@ -160,9 +160,10 @@ func ParseRepositories(content, owner, path string) ([]string, map[string]Except
 		if err := strictDecodeNode(&entry.BotPRsSweep, &exception); err != nil {
 			return nil, nil, fmt.Errorf("parsing botPRsSweep of repository %s in %s: %w", name, path, err)
 		}
-		// Exception.apply validates again, for a caller that builds a Set
-		// without this function. Here the file path is still in hand.
-		if err := exception.validate(name); err != nil {
+		// Exception.apply resolves the names again, for a caller that
+		// builds a Set without this function. Here the file path is still
+		// in hand, so the error names the file.
+		if _, err := exception.resolve(name); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
 		exceptions[name] = exception

@@ -207,3 +207,59 @@ func TestPolicy_declaredUnenforced(t *testing.T) {
 	resolved.Rescue.Enabled = true
 	require.Equal(t, []string{"rescue.budget.perRescue", "rescue.budget.weekly"}, resolved.DeclaredUnenforced())
 }
+
+// TestResolve_emptyUpdateTypeListNarrowsToNothing separates the two ways a
+// file can say nothing about the update types. An absent key leaves the
+// lists of the file before it alone. An empty list is a list, and it
+// narrows to nothing: the repository or the kind merges no PR. The resolved
+// document holds that difference as nil against empty, so both readings
+// survive the trip through ParseDocument.
+func TestResolve_emptyUpdateTypeListNarrowsToNothing(t *testing.T) {
+	defaults, err := ParseDocument(DefaultFile, "updateTypes:\n  renovate: [patch, minor]\n")
+	require.NoError(t, err)
+
+	// An absent key on the team file keeps what the default file said.
+	silent, err := ParseDocument(TeamFile("shield"), "schedule: enabled\n")
+	require.NoError(t, err)
+	set, err := NewSet([]File{{Path: DefaultFile, Doc: defaults}, {Path: TeamFile("shield"), Doc: silent}}, nil)
+	require.NoError(t, err)
+	require.True(t, set.For("cluster-aws").Eligible(pr.KindRenovate, pr.UpdatePatch))
+
+	// An empty list on the team file merges no Renovate PR at all.
+	empty, err := ParseDocument(TeamFile("shield"), "updateTypes:\n  renovate: []\n")
+	require.NoError(t, err)
+	set, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}, {Path: TeamFile("shield"), Doc: empty}}, nil)
+	require.NoError(t, err)
+	resolved := set.For("cluster-aws")
+	require.False(t, resolved.Eligible(pr.KindRenovate, pr.UpdatePatch))
+	require.True(t, resolved.Eligible(pr.KindHerald, pr.UpdateNone), "only the kind the file named changes")
+
+	// The same difference on a repository exception.
+	set, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}}, map[string]Exception{
+		"absent": {},
+		"none":   {UpdateTypes: []string{}},
+	})
+	require.NoError(t, err)
+	require.True(t, set.For("absent").Eligible(pr.KindRenovate, pr.UpdatePatch), "an exception without the key narrows nothing")
+	require.False(t, set.For("none").Eligible(pr.KindRenovate, pr.UpdatePatch))
+	require.True(t, set.For("none").Eligible(pr.KindHerald, pr.UpdateNone), "an exception reaches only the kinds that name a version")
+}
+
+// TestResolve_documentReuseDoesNotShare applies one parsed document to two
+// sets. The resolved lists live on the document, so each set must hold its
+// own copy and one set's exception must never reach the other.
+func TestResolve_documentReuseDoesNotShare(t *testing.T) {
+	doc, err := ParseDocument(DefaultFile, "updateTypes:\n  renovate: [patch, minor]\n")
+	require.NoError(t, err)
+
+	first, err := NewSet([]File{{Path: DefaultFile, Doc: doc}}, map[string]Exception{
+		"marge": {UpdateTypes: []string{"patch"}},
+	})
+	require.NoError(t, err)
+	second, err := NewSet([]File{{Path: DefaultFile, Doc: doc}}, nil)
+	require.NoError(t, err)
+
+	require.False(t, first.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
+	require.True(t, first.Base().Eligible(pr.KindRenovate, pr.UpdateMinor), "the exception stays on its repository")
+	require.True(t, second.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor), "a second set is untouched")
+}
