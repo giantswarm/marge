@@ -25,7 +25,7 @@ match:
   check:
     name: "go-build"
   pr:
-    titlePattern: "."
+    baseHead: absent
 action:
   name: ` + action + `
 evidence:

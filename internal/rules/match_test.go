@@ -151,7 +151,7 @@ match:
   check:
     name: "go-*"
   pr:
-    files: ["go.mod"]
+    baseHead: absent
 action:
   name: close
 evidence:
@@ -166,7 +166,7 @@ match:
   check:
     name: "go-*"
   pr:
-    files: ["go.mod"]
+    baseHead: absent
 action:
   name: update-branch
 evidence:
@@ -178,7 +178,6 @@ evidence:
 		State:   pr.StatusFailed,
 		Title:   "chore(deps): bump",
 		Failing: []string{"go-build"},
-		Files:   func() []string { return []string{"go.mod"} },
 	})
 
 	require.NotNil(t, hit)
@@ -218,6 +217,7 @@ match:
   states: [failed]
   pr:
     titlePattern: '^chore\(deps\): update module '
+    baseHead: absent
 action:
   name: close
 evidence:
@@ -225,10 +225,11 @@ evidence:
 `
 	cat := catalogue(t, doc)
 
-	require.Nil(t, cat.Match(&Subject{State: pr.StatusFailed, Title: "fix: something"}))
+	require.Nil(t, cat.Match(&Subject{State: pr.StatusFailed, Failing: []string{"go-build"}, Title: "fix: something"}))
 	require.NotNil(t, cat.Match(&Subject{
-		State: pr.StatusFailed,
-		Title: "chore(deps): update module sigs.k8s.io/controller-runtime to v0.23.3",
+		State:   pr.StatusFailed,
+		Failing: []string{"go-build"},
+		Title:   "chore(deps): update module sigs.k8s.io/controller-runtime to v0.23.3",
 	}))
 }
 

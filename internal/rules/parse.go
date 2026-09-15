@@ -183,21 +183,41 @@ func (r *Rule) validateRefusals() error {
 		seen[name] = true
 		r.compiled.guards = append(r.compiled.guards, build(r.Action.Name))
 	}
+	if seen[refusalLogMatched] && r.Match.Log == nil {
+		return fmt.Errorf("refusal %q needs a log signal: a rule that reads no log never satisfies it, so the action would refuse every time", refusalLogMatched)
+	}
 	return nil
 }
 
-// validateSignalStrength refuses a rule whose only signal is a check name.
-// A check name says which job went red, never why, and the runbook is
-// explicit that only the failing step's log classifies a failure. Such a
-// rule must carry a log signal or declare the log-matched refusal.
+// validateSignalStrength refuses a rule that names no evidence of what
+// failed. A check name says which job went red and a title says which
+// dependency moved; neither says why, and the runbook is explicit that only
+// the failing step's log classifies a failure. A title pattern is the
+// weaker of the two, because "." reads every PR of a classification.
+//
+// A rule must therefore carry a log signal, or read the PR's state rather
+// than its text: what the base head reported, which files the diff touches,
+// or a required context nobody reported.
 func (r *Rule) validateSignalStrength() error {
-	if r.Match.Check == nil || r.Match.Log != nil || r.Match.PR != nil {
+	if r.Match.Log != nil || r.hasStateSignal() {
 		return nil
 	}
-	if slices.Contains(r.Refuse, refusalLogMatched) {
-		return nil
+	return errors.New("a check name or a title is not a diagnosis: add a log signal, or a baseHead, files or protection signal")
+}
+
+// hasStateSignal reports whether the rule reads something of the PR that a
+// bot did not write, which is what makes a signal evidence rather than a
+// restatement of the classification. Every glob it counts names at least
+// one literal segment, so a glob of stars does not qualify as one.
+func (r *Rule) hasStateSignal() bool {
+	if r.Match.Protection != nil {
+		return true
 	}
-	return fmt.Errorf("a check name is not a diagnosis: add a log signal, a pr signal, or the %q refusal", refusalLogMatched)
+	p := r.Match.PR
+	if p == nil {
+		return false
+	}
+	return p.BaseHead != BaseAny || len(p.Files) > 0
 }
 
 func (r *Rule) validateEvidence() error {
