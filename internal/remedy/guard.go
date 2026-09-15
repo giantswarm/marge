@@ -107,17 +107,23 @@ func NoGeneratedEdit(req *Request) string {
 	return ""
 }
 
+// The two generators that render a file no remedy may hand-edit.
+const (
+	byDevctl   = "devctl"
+	byTemplate = "giantswarm/github"
+)
+
 // generatedPaths maps an exact repository path to the generator that renders
 // it. A path absent from both this map and the zz_ prefix is repository
 // owned and may be written.
 var generatedPaths = map[string]string{
-	"renovate.json5":          "devctl",
-	".pre-commit-config.yaml": "devctl",
-	".circleci/config.yml":    "devctl",
-	".circleci/workflows.yml": "devctl",
-	"CODEOWNERS":              "giantswarm/github",
-	"Makefile.gen.go.mk":      "devctl",
-	"Makefile.gen.app.mk":     "devctl",
+	"renovate.json5":          byDevctl,
+	".pre-commit-config.yaml": byDevctl,
+	".circleci/config.yml":    byDevctl,
+	".circleci/workflows.yml": byDevctl,
+	"CODEOWNERS":              byTemplate,
+	"Makefile.gen.go.mk":      byDevctl,
+	"Makefile.gen.app.mk":     byDevctl,
 }
 
 // zzPrefix marks every file rendered from a giantswarm/github template. It
@@ -132,7 +138,7 @@ func generatedBy(p string) string {
 		return by
 	}
 	if strings.HasPrefix(path.Base(clean), zzPrefix) {
-		return "giantswarm/github"
+		return byTemplate
 	}
 	return ""
 }
