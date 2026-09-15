@@ -114,17 +114,18 @@ A team declares its own appetite for sweeps in `giantswarm/github`, in files the
 
 | File | Holds | Owned by |
 |------|-------|----------|
-| `bot-prs-sweep/default.yaml` | the company defaults | Planeteers |
+| `bot-prs-sweep/default.yaml` | the company defaults | Bumblebee, in CODEOWNERS |
 | `bot-prs-sweep/team-<name>.yaml` | one team's deviations | that team, in CODEOWNERS |
 | `botPRsSweep` on a repository entry of `repositories/team-<name>.yaml` | one repository's exception | that team |
 
-A team file that exists is the team's opt-in to the scheduled sweep. There is no separate switch: `schedule: disabled` only pauses the schedule again without deleting the file. A team without a policy file is swept by hand from the CLI and never by the schedule.
+A team opts into the scheduled sweep with `schedule: enabled` in its own file, and pauses it again with `schedule: disabled` or by deleting the key. A team without a policy file, or one that never sets the key, is swept by hand from the CLI and never by the schedule.
 
 marge holds no scheduler yet. `schedule` is resolved and reported on every outcome, and nothing in marge acts on it: `marge sweep --team <name>` is a sweep by hand and runs whatever the key says. The scheduler that reads it arrives with the rescue work.
 
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
 slackChannel: team-bumblebee
+schedule: enabled
 updateTypes:
   renovate: [patch, minor]
 rescue:
@@ -156,11 +157,15 @@ A repository entry deviates under `botPRsSweep`, with three keys that only narro
 - name: muster
   componentType: service
   botPRsSweep:
-    updateTypes: [patch]  # intersected with the team's lists, never added to
+    updateTypes: [patch]  # intersected with the team's Renovate and Dependabot lists
     rescue: false
 ```
 
-An exception that tries to switch the rescues back on where the team switched them off is an error, not a silent narrowing. `enabled` has no team-level counterpart: a repository is the only place the sweep itself is switched off.
+`updateTypes` here reaches Renovate and Dependabot only. An Align files or Herald PR names no version, so restricting the update sizes of one repository does not stop those two kinds from merging.
+
+An exception that tries to switch the rescues back on where the team switched them off is an error, and so is an update type the team merges for no kind. A widening is refused, never silently narrowed. `enabled` has no team-level counterpart: a repository is the only place the sweep itself is switched off.
+
+`giantswarm/github` validates both policy files against `bot-prs-sweep/policy.schema.json` on every pull request, so a misspelled key fails there and not on the next sweep.
 
 A file marge cannot read stops the sweep and names the file and the key: a misspelled key, an unknown bot PR kind or update type, a timeout that is not a duration, a negative cap, a confirmation that is neither `per-pr` nor `per-sweep`. Falling back to the defaults would sweep a team's repositories under a policy the team never wrote. A file that is simply absent is not an error: the company defaults apply and the outcome names the files that were read.
 

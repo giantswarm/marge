@@ -70,7 +70,7 @@ func contentsMux(t *testing.T, owner, repo string, files map[string]string) *git
 func TestResolveScope_teamScope(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
 		"bot-prs-sweep/default.yaml":        "updateTypes:\n  renovate: [patch, minor]\nschedule: disabled\n",
-		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\nschedule: enabled\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n- name: muster\n  botPRsSweep:\n    updateTypes: [patch]\n",
 	})
 
@@ -79,7 +79,6 @@ func TestResolveScope_teamScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"giantswarm/marge", "giantswarm/muster"}, scope.Repos)
 
-	// The team file exists, so the schedule runs for the team.
 	require.True(t, scope.Policies.Base().Schedule)
 	require.Equal(t, "team-bumblebee", scope.Policies.Base().SlackChannel)
 	require.True(t, scope.Policies.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor))

@@ -101,19 +101,7 @@ func (l Loader) companyAndTeamFiles(ctx context.Context, team string) ([]File, e
 	if err != nil {
 		return nil, err
 	}
-	// A team file is the team's opt-in to the schedule. The schedule key
-	// exists only to pause the schedule again without deleting the file.
-	if teamDoc != nil && teamDoc.Schedule == nil {
-		teamDoc = withSchedule(teamDoc, scheduleEnabled)
-	}
 	return []File{{Path: DefaultFile, Doc: defaults}, {Path: teamPath, Doc: teamDoc}}, nil
-}
-
-// withSchedule returns a copy of doc whose schedule key is set.
-func withSchedule(doc *Document, value string) *Document {
-	out := *doc
-	out.Schedule = &value
-	return &out
 }
 
 // document reads and parses one policy file. A file that is not there

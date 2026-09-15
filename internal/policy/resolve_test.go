@@ -35,6 +35,7 @@ modelConfig: default-model-config
 func TestResolve_defaultTeamAndException(t *testing.T) {
 	teamFile := `
 slackChannel: team-bumblebee
+schedule: enabled
 rescue:
   enabled: true
   timeout: 30m
@@ -65,8 +66,6 @@ updateTypes:
 	require.NoError(t, err)
 	team, err := ParseDocument(TeamFile("bumblebee"), teamFile)
 	require.NoError(t, err)
-	// The team file exists, so the schedule runs; see Loader.TeamScope.
-	team = withSchedule(team, scheduleEnabled)
 
 	repos, exceptions, err := ParseRepositories(repositoriesFile, "giantswarm", RepositoriesFile("bumblebee"))
 	require.NoError(t, err)
@@ -99,8 +98,8 @@ updateTypes:
 	require.False(t, plain.Eligible(pr.KindRenovate, pr.UpdateMajor))
 	require.False(t, plain.Eligible(pr.KindRenovate, pr.UpdateUnknown))
 
-	// The exception restricts the update types of every kind and switches
-	// the rescues off; nothing else changes.
+	// The exception restricts the update types of the kinds that name a
+	// version and switches the rescues off; nothing else changes.
 	restricted := set.For("muster")
 	require.True(t, restricted.Sweep)
 	require.False(t, restricted.Rescue.Enabled)
@@ -108,7 +107,9 @@ updateTypes:
 	require.True(t, restricted.Eligible(pr.KindRenovate, pr.UpdatePatch))
 	require.False(t, restricted.Eligible(pr.KindRenovate, pr.UpdateMinor))
 	require.False(t, restricted.Eligible(pr.KindDependabot, pr.UpdateMinor))
-	require.False(t, restricted.Eligible(pr.KindHerald, pr.UpdateNone))
+	require.True(t, restricted.Eligible(pr.KindHerald, pr.UpdateNone),
+		"an Align files or Herald PR names no version, so an update type list does not reach it")
+	require.True(t, restricted.Eligible(pr.KindAlignFiles, pr.UpdateNone))
 
 	// The exception switches the sweep off for the repository alone.
 	require.False(t, set.For("klaus").Sweep)
@@ -152,14 +153,20 @@ func TestResolve_noFiles(t *testing.T) {
 	require.Equal(t, []string{"built-in company defaults"}, resolved.Sources)
 }
 
-// TestResolve_scheduleKeyPauses proves the only switch a team needs: the
-// file is the opt-in and the schedule key pauses it again.
-func TestResolve_scheduleKeyPauses(t *testing.T) {
-	paused, err := ParseDocument(TeamFile("shield"), "schedule: disabled\n")
+// TestResolve_scheduleKey proves a team's only switch: the schedule runs
+// where the team file says so and nowhere else.
+func TestResolve_scheduleKey(t *testing.T) {
+	running, err := ParseDocument(TeamFile("shield"), "schedule: enabled\n")
 	require.NoError(t, err)
-	set, err := NewSet([]File{{Path: TeamFile("shield"), Doc: paused}}, nil)
+	set, err := NewSet([]File{{Path: TeamFile("shield"), Doc: running}}, nil)
 	require.NoError(t, err)
-	require.False(t, set.For("any").Schedule)
+	require.True(t, set.For("any").Schedule)
+
+	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
+	require.NoError(t, err)
+	set, err = NewSet([]File{{Path: TeamFile("shield"), Doc: silent}}, nil)
+	require.NoError(t, err)
+	require.False(t, set.For("any").Schedule, "a team file that says nothing keeps the company default")
 }
 
 // TestResolve_exceptionOnlyNarrows refuses an exception that widens what
@@ -181,6 +188,13 @@ func TestResolve_exceptionOnlyNarrows(t *testing.T) {
 	})
 	require.NoError(t, err, "switching a sweep on where it already is on is not a widening")
 	require.True(t, base.For("marge").Sweep)
+
+	defaults, err := ParseDocument(DefaultFile, companyDefaultFile)
+	require.NoError(t, err)
+	_, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}}, map[string]Exception{
+		"marge": {UpdateTypes: []string{"major"}},
+	})
+	require.ErrorContains(t, err, "the team merges no major update")
 }
 
 // TestPolicy_declaredUnenforced holds the promise that a cap nothing

@@ -60,6 +60,18 @@ const (
 	UpdateUnknown  UpdateType = "unknown"
 )
 
+// CarriesVersion reports whether a PR of this kind names a dependency
+// version. An Align files or Herald PR does not, so its update type is
+// always UpdateNone.
+func (k Kind) CarriesVersion() bool {
+	switch k {
+	case KindAlignFiles, KindHerald:
+		return false
+	default:
+		return true
+	}
+}
+
 var (
 	groupedTypeRE = regexp.MustCompile(`(?i)\((major|minor|patch|digest)\)\s*$`)
 	// changeCellRE matches one "Change" cell of the Renovate PR body table:
@@ -80,8 +92,7 @@ var (
 // PRs take the largest change of their rows. Anything that cannot be read
 // is UpdateUnknown, never a guess.
 func ClassifyUpdate(kind Kind, title, body string) UpdateType {
-	switch kind {
-	case KindAlignFiles, KindHerald:
+	if !kind.CarriesVersion() {
 		return UpdateNone
 	}
 

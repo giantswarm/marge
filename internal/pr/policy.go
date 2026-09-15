@@ -103,6 +103,17 @@ func (p Policy) Eligible(kind Kind, updateType UpdateType) bool {
 	return slices.Contains(p.UpdateTypes[kind], updateType)
 }
 
+// AllowsUpdate reports whether any bot PR kind of the policy merges this
+// update type.
+func (p Policy) AllowsUpdate(updateType UpdateType) bool {
+	for _, types := range p.UpdateTypes {
+		if slices.Contains(types, updateType) {
+			return true
+		}
+	}
+	return false
+}
+
 // DeclaredUnenforced names the caps the policy declares that this build
 // does not enforce, so a team is told rather than left to assume. It is
 // empty while the rescues are off: an unenforced cap on a rescue that never

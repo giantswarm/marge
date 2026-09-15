@@ -72,8 +72,8 @@ type Exception struct {
 	Rescue      *bool    `yaml:"rescue"`
 }
 
-// The two values the schedule key takes. The schedule runs for a team that
-// has a policy file; the key pauses it without deleting the file.
+// The two values the schedule key takes. A team switches its scheduled
+// sweep on in its own policy file, and off again without deleting the file.
 const (
 	scheduleEnabled  = "enabled"
 	scheduleDisabled = "disabled"

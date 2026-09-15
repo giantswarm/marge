@@ -141,8 +141,9 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 // of an exception narrows: an update type list is intersected with the
 // team's, never added to, and a rescue the team switched off stays off. A
 // key that tries to widen is an error, not a silent narrowing, so a team
-// reads back what it wrote. The sweep itself has no team-level switch, so
-// enabled sets it either way.
+// reads back what it wrote. The list reaches only the kinds that name a
+// version. The sweep itself has no team-level switch, so enabled sets it
+// either way.
 func (e Exception) apply(base pr.Policy, repo string) (pr.Policy, error) {
 	if err := e.validate(repo); err != nil {
 		return pr.Policy{}, err
@@ -161,11 +162,21 @@ func (e Exception) apply(base pr.Policy, repo string) (pr.Policy, error) {
 	}
 	if e.UpdateTypes != nil {
 		allowed, _ := updateTypes(e.UpdateTypes)
+		for _, updateType := range allowed {
+			if !base.AllowsUpdate(updateType) {
+				return pr.Policy{}, fmt.Errorf("botPRsSweep.updateTypes of repository %s: the team merges no %s update, and an exception cannot add one", repo, updateType)
+			}
+		}
+		// Align files and Herald PRs name no version, so an exception that
+		// restricts update types leaves those two kinds alone.
 		for kind, types := range out.UpdateTypes {
+			if !kind.CarriesVersion() {
+				continue
+			}
 			kept := make([]pr.UpdateType, 0, len(types))
-			for _, t := range types {
-				if slices.Contains(allowed, t) {
-					kept = append(kept, t)
+			for _, updateType := range types {
+				if slices.Contains(allowed, updateType) {
+					kept = append(kept, updateType)
 				}
 			}
 			out.UpdateTypes[kind] = kept

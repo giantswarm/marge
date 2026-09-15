@@ -48,7 +48,7 @@ func loader(t *testing.T, files map[string]string) Loader {
 func TestTeamScope(t *testing.T) {
 	l := loader(t, map[string]string{
 		DefaultFile:                   "updateTypes:\n  renovate: [patch, minor]\n",
-		TeamFile("bumblebee"):         "slackChannel: team-bumblebee\nconcurrency:\n  perRepo: 2\n",
+		TeamFile("bumblebee"):         "slackChannel: team-bumblebee\nschedule: enabled\nconcurrency:\n  perRepo: 2\n",
 		RepositoriesFile("bumblebee"): "- name: marge\n- name: muster\n  botPRsSweep:\n    updateTypes: [patch]\n",
 	})
 
@@ -59,7 +59,7 @@ func TestTeamScope(t *testing.T) {
 	base := scope.Policies.Base()
 	require.Equal(t, "team-bumblebee", base.SlackChannel)
 	require.Equal(t, 2, base.Concurrency.PerRepo)
-	require.True(t, base.Schedule, "a team file is the team's opt-in to the schedule")
+	require.True(t, base.Schedule, "the team file opts the team into the schedule")
 	require.Equal(t, []string{"built-in company defaults", DefaultFile, TeamFile("bumblebee")}, base.Sources)
 
 	require.True(t, scope.Policies.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
