@@ -64,6 +64,39 @@ func (p *Processor) subject(ctx context.Context, run *prRun, state pr.StatusStat
 		Failing:   run.failing,
 		BaseState: p.baseStates(ctx, run),
 		Files:     func() []string { return p.diffFiles(ctx, run) },
+		Log:       p.logExcerpt(ctx, run),
+	}
+}
+
+// logExcerpt returns the reader a rule's log signal uses. Every excerpt is
+// memoised per check and source, so two rules reading the same log cost one
+// fetch. A source with no reference for the check yields nothing, and the
+// rule does not match.
+func (p *Processor) logExcerpt(ctx context.Context, run *prRun) func(rules.LogSource, string, int) (string, bool) {
+	if p.Logs == nil {
+		return nil
+	}
+	return func(source rules.LogSource, check string, maxBytes int) (string, bool) {
+		key := string(source) + " " + check
+		if cached, ok := run.excerpts[key]; ok {
+			return cached, cached != ""
+		}
+		excerpt := ""
+		switch source {
+		case rules.LogActions:
+			if url := run.detailsURLs[check]; url != "" {
+				excerpt, _ = p.Logs.Actions(ctx, run.info.Owner, run.info.Repo, url, maxBytes)
+			}
+		case rules.LogCircleCI:
+			if url := run.statusTargets[check]; url != "" {
+				excerpt, _ = p.Logs.CircleCIBuild(ctx, url, maxBytes)
+			}
+		}
+		if run.excerpts == nil {
+			run.excerpts = make(map[string]string)
+		}
+		run.excerpts[key] = excerpt
+		return excerpt, excerpt != ""
 	}
 }
 

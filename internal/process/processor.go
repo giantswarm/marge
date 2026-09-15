@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
@@ -54,6 +55,9 @@ type Processor struct {
 	// Remedies is the action vocabulary a rule may name. Nil refuses every
 	// remedy.
 	Remedies *remedy.Registry
+	// Logs reads the excerpt a rule's log signal matches against. Nil leaves
+	// every log signal unmatched.
+	Logs *logs.Fetcher
 
 	// Policies is the resolved bot PR sweep policy of the scope, read from
 	// the policy files before the sweep starts. Nil applies the company
@@ -127,6 +131,13 @@ type prRun struct {
 	// that carries a file signal.
 	files       []string
 	filesLoaded bool
+	// statusTargets and detailsURLs say where each failing check's log
+	// lives: a CircleCI build behind a commit status, an Actions job behind
+	// a check run.
+	statusTargets map[string]string
+	detailsURLs   map[string]string
+	// excerpts memoises one log excerpt per check and source.
+	excerpts map[string]string
 }
 
 func (r *prRun) set(state pr.StatusState, detail string) {
@@ -355,6 +366,8 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 		required := evaluateRequired(prot.Contexts, outcome.reported)
 		run.failing = outcome.failedChecks
 		run.required = remedy.Required(required)
+		run.statusTargets = outcome.statusTargets
+		run.detailsURLs = outcome.detailsURLs
 
 		if len(required.Failed) > 0 || outcome.state == stateFailure || outcome.state == stateError {
 			if !p.classifyFailure(ctx, run, outcome, prot) {
@@ -488,6 +501,9 @@ type checkOutcome struct {
 	// target_url, so the CircleCI lookup can find the build behind it.
 	// Check runs have no entry.
 	statusTargets map[string]string
+	// detailsURLs maps each failing check run to its details URL, which
+	// carries the Actions job id the log excerpt is read from.
+	detailsURLs map[string]string
 }
 
 func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (checkOutcome, error) {
@@ -514,6 +530,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	}
 
 	var failedChecks []string
+	var detailsURLs map[string]string
 	var blockedChecks []string
 	var noVerdictChecks []noVerdictCheck
 	allComplete := true
@@ -548,6 +565,12 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 			hasFailure = true
 			if name != "" {
 				failedChecks = append(failedChecks, name)
+				if url := cr.GetDetailsURL(); url != "" {
+					if detailsURLs == nil {
+						detailsURLs = make(map[string]string)
+					}
+					detailsURLs[name] = url
+				}
 			}
 			record(name, false, true)
 			continue
@@ -596,6 +619,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		noVerdictChecks: noVerdictChecks,
 		reported:        reported,
 		statusTargets:   statusTargets,
+		detailsURLs:     detailsURLs,
 	}
 	switch {
 	case hasFailure || hasStatusFailure:
