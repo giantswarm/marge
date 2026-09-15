@@ -260,7 +260,7 @@ var nameRE = regexp.MustCompile(`[^a-z0-9]+`)
 func writeDraft(name string, group *SweepUnhandled) ([]string, error) {
 	rulePath := filepath.Join(rulesFlags.path, name+".yaml")
 	scenarioDir := filepath.Join(rulesFlags.path, rules.ScenarioDir, name)
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+	if err := os.MkdirAll(scenarioDir, 0o750); err != nil {
 		return nil, err
 	}
 
