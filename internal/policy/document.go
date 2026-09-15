@@ -16,6 +16,7 @@
 package policy
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -200,7 +201,7 @@ func updateTypes(names []string) ([]pr.UpdateType, error) {
 func strictUnmarshal(content string, out any) error {
 	dec := yaml.NewDecoder(strings.NewReader(content))
 	dec.KnownFields(true)
-	if err := dec.Decode(out); err != nil && err != io.EOF {
+	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	return nil

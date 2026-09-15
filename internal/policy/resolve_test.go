@@ -117,6 +117,12 @@ updateTypes:
 	// Matching is case-insensitive, the way GitHub matches repository names.
 	require.False(t, set.For("KLAUS").Sweep)
 
+	// Both shapes of a repository name reach the same exception, so a
+	// caller that holds the owner/name of Scope.Repos never silently falls
+	// back to the base policy.
+	require.False(t, set.For("giantswarm/klaus").Sweep)
+	require.True(t, set.For("giantswarm/marge").Sweep)
+
 	// Every resolved policy names the files it came from, exception last.
 	require.Equal(t, []string{
 		"built-in company defaults",
@@ -129,7 +135,6 @@ updateTypes:
 		TeamFile("bumblebee"),
 		"botPRsSweep of repository muster",
 	}, restricted.Sources)
-	require.Equal(t, []string{DefaultFile, TeamFile("bumblebee")}, set.Files())
 }
 
 // TestResolve_noFiles resolves the company defaults on their own, the case
@@ -144,7 +149,7 @@ func TestResolve_noFiles(t *testing.T) {
 	require.False(t, resolved.Rescue.Enabled)
 	require.True(t, resolved.Eligible(pr.KindRenovate, pr.UpdatePatch))
 	require.False(t, resolved.Eligible(pr.KindRenovate, pr.UpdateMajor))
-	require.Empty(t, set.Files())
+	require.Equal(t, []string{"built-in company defaults"}, resolved.Sources)
 }
 
 // TestResolve_scheduleKeyPauses proves the only switch a team needs: the

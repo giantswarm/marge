@@ -84,6 +84,8 @@ func TestResolveScope_teamScope(t *testing.T) {
 	require.Equal(t, "team-bumblebee", scope.Policies.Base().SlackChannel)
 	require.True(t, scope.Policies.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
 	require.False(t, scope.Policies.For("muster").Eligible(pr.KindRenovate, pr.UpdateMinor))
+	// Scope.Repos carries the owner, so both shapes reach the exception.
+	require.False(t, scope.Policies.For("giantswarm/muster").Eligible(pr.KindRenovate, pr.UpdateMinor))
 }
 
 // TestResolveScope_noPolicyFile sweeps a team that has a repository list but
@@ -99,7 +101,7 @@ func TestResolveScope_noPolicyFile(t *testing.T) {
 	require.Equal(t, []string{"giantswarm/cluster-aws"}, scope.Repos)
 	require.False(t, scope.Policies.Base().Schedule)
 	require.Equal(t, pr.CompanyDefaults(), scope.Policies.For("cluster-aws"))
-	require.Empty(t, scope.Policies.Files())
+	require.Equal(t, []string{"built-in company defaults"}, scope.Policies.Base().Sources)
 }
 
 // TestResolveScope_missingTeamFile refuses to sweep a team whose repository

@@ -199,38 +199,11 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	// Group PRs by owner/repo. The policy's concurrency bounds both levels:
-	// perTeam repositories run in parallel, and perRepo PRs of one
-	// repository. The default perRepo of 1 keeps the PRs of a repository
-	// sequential, which is what avoids "base branch was modified" failures.
-	repoGroups := pr.GroupByRepo(prs)
-	concurrency := opts.Policies.Base().Concurrency
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, max(concurrency.PerTeam, 1))
-
-	for _, group := range repoGroups {
-		wg.Add(1)
-		go func(repoPRs []pr.PRInfo) {
-			defer wg.Done()
-			var repoWG sync.WaitGroup
-			repoSem := make(chan struct{}, max(concurrency.PerRepo, 1))
-			for _, info := range repoPRs {
-				repoSem <- struct{}{}
-				sem <- struct{}{}
-				repoWG.Add(1)
-				go func(info pr.PRInfo) {
-					defer repoWG.Done()
-					defer func() { <-sem; <-repoSem }()
-					key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
-					proc.ProcessPR(ctx, info, status, indexByPR[key])
-				}(info)
-			}
-			repoWG.Wait()
-		}(group.PRs)
-	}
-
-	wg.Wait()
+	// Group PRs by owner/repo, then fan out under the policy's concurrency.
+	forEachPR(pr.GroupByRepo(prs), opts.Policies.Base().Concurrency, func(info pr.PRInfo) {
+		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
+		proc.ProcessPR(ctx, info, status, indexByPR[key])
+	})
 
 	close(stopRefresh)
 	<-refreshStopped
@@ -254,6 +227,41 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	return status, nil
+}
+
+// forEachPR runs fn on every PR of every group, under the two bounds the
+// policy declares: perTeam repositories run at once, and within one
+// repository perRepo PRs. A repository holds its slot for as long as it has
+// work, so perTeam bounds repositories and not the PRs they hold together.
+// The default perRepo of 1 keeps the PRs of a repository sequential, which
+// is what avoids "base branch was modified" failures.
+func forEachPR(groups []pr.PRGroup, concurrency pr.Concurrency, fn func(pr.PRInfo)) {
+	var wg sync.WaitGroup
+	repoSlots := make(chan struct{}, max(concurrency.PerTeam, 1))
+
+	for _, group := range groups {
+		wg.Add(1)
+		go func(repoPRs []pr.PRInfo) {
+			defer wg.Done()
+			repoSlots <- struct{}{}
+			defer func() { <-repoSlots }()
+
+			var repoWG sync.WaitGroup
+			prSlots := make(chan struct{}, max(concurrency.PerRepo, 1))
+			for _, info := range repoPRs {
+				prSlots <- struct{}{}
+				repoWG.Add(1)
+				go func(info pr.PRInfo) {
+					defer repoWG.Done()
+					defer func() { <-prSlots }()
+					fn(info)
+				}(info)
+			}
+			repoWG.Wait()
+		}(group.PRs)
+	}
+
+	wg.Wait()
 }
 
 // reportUnenforced names the caps the policy declares that this build does

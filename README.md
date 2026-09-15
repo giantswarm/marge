@@ -120,6 +120,8 @@ A team declares its own appetite for sweeps in `giantswarm/github`, in files the
 
 A team file that exists is the team's opt-in to the scheduled sweep. There is no separate switch: `schedule: disabled` only pauses the schedule again without deleting the file. A team without a policy file is swept by hand from the CLI and never by the schedule.
 
+marge holds no scheduler yet. `schedule` is resolved and reported on every outcome, and nothing in marge acts on it: `marge sweep --team <name>` is a sweep by hand and runs whatever the key says. The scheduler that reads it arrives with the rescue work.
+
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
 slackChannel: team-bumblebee
@@ -139,7 +141,7 @@ concurrency:
 modelConfig: default-model-config
 ```
 
-Every key is optional and an absent key keeps what the file before it said. `updateTypes` replaces the list of the kinds it names; the known update types are `major`, `minor`, `patch`, `digest`, `pin`, `lockfile` and `none`, and an update whose size marge could not read can never be declared eligible.
+Every key is optional and an absent key keeps what the file before it said. `updateTypes` replaces the list of the kinds it names; the known update types are `major`, `minor`, `patch`, `digest`, `pin`, `lockfile` and `none`, and an update whose size marge could not read can never be declared eligible. An empty list is a list: `renovate: []` merges no Renovate PR at all.
 
 `timeout` and `weekly` are enforced. The two `budget` figures are part of the team contract and are not enforced yet: a per-rescue budget needs the platform to accept a budget on a run, and a weekly budget needs the cost of a finished run to be readable. Every outcome records `budget_enforced: false`, and a sweep whose policy declares a budget with the rescues switched on says so on stderr. Enforcement moves under the same file later without a team editing anything.
 
@@ -158,7 +160,7 @@ A repository entry deviates under `botPRsSweep`, with three keys that only narro
     rescue: false
 ```
 
-An exception that tries to switch the sweep or the rescues back on where the team switched them off is an error, not a silent narrowing.
+An exception that tries to switch the rescues back on where the team switched them off is an error, not a silent narrowing. `enabled` has no team-level counterpart: a repository is the only place the sweep itself is switched off.
 
 A file marge cannot read stops the sweep and names the file and the key: a misspelled key, an unknown bot PR kind or update type, a timeout that is not a duration, a negative cap, a confirmation that is neither `per-pr` nor `per-sweep`. Falling back to the defaults would sweep a team's repositories under a policy the team never wrote. A file that is simply absent is not an error: the company defaults apply and the outcome names the files that were read.
 

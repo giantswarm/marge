@@ -20,9 +20,8 @@ type File struct {
 // is swept under, and the repositories whose own exception deviates from
 // it. A Set is read-only once built, so the sweep's goroutines share one.
 type Set struct {
-	base     pr.Policy
-	byRepo   map[string]pr.Policy
-	fileList []string
+	base   pr.Policy
+	byRepo map[string]pr.Policy
 }
 
 // NewSet resolves the base policy from the files, applies each repository
@@ -30,15 +29,13 @@ type Set struct {
 // repository name, matched the way GitHub matches them, without case.
 func NewSet(files []File, exceptions map[string]Exception) (*Set, error) {
 	base := pr.CompanyDefaults()
-	var paths []string
 	for _, file := range files {
 		if file.Doc == nil {
 			continue
 		}
 		base = apply(base, file.Path, file.Doc)
-		paths = append(paths, file.Path)
 	}
-	set := &Set{base: base, fileList: paths}
+	set := &Set{base: base}
 	if len(exceptions) == 0 {
 		return set, nil
 	}
@@ -48,21 +45,32 @@ func NewSet(files []File, exceptions map[string]Exception) (*Set, error) {
 		if err != nil {
 			return nil, err
 		}
-		set.byRepo[strings.ToLower(repo)] = resolved
+		set.byRepo[exceptionKey(repo)] = resolved
 	}
 	return set, nil
 }
 
-// For returns the policy repo is swept under. The returned policy is
-// read-only: callers never write to it or to its map.
+// For returns the policy repo is swept under. repo is a repository name,
+// with or without its owner: "marge" and "giantswarm/marge" resolve to the
+// same policy, because a team's exceptions cover one owner only. The
+// returned policy is read-only: callers never write to it or to its map.
 func (s *Set) For(repo string) pr.Policy {
 	if s == nil {
 		return pr.CompanyDefaults()
 	}
-	if resolved, ok := s.byRepo[strings.ToLower(repo)]; ok {
+	if resolved, ok := s.byRepo[exceptionKey(repo)]; ok {
 		return resolved
 	}
 	return s.base
+}
+
+// exceptionKey is how a repository name keys the exception map: without its
+// owner, and without case, the way GitHub matches a repository name.
+func exceptionKey(repo string) string {
+	if _, name, found := strings.Cut(repo, "/"); found {
+		repo = name
+	}
+	return strings.ToLower(repo)
 }
 
 // Base returns the policy of a repository without an exception. The sweep
@@ -72,16 +80,6 @@ func (s *Set) Base() pr.Policy {
 		return pr.CompanyDefaults()
 	}
 	return s.base
-}
-
-// Files names the policy files the set was built from, in the order they
-// were applied. It is empty when no file was found and the built-in
-// defaults apply on their own.
-func (s *Set) Files() []string {
-	if s == nil {
-		return nil
-	}
-	return slices.Clone(s.fileList)
 }
 
 // apply layers one document on top of a policy. Only the fields the
@@ -140,10 +138,11 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 }
 
 // apply layers a repository exception on top of the team policy. Every key
-// of an exception narrows: the sweep and the rescues can only be switched
-// off, and an update type list is intersected with the team's, never added
-// to. A key that tries to widen is an error, not a silent narrowing, so a
-// team reads back what it wrote.
+// of an exception narrows: an update type list is intersected with the
+// team's, never added to, and a rescue the team switched off stays off. A
+// key that tries to widen is an error, not a silent narrowing, so a team
+// reads back what it wrote. The sweep itself has no team-level switch, so
+// enabled sets it either way.
 func (e Exception) apply(base pr.Policy, repo string) (pr.Policy, error) {
 	if err := e.validate(repo); err != nil {
 		return pr.Policy{}, err
@@ -152,9 +151,6 @@ func (e Exception) apply(base pr.Policy, repo string) (pr.Policy, error) {
 	out.Sources = append(out.Sources, fmt.Sprintf("botPRsSweep of repository %s", repo))
 
 	if e.Enabled != nil {
-		if *e.Enabled && !base.Sweep {
-			return pr.Policy{}, fmt.Errorf("botPRsSweep.enabled of repository %s: an exception cannot switch the sweep on where the team switched it off", repo)
-		}
 		out.Sweep = *e.Enabled
 	}
 	if e.Rescue != nil {

@@ -41,26 +41,31 @@ type Scope struct {
 	Policies *Set
 }
 
-// TeamScope reads the company defaults, the team's policy file and the
-// team's repository list, and resolves all three. A missing repository list
-// is an error: without it the sweep has no scope. A missing policy file is
-// not: the company defaults then apply on their own, and Set.Files says
-// which files were read.
+// TeamScope reads the team's repository list, the company defaults and the
+// team's policy file, and resolves all three. A missing repository list is
+// an error: without it the sweep has no scope. A missing policy file is
+// not: the company defaults then apply on their own, and pr.Policy.Sources
+// names the files that were read.
+//
+// The repository list is read first. GitHub answers 404 for a repository
+// the token cannot read, so an absent policy file and an unreadable
+// giantswarm/github look the same. Reading the one file that must exist
+// first turns that case into one error that names the access.
 func (l Loader) TeamScope(ctx context.Context, team string) (Scope, error) {
-	files, err := l.companyAndTeamFiles(ctx, team)
-	if err != nil {
-		return Scope{}, err
-	}
-
 	path := RepositoriesFile(team)
 	content, found, err := l.read(ctx, path)
 	if err != nil {
 		return Scope{}, err
 	}
 	if !found {
-		return Scope{}, fmt.Errorf("no team file for %q: %s/%s has no %s", team, l.Owner, l.Repo, path)
+		return Scope{}, fmt.Errorf("no team file for %q: %s/%s has no %s, or the token cannot read %s/%s", team, l.Owner, l.Repo, path, l.Owner, l.Repo)
 	}
 	repos, exceptions, err := ParseRepositories(content, l.Owner, path)
+	if err != nil {
+		return Scope{}, err
+	}
+
+	files, err := l.companyAndTeamFiles(ctx, team)
 	if err != nil {
 		return Scope{}, err
 	}
@@ -167,6 +172,8 @@ func ParseRepositories(content, owner, path string) ([]string, map[string]Except
 		if err := strictDecodeNode(&entry.BotPRsSweep, &exception); err != nil {
 			return nil, nil, fmt.Errorf("parsing botPRsSweep of repository %s in %s: %w", name, path, err)
 		}
+		// Exception.apply validates again, for a caller that builds a Set
+		// without this function. Here the file path is still in hand.
 		if err := exception.validate(name); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
