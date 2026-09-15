@@ -31,6 +31,10 @@ type cancelledBuild struct {
 	Context  string
 	Ref      circleci.BuildRef
 	Revision string
+	// WorkflowID is the workflow run the build belongs to, empty for a
+	// build that runs outside a workflow.
+	WorkflowID   string
+	WorkflowName string
 }
 
 // onHead reports whether every cancelled build ran on the PR's current
@@ -120,7 +124,13 @@ func (p *Processor) classifyCancelled(ctx context.Context, pullReq *github.PullR
 		if !build.AutoCancelled() {
 			return nil, ""
 		}
-		res.Builds = append(res.Builds, cancelledBuild{Context: name, Ref: ref, Revision: build.VCSRevision})
+		res.Builds = append(res.Builds, cancelledBuild{
+			Context:      name,
+			Ref:          ref,
+			Revision:     build.VCSRevision,
+			WorkflowID:   build.Workflows.WorkflowID,
+			WorkflowName: build.Workflows.WorkflowName,
+		})
 	}
 	if len(notes) > 0 {
 		return nil, strings.Join(notes, "; ")
@@ -134,10 +144,15 @@ func (p *Processor) classifyCancelled(ctx context.Context, pullReq *github.PullR
 
 // handleCancelled records the cancelled classification and, when retrying
 // is enabled, this is not a dry run and the cancelled builds ran on the
-// current head, asks CircleCI to run each of them again on the same commit
-// so the PR gets a real verdict. A cancelled build behind a newer head is
-// never retried: the new head's own build is the verdict, and the next
-// sweep reads it.
+// current head, asks CircleCI to run them again on the same commit so the
+// PR gets a real verdict. A cancelled build behind a newer head is never
+// retried: the new head's own build is the verdict, and the next sweep
+// reads it.
+//
+// Each distinct workflow is rerun once, from its failed jobs, so the jobs
+// the cancel left blocked also run. Without them a repository whose branch
+// protection requires those downstream contexts never becomes mergeable.
+// A build that carries no workflow id falls back to the single-build retry.
 func (p *Processor) handleCancelled(ctx context.Context, res *cancelledResult, status *pr.PRStatus, idx int) {
 	detail := res.detail()
 	status.Update(idx, pr.StatusCancelled, detail)
@@ -150,18 +165,46 @@ func (p *Processor) handleCancelled(ctx context.Context, res *cancelledResult, s
 		return
 	}
 
-	retried := make([]string, 0, len(res.Builds))
+	done := make([]string, 0, len(res.Builds))
+	rerunWorkflows := make(map[string]bool, len(res.Builds))
 	for _, b := range res.Builds {
-		nb, err := p.CircleCI.Retry(ctx, b.Ref)
-		if err != nil {
-			msg := fmt.Sprintf("retry of build %d failed: %v", b.Ref.Num, err)
-			if len(retried) > 0 {
-				msg = strings.Join(retried, ", ") + "; " + msg
+		if b.WorkflowID == "" {
+			nb, err := p.CircleCI.Retry(ctx, b.Ref)
+			if err != nil {
+				reportRetryError(status, idx, detail, done, fmt.Sprintf("retry of build %d failed: %v", b.Ref.Num, err))
+				return
 			}
-			status.Update(idx, pr.StatusCancelled, detail+"; "+msg)
+			done = append(done, fmt.Sprintf("build %d retried as %d", b.Ref.Num, nb.BuildNum))
+			continue
+		}
+		if rerunWorkflows[b.WorkflowID] {
+			continue
+		}
+		rerunWorkflows[b.WorkflowID] = true
+		if _, err := p.CircleCI.RerunWorkflowFromFailed(ctx, b.WorkflowID); err != nil {
+			reportRetryError(status, idx, detail, done,
+				fmt.Sprintf("rerun of workflow %s failed: %v", workflowLabel(b), err))
 			return
 		}
-		retried = append(retried, fmt.Sprintf("build %d retried as %d", b.Ref.Num, nb.BuildNum))
+		done = append(done, fmt.Sprintf("workflow %s rerun from failed", workflowLabel(b)))
 	}
-	status.Update(idx, pr.StatusRetried, "re-checking; "+strings.Join(retried, ", "))
+	status.Update(idx, pr.StatusRetried, "re-checking; "+strings.Join(done, ", "))
+}
+
+// workflowLabel names a workflow for status output: its name when CircleCI
+// reported one, its id otherwise.
+func workflowLabel(b cancelledBuild) string {
+	if b.WorkflowName != "" {
+		return b.WorkflowName
+	}
+	return b.WorkflowID
+}
+
+// reportRetryError records a failed retry, keeping the reruns that already
+// succeeded visible so the operator knows what is running.
+func reportRetryError(status *pr.PRStatus, idx int, detail string, done []string, msg string) {
+	if len(done) > 0 {
+		msg = strings.Join(done, ", ") + "; " + msg
+	}
+	status.Update(idx, pr.StatusCancelled, detail+"; "+msg)
 }

@@ -3,6 +3,7 @@ package circleci
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,6 +167,9 @@ type fakeAPI struct {
 	fixtures   map[string]string // path -> fixture file
 	private    bool              // 404 unless a Circle-Token header is present
 	retryCalls []string
+	rerunCalls []string
+	rerunBody  string
+	rerunTypes []string
 	tokens     []string
 	rawQueries []string
 }
@@ -181,6 +185,15 @@ func (f *fakeAPI) server() *httptest.Server {
 		if f.private && r.Header.Get("Circle-Token") == "" {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("{\n    \"message\": \"Build not found\"\n}"))
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/rerun") {
+			body, _ := io.ReadAll(r.Body)
+			f.rerunCalls = append(f.rerunCalls, r.URL.Path)
+			f.rerunBody = string(body)
+			f.rerunTypes = append(f.rerunTypes, r.Header.Get("Content-Type"))
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"workflow_id":"9b9c4a0e-0000-4000-8000-000000000001"}`))
 			return
 		}
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/retry") {
@@ -285,6 +298,71 @@ func TestClient_Retry(t *testing.T) {
 	want := []string{"/api/v1.1/project/github/giantswarm/mcp-capi/1263/retry"}
 	if len(api.retryCalls) != 1 || api.retryCalls[0] != want[0] {
 		t.Errorf("retry calls = %q, want %q", api.retryCalls, want)
+	}
+}
+
+func TestClient_RerunWorkflowFromFailed(t *testing.T) {
+	api := &fakeAPI{t: t, private: true}
+	srv := api.server()
+	defer srv.Close()
+
+	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL, Token: "s3cret"}
+	id, err := c.RerunWorkflowFromFailed(context.Background(), "ea42abad-ba5a-4169-854b-001d55b79c1a")
+	if err != nil {
+		t.Fatalf("RerunWorkflowFromFailed: %v", err)
+	}
+	if id != "9b9c4a0e-0000-4000-8000-000000000001" {
+		t.Errorf("new workflow = %q", id)
+	}
+	want := "/api/v2/workflow/ea42abad-ba5a-4169-854b-001d55b79c1a/rerun"
+	if len(api.rerunCalls) != 1 || api.rerunCalls[0] != want {
+		t.Errorf("rerun calls = %q, want %q", api.rerunCalls, want)
+	}
+	if api.rerunBody != `{"from_failed":true}` {
+		t.Errorf("rerun body = %q, want from_failed so the blocked downstream jobs also run", api.rerunBody)
+	}
+	if api.rerunTypes[0] != "application/json" {
+		t.Errorf("rerun Content-Type = %q", api.rerunTypes[0])
+	}
+	if len(api.tokens) != 1 || api.tokens[0] != "s3cret" {
+		t.Errorf("tokens sent = %q, want the token as Circle-Token header", api.tokens)
+	}
+	for _, q := range api.rawQueries {
+		if strings.Contains(q, "s3cret") {
+			t.Errorf("token leaked into the query string: %q", q)
+		}
+	}
+}
+
+func TestClient_RerunWorkflowFromFailed_needsToken(t *testing.T) {
+	api := &fakeAPI{t: t, private: true}
+	srv := api.server()
+	defer srv.Close()
+
+	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL}
+	if _, err := c.RerunWorkflowFromFailed(context.Background(), "ea42abad-ba5a-4169-854b-001d55b79c1a"); err == nil {
+		t.Fatal("rerun without a token should fail")
+	}
+	if len(api.rerunCalls) != 0 {
+		t.Errorf("rerun reached the endpoint %q without a token", api.rerunCalls)
+	}
+}
+
+func TestClient_BuildCarriesWorkflowID(t *testing.T) {
+	api := &fakeAPI{t: t, fixtures: map[string]string{"/api/v1.1/project/github/giantswarm/mcp-capi/1263": "build-1263-auto-cancelled.json"}}
+	srv := api.server()
+	defer srv.Close()
+
+	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL}
+	b, err := c.Build(context.Background(), BuildRef{VCS: "github", Owner: "giantswarm", Repo: "mcp-capi", Num: 1263})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if b.Workflows.WorkflowID != "ea42abad-ba5a-4169-854b-001d55b79c1a" {
+		t.Errorf("workflow id = %q", b.Workflows.WorkflowID)
+	}
+	if b.Workflows.WorkflowName != "build" {
+		t.Errorf("workflow name = %q, want build", b.Workflows.WorkflowName)
 	}
 }
 

@@ -173,7 +173,7 @@ func sweepTool() mcp.Tool {
 			"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
 			"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
 			"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
-			"set retry_cancelled to retry such builds on the same commit (they are then listed under retried). "+
+			"set retry_cancelled to rerun their workflow from its failed jobs on the same commit (they are then listed under retried). "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
 			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
 		mcp.WithString("query",
@@ -203,7 +203,7 @@ func sweepTool() mcp.Tool {
 			mcp.Description("Update the branch of stale PRs from their base (same as GitHub's \"Update branch\" button) so CI re-runs, and report them under refreshed (default: false). Skipped for PRs carrying a non-stale ai-rescue marker."),
 		),
 		mcp.WithBoolean("retry_cancelled",
-			mcp.Description("Retry CircleCI builds that CircleCI auto-cancelled on the PR's current head so the same commit gets a real verdict, and report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
+			mcp.Description("Rerun the CircleCI workflow of builds that CircleCI auto-cancelled on the PR's current head, from its failed jobs, so the same commit gets a real verdict and the jobs the cancel left blocked run too; report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
 		),
 		mcp.WithString("author",
 			mcp.Description("Filter by PR author: \"renovate\", \"dependabot\", or \"all\" (default: \"all\")"),
@@ -305,7 +305,7 @@ type SweepResult struct {
 	// newer head is listed too but never retried: the new head's own build
 	// is the verdict.
 	Cancelled []SweepPREntry `json:"cancelled,omitempty"`
-	// Retried lists cancelled PRs whose builds were retried on the same
+	// Retried lists cancelled PRs whose workflow was rerun on the same
 	// commit in this run. CI is running again; the next sweep decides.
 	Retried []SweepPREntry `json:"retried,omitempty"`
 	// CIUnavailable lists PRs whose CI could not run because a GitHub Actions
