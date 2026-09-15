@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/spf13/cobra"
 
 	gh "github.com/giantswarm/marge/internal/github"
@@ -155,13 +157,17 @@ func loadCatalogueForCLI(ctx context.Context) (*rules.Catalogue, error) {
 var draftFlags struct {
 	from string
 	name string
+	repo string
+	base string
 	noPR bool
 }
 
 func init() {
 	rulesDraftCmd.Flags().StringVar(&draftFlags.from, "from", "-", "Sweep report to read the signature from; - reads standard input")
 	rulesDraftCmd.Flags().StringVar(&draftFlags.name, "name", "", "Name of the rule to draft (default: derived from the failing checks)")
-	rulesDraftCmd.Flags().BoolVar(&draftFlags.noPR, "no-pr", false, "Write the files only; print no commands to open a pull request")
+	rulesDraftCmd.Flags().StringVar(&draftFlags.repo, "repo", rules.DefaultOwner+"/"+rules.DefaultRepo, "Repository to open the draft pull request against, as owner/name")
+	rulesDraftCmd.Flags().StringVar(&draftFlags.base, "base", rules.DefaultRef, "Branch the draft pull request is opened against")
+	rulesDraftCmd.Flags().BoolVar(&draftFlags.noPR, "no-pr", false, "Write the files only; open no pull request")
 	rulesCmd.AddCommand(rulesDraftCmd)
 }
 
@@ -170,12 +176,17 @@ var rulesDraftCmd = &cobra.Command{
 	Short: "Draft a rule and its scenarios from an unrecognised failure",
 	Long: `Read one unhandled signature out of a sweep report (marge sweep --output json)
 and write a rule skeleton with a pair of scenarios built from the PRs that
-carry it, then print the commands that open the draft pull request. The
-command always writes the files; --no-pr only drops the commands it prints.
+carry it, then open a draft pull request carrying the same files.
 
 The skeleton leaves the action blank on purpose: it does not validate until a
 person names one, so promoting a pattern is editing a draft rather than
-writing one from nothing.`,
+writing one from nothing. Edit the files and push them to the branch the
+command reports.
+
+The pull request is opened through the API, so no git workspace and no push
+credential are needed; the token needs contents:write and pull-requests:write
+on the repository. --no-pr writes the files and stops, and prints the git and
+gh commands instead.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		report, err := readSweepReport(draftFlags.from)
@@ -191,19 +202,36 @@ writing one from nothing.`,
 		if name == "" {
 			name = ruleNameFor(group)
 		}
-		files, err := writeDraft(name, group)
+		files := buildDraft(name, group)
+		if err := writeDraft(name, files); err != nil {
+			return err
+		}
+		for _, f := range files {
+			fmt.Println("wrote", f.path)
+		}
+		fmt.Printf("\nName the action in %s, then run: marge rules validate && marge rules test\n", files[0].path)
+
+		if draftFlags.noPR {
+			fmt.Println("\nOpen the draft pull request with:")
+			fmt.Printf("  git checkout -b %s && git add %s && git commit && gh pr create --draft\n",
+				draftBranch(name), rulesFlags.path)
+			return nil
+		}
+
+		owner, repo, found := strings.Cut(draftFlags.repo, "/")
+		if !found {
+			return fmt.Errorf("--repo takes %q, got %q", "owner/name", draftFlags.repo)
+		}
+		client, err := gh.NewClient(cmd.Context())
 		if err != nil {
 			return err
 		}
-		for _, path := range files {
-			fmt.Println("wrote", path)
+		pull, err := openDraftPR(cmd.Context(), client, owner, repo, draftFlags.base, name, files, group)
+		if err != nil {
+			return fmt.Errorf("%w\n\nThe files are written. Rerun with --no-pr for the commands that open the pull request by hand", err)
 		}
-		fmt.Printf("\nName the action in %s, then run: marge rules validate && marge rules test\n", files[0])
-		if draftFlags.noPR {
-			return nil
-		}
-		fmt.Println("\nOpen the draft pull request with:")
-		fmt.Printf("  git checkout -b rule/%s && git add %s && git commit && gh pr create --draft\n", name, rulesFlags.path)
+		fmt.Printf("\ndraft pull request: %s\n", pull.GetHTMLURL())
+		fmt.Printf("push your edits to %s\n", draftBranch(name))
 		return nil
 	},
 }
@@ -255,15 +283,18 @@ func ruleNameFor(group *SweepUnhandled) string {
 
 var nameRE = regexp.MustCompile(`[^a-z0-9]+`)
 
-// writeDraft writes the rule skeleton and its two scenarios. The action is
-// left blank, so the draft fails validation until a person names one.
-func writeDraft(name string, group *SweepUnhandled) ([]string, error) {
-	rulePath := filepath.Join(rulesFlags.path, name+".yaml")
-	scenarioDir := filepath.Join(rulesFlags.path, rules.ScenarioDir, name)
-	if err := os.MkdirAll(scenarioDir, 0o750); err != nil {
-		return nil, err
-	}
+// draftFile is one document of the draft, at the path it takes inside the
+// catalogue and the path it is written to on disk. The pull request carries
+// repoPath, which is where the catalogue lives whatever --path names.
+type draftFile struct {
+	repoPath string
+	path     string
+	body     string
+}
 
+// buildDraft renders the rule skeleton and its two scenarios. The action is
+// left blank, so the draft fails validation until a person names one.
+func buildDraft(name string, group *SweepUnhandled) []draftFile {
 	rule := fmt.Sprintf(`name: %s
 summary: TODO say in one line what this failure is.
 source: TODO cite the runbook row or the PRs this came from.
@@ -309,19 +340,28 @@ expect:
   rule: ""
 `, quoteList(group.Checks), firstCheck(group))
 
-	files := []struct{ path, body string }{
-		{rulePath, rule},
-		{filepath.Join(scenarioDir, "matches.yaml"), matches},
-		{filepath.Join(scenarioDir, "refuses.yaml"), refuses},
+	scenarioDir := filepath.Join(rules.ScenarioDir, name)
+	return []draftFile{
+		{repoPath: path.Join(rules.DefaultDir, name+".yaml"), body: rule},
+		{repoPath: path.Join(rules.DefaultDir, scenarioDir, "matches.yaml"), body: matches},
+		{repoPath: path.Join(rules.DefaultDir, scenarioDir, "refuses.yaml"), body: refuses},
 	}
-	written := make([]string, 0, len(files))
-	for _, f := range files {
-		if err := os.WriteFile(f.path, []byte(f.body), 0o600); err != nil {
-			return nil, err
+}
+
+// writeDraft writes the draft under --path and fills in each file's local
+// path.
+func writeDraft(name string, files []draftFile) error {
+	if err := os.MkdirAll(filepath.Join(rulesFlags.path, rules.ScenarioDir, name), 0o750); err != nil {
+		return err
+	}
+	for i, f := range files {
+		local := filepath.Join(rulesFlags.path, strings.TrimPrefix(f.repoPath, rules.DefaultDir+"/"))
+		if err := os.WriteFile(local, []byte(f.body), 0o600); err != nil {
+			return err
 		}
-		written = append(written, f.path)
+		files[i].path = local
 	}
-	return written, nil
+	return nil
 }
 
 func firstCheck(group *SweepUnhandled) string {
@@ -349,4 +389,109 @@ func indent(body string, by int) string {
 		lines[i] = pad + strings.TrimRight(line, " \t")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// draftBranch is where a drafted rule lands. One branch per rule, so a
+// second draft of the same pattern reports the open pull request rather than
+// opening a second one.
+func draftBranch(name string) string { return "rule/" + name }
+
+// openDraftPR commits the draft and opens the pull request that carries it.
+// marge has no git workspace and no push credential, so the tree, the
+// commit, the branch and the pull request are all made through the API with
+// the token the sweep already runs under. That token needs contents:write
+// and pull-requests:write on the repository.
+func openDraftPR(ctx context.Context, client *github.Client, owner, repo, base, name string, files []draftFile, group *SweepUnhandled) (*github.PullRequest, error) {
+	baseRef, _, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+base)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s/%s@%s: %w", owner, repo, base, err)
+	}
+	baseCommit, _, err := client.Git.GetCommit(ctx, owner, repo, baseRef.GetObject().GetSHA())
+	if err != nil {
+		return nil, fmt.Errorf("reading the head commit of %s: %w", base, err)
+	}
+
+	entries := make([]*github.TreeEntry, 0, len(files))
+	for _, f := range files {
+		entries = append(entries, &github.TreeEntry{
+			Path:    new(f.repoPath),
+			Mode:    new("100644"),
+			Type:    new("blob"),
+			Content: new(f.body),
+		})
+	}
+	tree, _, err := client.Git.CreateTree(ctx, owner, repo, baseCommit.GetTree().GetSHA(), entries)
+	if err != nil {
+		return nil, fmt.Errorf("writing the draft tree: %w", err)
+	}
+
+	commit, _, err := client.Git.CreateCommit(ctx, owner, repo, github.Commit{
+		Message: new(draftCommitMessage(name, group)),
+		Tree:    tree,
+		Parents: []*github.Commit{{SHA: baseRef.GetObject().SHA}},
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("committing the draft: %w", err)
+	}
+
+	branch := draftBranch(name)
+	_, _, err = client.Git.CreateRef(ctx, owner, repo, github.CreateRef{
+		Ref: "refs/heads/" + branch,
+		SHA: commit.GetSHA(),
+	})
+	if err != nil {
+		if open := openPRFor(ctx, client, owner, repo, branch); open != nil {
+			return open, nil
+		}
+		return nil, fmt.Errorf("creating branch %s: %w", branch, err)
+	}
+
+	pull, _, err := client.PullRequests.Create(ctx, owner, repo, github.CreatePullRequest{
+		Title: new(draftPRTitle(name)),
+		Head:  branch,
+		Base:  base,
+		Body:  new(draftPRBody(name, group)),
+		Draft: new(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("opening the pull request for %s: %w", branch, err)
+	}
+	return pull, nil
+}
+
+// openPRFor returns the pull request already standing on a branch, or nil.
+// A branch that exists means the pattern was drafted before, and a second
+// pull request for it would be noise.
+func openPRFor(ctx context.Context, client *github.Client, owner, repo, branch string) *github.PullRequest {
+	pulls, _, err := client.PullRequests.List(ctx, owner, repo, &github.PullRequestListOptions{
+		Head:  owner + ":" + branch,
+		State: "open",
+	})
+	if err != nil || len(pulls) == 0 {
+		return nil
+	}
+	return pulls[0]
+}
+
+func draftPRTitle(name string) string {
+	return "feat(rules): draft " + name
+}
+
+func draftCommitMessage(name string, group *SweepUnhandled) string {
+	return fmt.Sprintf("%s\n\nDrafted from signature %s, seen on %d PR(s): %s.\nThe action is blank, so the catalogue does not carry this rule yet.\n",
+		draftPRTitle(name), group.Signature, group.Count, strings.Join(group.PRs, ", "))
+}
+
+func draftPRBody(name string, group *SweepUnhandled) string {
+	return fmt.Sprintf(`## Problem
+
+A failure no rule recognises, signature %s, on %d PR(s): %s. The sweep reports it and applies nothing.
+
+## Change
+
+A rule skeleton for %s and the pair of scenarios its fixtures need, built from those PRs. `+
+		"`action:`"+` is blank and every TODO is unanswered, so `+"`marge rules validate`"+` refuses this as it stands.
+
+Name the action, write the log pattern against the recorded excerpt, and give the refusing scenario a real excerpt of a neighbouring failure. Push to `+"`%s`"+`.
+`, group.Signature, group.Count, strings.Join(group.PRs, ", "), name, draftBranch(name))
 }
