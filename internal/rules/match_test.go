@@ -150,6 +150,8 @@ match:
   states: [failed]
   check:
     name: "go-*"
+  pr:
+    files: ["go.mod"]
 action:
   name: close
 evidence:
@@ -163,6 +165,8 @@ match:
   states: [failed]
   check:
     name: "go-*"
+  pr:
+    files: ["go.mod"]
 action:
   name: update-branch
 evidence:
@@ -170,7 +174,12 @@ evidence:
 `
 	cat := catalogue(t, second, first)
 
-	hit := cat.Match(&Subject{State: pr.StatusFailed, Failing: []string{"go-build"}})
+	hit := cat.Match(&Subject{
+		State:   pr.StatusFailed,
+		Title:   "chore(deps): bump",
+		Failing: []string{"go-build"},
+		Files:   func() []string { return []string{"go.mod"} },
+	})
 
 	require.NotNil(t, hit)
 	require.Equal(t, "aa-earlier-rule", hit.Rule.Name)

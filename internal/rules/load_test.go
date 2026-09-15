@@ -24,6 +24,8 @@ source: runbook row 1
 match:
   check:
     name: "go-build"
+  pr:
+    titlePattern: "."
 action:
   name: ` + action + `
 evidence:

@@ -96,6 +96,9 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: merge-everything
 evidence:
@@ -128,6 +131,9 @@ match:
   states: [merged]
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: close
 evidence:
@@ -145,6 +151,9 @@ match:
   kinds: [quentin]
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: close
 evidence:
@@ -161,6 +170,9 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: close
 refuse: [skip-guards]
@@ -229,6 +241,9 @@ summary: s
 match:
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: close
 evidence:
@@ -245,6 +260,9 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: close
 `,
@@ -287,6 +305,9 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  log:
+    source: actions
+    pattern: 'boom'
 action:
   name: close
 refuse: [log-matched, log-matched]
@@ -305,6 +326,8 @@ source: runbook row 1
 match:
   check:
     name: "go-build"
+  pr:
+    titlePattern: "."
 action:
   name: update-branch
 evidence:
@@ -314,6 +337,44 @@ evidence:
 	require.NoError(t, err)
 	require.Empty(t, rule.States())
 	require.Empty(t, rule.Kinds())
+}
+
+// A check name says which job went red, never why. A rule whose only signal
+// is a check name must ask for the log, or it could act on a name alone.
+func TestParseRefusesACheckNameAsTheOnlySignal(t *testing.T) {
+	doc := `
+name: name-only
+summary: s
+source: runbook row 1
+match:
+  states: [failed]
+  check:
+    name: "go-build"
+action:
+  name: close
+evidence:
+  reason: y
+`
+	_, err := Parse("name-only.yaml", []byte(doc), testRegistry())
+	require.ErrorContains(t, err, "a check name is not a diagnosis")
+
+	withRefusal := `
+name: name-only
+summary: s
+source: runbook row 1
+match:
+  states: [failed]
+  check:
+    name: "go-build"
+action:
+  name: close
+refuse: [log-matched]
+evidence:
+  reason: y
+`
+	rule, err := Parse("name-only.yaml", []byte(withRefusal), testRegistry())
+	require.NoError(t, err)
+	require.Len(t, rule.Guards(), 1)
 }
 
 // A glob of stars names nothing in particular, so it is a classification

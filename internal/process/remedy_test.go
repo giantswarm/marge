@@ -42,6 +42,8 @@ match:
   states: [` + state + `]
   check:
     name: "go*"
+  pr:
+    titlePattern: "."
 action:
   name: update-branch
 evidence:

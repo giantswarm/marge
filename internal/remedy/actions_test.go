@@ -37,7 +37,15 @@ func botRequest(client *github.Client) *Request {
 }
 
 func TestDefaultRegistryNames(t *testing.T) {
-	require.Equal(t, []Name{CircleCIRetry, RerunFailed, UpdateBranch}, Default().Names())
+	require.Equal(t, []Name{
+		CircleCIRetry,
+		Close,
+		DispatchAlignWorkflow,
+		FixProtectionContext,
+		MarkWait,
+		RerunFailed,
+		UpdateBranch,
+	}, Default().Names())
 }
 
 func TestUpdateBranchAppliesOn202(t *testing.T) {

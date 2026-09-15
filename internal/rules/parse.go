@@ -62,6 +62,9 @@ func (r *Rule) validate(fileName string, reg *remedy.Registry) error {
 	if err := r.validateRefusals(); err != nil {
 		return err
 	}
+	if err := r.validateSignalStrength(); err != nil {
+		return err
+	}
 	return r.validateEvidence()
 }
 
@@ -181,6 +184,20 @@ func (r *Rule) validateRefusals() error {
 		r.compiled.guards = append(r.compiled.guards, build(r.Action.Name))
 	}
 	return nil
+}
+
+// validateSignalStrength refuses a rule whose only signal is a check name.
+// A check name says which job went red, never why, and the runbook is
+// explicit that only the failing step's log classifies a failure. Such a
+// rule must carry a log signal or declare the log-matched refusal.
+func (r *Rule) validateSignalStrength() error {
+	if r.Match.Check == nil || r.Match.Log != nil || r.Match.PR != nil {
+		return nil
+	}
+	if slices.Contains(r.Refuse, refusalLogMatched) {
+		return nil
+	}
+	return fmt.Errorf("a check name is not a diagnosis: add a log signal, a pr signal, or the %q refusal", refusalLogMatched)
 }
 
 func (r *Rule) validateEvidence() error {

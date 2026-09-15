@@ -19,6 +19,10 @@ func Default() *Registry {
 		updateBranch{},
 		rerunFailed{},
 		circleCIRetry{},
+		closePR{},
+		markWait{},
+		dispatchAlignWorkflow{},
+		fixProtectionContext{},
 	)
 }
 
