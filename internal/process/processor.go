@@ -267,7 +267,11 @@ func (p *Processor) finish(ctx context.Context, run *prRun) {
 // returns true only when every required context reported success, no
 // security check failed, and every remaining red check is a non-required
 // check that is red on the base head too (pre-existing, named in the
-// evidence). Every other outcome is recorded on the entry and ends the PR.
+// evidence). A pre-existing red check never shortens the wait for a
+// pending or missing required context. Every other outcome is recorded on
+// the entry and ends the PR. A protection the caller may not read leaves
+// the required set empty; GitHub then enforces it at merge time and the
+// refusal is classified as a wait.
 func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 	var deadline <-chan time.Time
 	if p.CheckTimeout > 0 {
@@ -303,17 +307,12 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 		required := evaluateRequired(prot.Contexts, outcome.reported)
 
 		if len(required.Failed) > 0 || outcome.state == stateFailure || outcome.state == stateError {
-			return p.classifyFailure(ctx, run, outcome, prot)
+			if !p.classifyFailure(ctx, run, outcome, prot) {
+				return false
+			}
 		}
 
-		waiting := !required.allGreen() || outcome.state == statePending
-		if !prot.Readable && run.pull.GetMergeableState() == "blocked" && outcome.state == stateSuccess {
-			// The protection could not be read, GitHub says the PR is
-			// blocked and nothing reported red: a required check may be
-			// missing. Wait, do not guess.
-			waiting = true
-		}
-		if !waiting {
+		if required.allGreen() && outcome.state != statePending {
 			return true
 		}
 
@@ -350,8 +349,8 @@ func waitingDetail(required requiredOutcome, state string) string {
 // order: CircleCI auto-cancel (no verdict), stale (fixed on the base since),
 // obsolete (nobody has to fix it), security (never merge), then the
 // required/non-required split. It returns
-// true when the PR may still merge: every red check is non-required and red
-// on the base head too.
+// true when every red check is non-required and red on the base head too;
+// the caller still applies the required-check wait.
 func (p *Processor) classifyFailure(ctx context.Context, run *prRun, outcome checkOutcome, prot protection) bool {
 	if cancelled, note := p.classifyCancelled(ctx, run.pull, outcome); cancelled != nil {
 		p.handleCancelled(ctx, run, cancelled)
@@ -373,7 +372,7 @@ func (p *Processor) classifyFailure(ctx context.Context, run *prRun, outcome che
 	}
 	if name := classifySecurityFailure(outcome.failedChecks, p.securityPatterns()); name != "" {
 		run.set(pr.StatusFailedSecurity, fmt.Sprintf("security check failed: %s", name))
-		p.postOnce(ctx, run, "", "blocked", "security check failed: "+name)
+		p.postOnce(ctx, run, pr.MarkerKindEvidence, "security-blocked", "security check failed: "+name)
 		return false
 	}
 

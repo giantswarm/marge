@@ -136,6 +136,9 @@ type StatusEntry struct {
 	// empty for a PR the sweep could not fetch.
 	Kind       Kind
 	UpdateType UpdateType
+	// Label is the bot-prs-sweep/<class> label that is on the PR after the
+	// sweep; empty when none was written (dry run, or the write failed).
+	Label string
 	// Rescue is the most recent prior automated rescue attempt found on
 	// the PR, if any. Only populated for failure-state entries.
 	Rescue *RescueMarker
@@ -200,6 +203,15 @@ func (s *PRStatus) SetClassification(idx int, kind Kind, updateType UpdateType) 
 	if idx < len(s.entries) {
 		s.entries[idx].Kind = kind
 		s.entries[idx].UpdateType = updateType
+	}
+}
+
+// SetLabel records the classification label that is on the PR.
+func (s *PRStatus) SetLabel(idx int, label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.entries) {
+		s.entries[idx].Label = label
 	}
 }
 

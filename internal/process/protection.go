@@ -13,16 +13,9 @@ import (
 )
 
 // protection is what the sweep needs from a base branch's protection: the
-// required status check contexts and whether the branch must be up to date
-// before merging.
+// required status check contexts.
 type protection struct {
 	Contexts []string
-	Strict   bool
-	// Readable is false when GitHub refused to show the protection. Only a
-	// repository admin may read it, and only an admin may merge past it
-	// when enforce_admins is off, so a caller who cannot read it cannot
-	// bypass it either: GitHub enforces the checks for that caller.
-	Readable bool
 }
 
 // protectionCache memoises requiredProtection per owner/repo@base for the
@@ -34,9 +27,11 @@ type protectionCache struct {
 
 // requiredProtection reads the base branch's required status checks. A 404
 // means the branch has no protection or no required checks: nothing is
-// required. A 403 means the caller is not an admin: the protection stays
-// unknown and GitHub itself enforces it for that caller. Any other error is
-// returned so a transient failure never softens into "nothing required".
+// required. A 403 means the caller is not an admin: only an admin may merge
+// past the protection when enforce_admins is off, so GitHub enforces the
+// checks for that caller and the merge refusal is classified as a wait. Any
+// other error is returned so a transient failure never softens into
+// "nothing required".
 func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base string) (protection, error) {
 	key := info.Owner + "/" + info.Repo + "@" + base
 	p.protectionMu.Lock()
@@ -53,7 +48,6 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 	checks, resp, err := p.Client.Repositories.GetRequiredStatusChecks(ctx, info.Owner, info.Repo, base)
 	switch {
 	case err == nil:
-		result = protection{Readable: true, Strict: checks.Strict}
 		for _, c := range checks.GetChecks() {
 			if c.Context != "" {
 				result.Contexts = append(result.Contexts, c.Context)
@@ -62,10 +56,7 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 		if len(result.Contexts) == 0 {
 			result.Contexts = append(result.Contexts, checks.GetContexts()...)
 		}
-	case isStatus(err, resp, http.StatusNotFound):
-		result = protection{Readable: true}
-	case isStatus(err, resp, http.StatusForbidden):
-		result = protection{Readable: false}
+	case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
 	default:
 		return protection{}, err
 	}

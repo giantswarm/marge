@@ -76,7 +76,7 @@ export GITHUB_TOKEN="ghp_..."
 | Commit statuses | Read | Read combined commit status |
 | Metadata | Read | Required by default |
 | Contents | Read & write | Compare a PR with its base (stale classification, marker fingerprints); update a PR branch from its base |
-| Administration | Read | Read the base branch's required status checks. Without it GitHub enforces the checks for you and marge waits whenever GitHub reports the PR as blocked |
+| Administration | Read | Read the base branch's required status checks. Without it marge approves and tries the merge, GitHub enforces the checks, and a refusal for a check reason is reported as `Waiting for checks` |
 
 With `--team`, the token also needs read access to `giantswarm/github`, where the team files live.
 
@@ -106,15 +106,15 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 
 marge touches PRs authored by four bots and nothing else: `renovate[bot]` (Renovate), `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, nancy-fixer's security remediation PRs) and `dependabot[bot]`. A PR by a person, the caller's own included, is reported as `Untrusted author` and never approved or merged. There is no flag to widen that set.
 
-A green PR merges when the company default policy says it is eligible: Align files and Herald PRs always; Renovate and Dependabot patch, minor, digest, pin and lockfile updates. A major update, or one whose size marge cannot read, is `Held` for a person. The update size comes from the versions Dependabot writes in the title and Renovate writes in the body's *Change* column.
+A green PR merges when the company default policy says it is eligible: Align files and Herald PRs always; Renovate and Dependabot patch, minor, digest, pin and lockfile updates. A major update, or one whose size marge cannot read, is `Held` for a person. The update size comes from the versions Dependabot writes in the title (or, for a group, per dependency in the body) and Renovate writes in the body's *Change* column.
 
 #### Guards
 
 Each guard is enforced by the engine and covered by a scenario test; none has an override flag.
 
-- **Required checks.** The base branch's required status checks are read from its protection. A required context that is pending, or that nobody reported, is a wait (`Waiting for checks`), never a bypass. A merge GitHub refuses for a check reason is a wait too.
+- **Required checks.** The base branch's required status checks are read from its protection. A required context that is pending, or that nobody reported, is a wait (`Waiting for checks`), never a bypass, also when every red check on the head is pre-existing. A merge GitHub refuses for a check reason is a wait too.
 - **Red non-required check.** A failing check that is not required blocks the merge when the same check is green on the base head, or never ran there. When it is red on the base head too the failure is pre-existing: the PR merges and the check is named in the detail and in an evidence comment.
-- **Security check.** A failing check whose name matches the security pattern list is never merged past, even when it is red on the base head too. The PR gets a `blocked` marker that rescue tooling reads.
+- **Security check.** A failing check whose name matches the security pattern list is never merged past, even when it is red on the base head too. The PR gets a `security-blocked` evidence comment; a rescue may still be dispatched on it.
 - **Auto-merge.** A PR with GitHub auto-merge enabled is observed only; GitHub merges it.
 - **Review rule.** A green PR that GitHub refuses to merge after marge's approval is `Awaiting approval`. marge never merges as an admin and never touches `enforce_admins`.
 - **Strict protection.** A green PR behind its base is brought up to date with *Update branch* and merges on a later sweep, once its checks ran on the new head.
@@ -123,7 +123,7 @@ Each guard is enforced by the engine and covered by a scenario test; none has an
 
 Every PR the sweep touched carries exactly one `bot-prs-sweep/<class>` label, replaced on each sweep: `merged`, `auto-merge`, `eligible`, `pending`, `action-required`, `awaiting-approval`, `security`, `stale`, `conflict`, `ci-unavailable`, `skipped`. Labels are display only; no guard reads them back. A label marge may not write is a note on the entry, never a different outcome.
 
-An action marge performed, or a guard decision a person needs to see, is written once as an evidence comment: `update-branch`, `refresh`, `retry`, `merged-past-red-check`, `awaiting-approval`. Evidence is an [ai-rescue marker](#rescue-markers-prior-ai-rescue-attempts) with `"kind":"evidence"` and `"tool":"marge"`, so it carries the head SHA and the diff fingerprint. A second sweep on the same change writes nothing: the fingerprint, not the SHA, decides, so a Renovate rebase does not repeat the comment.
+An action marge performed, or a guard decision a person needs to see, is written once as an evidence comment: `update-branch`, `retry`, `merged-past-red-check`, `awaiting-approval`, `security-blocked`. Evidence is an [ai-rescue marker](#rescue-markers-prior-ai-rescue-attempts) with `"kind":"evidence"` and `"tool":"marge"`, so it carries the head SHA and the diff fingerprint. A second sweep on the same change writes nothing: the fingerprint, not the SHA, decides, so a Renovate rebase does not repeat the comment.
 
 #### Actions
 
@@ -288,7 +288,7 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 Starts an MCP server exposing two tools:
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `kind`, `update_type`, `label`, `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
 
 | Flag | Default | Description |

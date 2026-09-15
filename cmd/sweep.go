@@ -34,7 +34,7 @@ const defaultQueryCheckTimeout = 5 * time.Minute
 func init() {
 	sweepCmd.Flags().StringVar(&sweepOpts.Team, "team", "", "Sweep the repositories of this team, read from repositories/team-<name>.yaml in giantswarm/github")
 	sweepCmd.Flags().StringVar(&sweepOpts.Query, "query", "", "Sweep the bot PRs matching this GitHub search text, the way `marge [query]` does")
-	sweepCmd.Flags().StringVar(&sweepFlags.actions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(actionNames(), ", ")+" (default: all)")
+	sweepCmd.Flags().StringVar(&sweepFlags.actions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
 	sweepCmd.Flags().BoolVar(&sweepOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
 	sweepCmd.Flags().DurationVar(&sweepFlags.checkTimeout, "check-timeout", 0, "How long to wait for a PR's pending checks (default: 0 with --team, 5m with --query)")
 	sweepCmd.Flags().BoolVarP(&sweepOpts.Watch, "watch", "w", false, "Keep polling for new PRs (every 60s)")
@@ -46,14 +46,6 @@ func init() {
 	sweepCmd.Flags().StringVar(&sweepOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(sweepCmd)
-}
-
-func actionNames() []string {
-	names := make([]string, 0, len(process.AllActions))
-	for _, a := range process.AllActions {
-		names = append(names, string(a))
-	}
-	return names
 }
 
 // resolveSweepOptions validates the scope flags and fills the options that

@@ -46,6 +46,9 @@ type guardFixture struct {
 	// with instead of merging.
 	mergeRefusal   string
 	labelForbidden bool
+	// protectionForbidden makes GitHub answer 403 to the protection read,
+	// as it does for a caller who is not a repository admin.
+	protectionForbidden bool
 
 	mu       sync.Mutex
 	labels   []string
@@ -158,6 +161,10 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 	})
 
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		if f.protectionForbidden {
+			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
+			return
+		}
 		if f.required == nil {
 			http.NotFound(w, r)
 			return
@@ -385,6 +392,51 @@ func TestGuard_redNonRequiredCheck(t *testing.T) {
 	}
 }
 
+// TestGuard_preexistingRedNeverShortensTheRequiredWait: a red non-required
+// check that is red on the base too does not let the PR past a required
+// context that is still pending or was never reported. Nothing is approved.
+func TestGuard_preexistingRedNeverShortensTheRequiredWait(t *testing.T) {
+	for _, headState := range []string{"pending", ""} {
+		name := headState
+		if name == "" {
+			name = "missing"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := greenFixture()
+			if headState == "" {
+				delete(f.headChecks, "go-build")
+			} else {
+				f.headChecks["go-build"] = headState
+			}
+			f.headChecks["lint"] = "failure"
+			f.baseChecks["lint"] = "failure"
+			got := f.run(t, nil)
+
+			require.Equal(t, pr.StatusWaitingChecks, got.State, got.Detail)
+			require.Contains(t, got.Detail, "go-build")
+			require.Zero(t, f.approveCalls.Load())
+			require.Zero(t, f.mergeCalls.Load())
+			require.Equal(t, []string{"bot-prs-sweep/pending"}, f.labelSet())
+		})
+	}
+}
+
+// TestGuard_unreadableProtectionLeavesTheCheckToGitHub: a caller who may
+// not read the protection still approves and tries the merge; GitHub's
+// refusal for a required check is a wait.
+func TestGuard_unreadableProtectionLeavesTheCheckToGitHub(t *testing.T) {
+	f := greenFixture()
+	f.protectionForbidden = true
+	f.mergeableState = "blocked"
+	f.mergeRefusal = `Required status check "release" is expected.`
+	got := f.run(t, nil)
+
+	require.Equal(t, pr.StatusWaitingChecks, got.State, got.Detail)
+	require.Equal(t, int32(1), f.approveCalls.Load())
+	require.Equal(t, int32(1), f.mergeCalls.Load())
+	require.Zero(t, f.protectionWrites.Load())
+}
+
 // TestGuard_redRequiredCheckIsAFailure: a red required check is a failure
 // whatever the base says.
 func TestGuard_redRequiredCheckIsAFailure(t *testing.T) {
@@ -400,7 +452,8 @@ func TestGuard_redRequiredCheckIsAFailure(t *testing.T) {
 
 // TestGuard_securityCheckNeverMerges: a failing security check is never
 // merged past, even when it is red on the base head too, and leaves a
-// blocked marker that a rescue reads.
+// security-blocked evidence comment. The evidence is not a rescue record,
+// so a rescue may still be dispatched on the PR.
 func TestGuard_securityCheckNeverMerges(t *testing.T) {
 	f := greenFixture()
 	f.headChecks["gosec"] = "failure"
@@ -414,8 +467,9 @@ func TestGuard_securityCheckNeverMerges(t *testing.T) {
 	require.Equal(t, int32(1), f.commentPosts.Load())
 	marker := pr.ParseRescueMarker(f.comments[0])
 	require.NotNil(t, marker)
-	require.Equal(t, "blocked", marker.Outcome)
-	require.False(t, marker.IsEvidence(), "a security block is a rescue-visible marker")
+	require.Equal(t, "security-blocked", marker.Outcome)
+	require.True(t, marker.IsEvidence(), "a security block is evidence, not a prior rescue attempt")
+	require.Nil(t, got.Rescue, "evidence never counts as a prior rescue")
 }
 
 // TestGuard_onlyTrustedBotsAreSwept: a person's PR, the caller's own
@@ -558,6 +612,7 @@ func TestGuard_labelReplacedWhenClassChanges(t *testing.T) {
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
 	require.Equal(t, int32(1), f.labelRemoves.Load())
 	require.ElementsMatch(t, []string{"renovate", "bot-prs-sweep/merged"}, f.labelSet())
+	require.Equal(t, "bot-prs-sweep/merged", got.Label)
 }
 
 // TestGuard_dryRunWritesNothing: every outcome is decided and reported,
@@ -569,6 +624,7 @@ func TestGuard_dryRunWritesNothing(t *testing.T) {
 	require.Equal(t, pr.StatusSkipped, got.State, got.Detail)
 	require.Contains(t, got.Detail, "would approve, merge (squash)")
 	require.Zero(t, f.approveCalls.Load()+f.mergeCalls.Load()+f.labelAdds.Load()+f.commentPosts.Load())
+	require.Empty(t, got.Label, "no label was written, so none is reported")
 }
 
 // TestGuard_classifyOnlyLabelsAndStops: --actions classify writes the
@@ -591,6 +647,7 @@ func TestGuard_labelForbiddenNeverChangesTheOutcome(t *testing.T) {
 
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
 	require.Contains(t, got.Detail, "label not set")
+	require.Empty(t, got.Label)
 }
 
 func TestGuard_forkIsSkipped(t *testing.T) {

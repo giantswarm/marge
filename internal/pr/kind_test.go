@@ -49,6 +49,8 @@ func TestClassifyUpdate(t *testing.T) {
 		{"dependabot minor from title", KindDependabot, "chore(deps): bump actions/checkout from 4.1.0 to 4.2.0", "", UpdateMinor},
 		{"dependabot major from title", KindDependabot, "Bump lodash from 3.10.1 to 4.17.21", "", UpdateMajor},
 		{"dependabot group without versions is unknown", KindDependabot, "Bump the go_modules group across 1 directory with 3 updates", "", UpdateUnknown},
+		{"dependabot group takes the largest body row", KindDependabot, "Bump the go_modules group across 1 directory with 3 updates", "Bumps the go_modules group with 3 updates in the / directory: a, b and c.\n\nUpdates `github.com/a/a` from 1.2.3 to 1.2.4\n- [Release notes](https://x)\n\nUpdates `github.com/b/b` from 2.1.0 to 2.3.0\n\nUpdates `github.com/c/c` from 0.9.1 to 0.9.2\n", UpdateMinor},
+		{"dependabot group with a major row is major", KindDependabot, "Bump the npm_and_yarn group with 2 updates", "Updates `lodash` from 3.10.1 to 4.17.21\nUpdates `react` from 18.3.1 to 18.3.2\n", UpdateMajor},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

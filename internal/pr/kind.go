@@ -65,16 +65,20 @@ var (
 	// changeCellRE matches one "Change" cell of the Renovate PR body table:
 	// two backticked versions joined by an arrow.
 	changeCellRE = regexp.MustCompile("`([^`]+)`\\s*(?:→|->)\\s*`([^`]+)`")
+	// dependabotUpdateRE matches one "Updates `dep` from X to Y" line of a
+	// Dependabot group PR body.
+	dependabotUpdateRE = regexp.MustCompile("(?m)^Updates `[^`]+` from (\\S+) to (\\S+)")
 	// goMajorPathRE matches the /vN suffix of a Go module path.
 	goMajorPathRE = regexp.MustCompile(`/v(\d+)$`)
 	hexRE         = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 )
 
 // ClassifyUpdate derives the update type of a bot PR from what the bot
-// wrote. Dependabot titles name both versions ("from X to Y"). Renovate
-// titles name only the target, so the source comes from the body's Change
-// column; grouped PRs take the largest change of their rows. Anything that
-// cannot be read is UpdateUnknown, never a guess.
+// wrote. Dependabot titles name both versions ("from X to Y"); a Dependabot
+// group names them per dependency in the body. Renovate titles name only
+// the target, so the source comes from the body's Change column. Grouped
+// PRs take the largest change of their rows. Anything that cannot be read
+// is UpdateUnknown, never a guess.
 func ClassifyUpdate(kind Kind, title, body string) UpdateType {
 	switch kind {
 	case KindAlignFiles, KindHerald:
@@ -100,6 +104,9 @@ func ClassifyUpdate(kind Kind, title, body string) UpdateType {
 
 	largest := UpdateUnknown
 	for _, m := range changeCellRE.FindAllStringSubmatch(body, -1) {
+		largest = larger(largest, diffType(m[1], m[2]))
+	}
+	for _, m := range dependabotUpdateRE.FindAllStringSubmatch(body, -1) {
 		largest = larger(largest, diffType(m[1], m[2]))
 	}
 	if largest != UpdateUnknown {

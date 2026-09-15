@@ -42,11 +42,13 @@ func (p *Processor) setLabel(ctx context.Context, run *prRun, class string) {
 		}
 	}
 	if present {
+		run.status.SetLabel(run.idx, want)
 		return
 	}
 
 	_, resp, err := p.Client.Issues.AddLabelsToIssue(ctx, run.info.Owner, run.info.Repo, run.info.Number, []string{want})
 	if err == nil {
+		run.status.SetLabel(run.idx, want)
 		return
 	}
 	if !isStatus(err, resp, http.StatusNotFound) && !isStatus(err, resp, http.StatusUnprocessableEntity) {
@@ -59,7 +61,9 @@ func (p *Processor) setLabel(ctx context.Context, run *prRun, class string) {
 	}
 	if _, _, err := p.Client.Issues.AddLabelsToIssue(ctx, run.info.Owner, run.info.Repo, run.info.Number, []string{want}); err != nil {
 		run.note("label not set: " + ghErrorDetail("", err))
+		return
 	}
+	run.status.SetLabel(run.idx, want)
 }
 
 func (p *Processor) ensureLabel(ctx context.Context, info pr.PRInfo, name string) error {

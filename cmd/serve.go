@@ -398,7 +398,8 @@ type SweepPREntry struct {
 	Status string `json:"status"`
 	Detail string `json:"detail,omitempty"`
 	// Kind is the bot that authored the PR; UpdateType the size of the
-	// update it carries; Label the bot-prs-sweep/<class> label written.
+	// update it carries; Label the bot-prs-sweep/<class> label that is on
+	// the PR after the sweep, empty when nothing was written.
 	Kind       string `json:"kind,omitempty"`
 	UpdateType string `json:"update_type,omitempty"`
 	Label      string `json:"label,omitempty"`
@@ -516,9 +517,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure) SweepResult {
 		if e.UpdateType != "" {
 			entry.UpdateType = string(e.UpdateType)
 		}
-		if class := pr.LabelClass(e.State); class != "" {
-			entry.Label = pr.LabelPrefix + class
-		}
+		entry.Label = e.Label
 		if !e.PR.CreatedAt.IsZero() {
 			entry.CreatedAt = e.PR.CreatedAt.UTC().Format(time.RFC3339)
 			entry.AgeDays = pr.AgeDays(e.PR.CreatedAt, now)

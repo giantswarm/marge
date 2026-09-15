@@ -25,7 +25,7 @@ var runActions string
 
 func init() {
 	runCmd.Flags().BoolVar(&runOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
-	runCmd.Flags().StringVar(&runActions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(actionNames(), ", ")+" (default: all)")
+	runCmd.Flags().StringVar(&runActions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
 	runCmd.Flags().BoolVarP(&runOpts.Watch, "watch", "w", false, "Keep polling for new PRs (every 60s)")
 	runCmd.Flags().StringVar(&runOpts.Grouping, "grouping", "repo", "Group by \"repo\" or \"dependency\"")
 	runCmd.Flags().StringVar(&runOpts.Org, "org", "", "Limit to repos owned by this org or user")

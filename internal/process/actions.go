@@ -49,7 +49,7 @@ func ParseActions(csv string) (ActionSet, error) {
 			continue
 		}
 		if !isAction(name) {
-			return nil, fmt.Errorf("unknown action %q: valid actions are %s", raw, strings.Join(actionNames(), ", "))
+			return nil, fmt.Errorf("unknown action %q: valid actions are %s", raw, strings.Join(ActionNames(), ", "))
 		}
 		set[name] = true
 	}
@@ -86,7 +86,8 @@ func isAction(a Action) bool {
 	return false
 }
 
-func actionNames() []string {
+// ActionNames lists every action name in execution order.
+func ActionNames() []string {
 	names := make([]string, 0, len(AllActions))
 	for _, a := range AllActions {
 		names = append(names, string(a))
