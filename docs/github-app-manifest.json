@@ -1,0 +1,21 @@
+{
+  "name": "GiantSwarm Marge",
+  "url": "https://github.com/giantswarm/marge",
+  "description": "Sweep engine for bot pull requests: classifies, approves and merges Renovate, Align files, Herald and Dependabot PRs for a team.",
+  "public": false,
+  "redirect_url": "http://localhost:8099/callback",
+  "hook_attributes": {
+    "url": "https://example.invalid/unused",
+    "active": false
+  },
+  "default_events": [],
+  "default_permissions": {
+    "pull_requests": "write",
+    "contents": "write",
+    "checks": "read",
+    "statuses": "read",
+    "issues": "write",
+    "actions": "write",
+    "administration": "write"
+  }
+}

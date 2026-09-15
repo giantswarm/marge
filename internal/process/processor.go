@@ -62,6 +62,7 @@ type Processor struct {
 	RetryCancelled bool
 
 	staleCache
+	accessCache
 }
 
 func NewProcessor(client *github.Client, dryRun bool, mergeAutoMerge bool, login string, trustedAuthors map[string]bool) *Processor {
@@ -119,12 +120,18 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 
+	selfAuthored := strings.EqualFold(info.Author, p.Login)
+
 	if p.DryRun {
-		status.Update(idx, pr.StatusSkipped, "dry-run")
+		detail := "dry-run"
+		if !selfAuthored {
+			if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
+				detail = withNote(detail, writeAccessDetail(err))
+			}
+		}
+		status.Update(idx, pr.StatusSkipped, detail)
 		return
 	}
-
-	selfAuthored := strings.EqualFold(info.Author, p.Login)
 
 	if !selfAuthored {
 		if err := p.approve(ctx, info, status, idx); err != nil {
@@ -433,6 +440,11 @@ func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRSt
 		if r.GetUser().GetLogin() == p.Login && r.GetState() == "APPROVED" {
 			return nil
 		}
+	}
+
+	if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
+		status.Update(idx, pr.StatusFailed, writeAccessDetail(err))
+		return err
 	}
 
 	status.Update(idx, pr.StatusApproving, "")
