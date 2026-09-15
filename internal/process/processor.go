@@ -120,12 +120,18 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 
+	selfAuthored := strings.EqualFold(info.Author, p.Login)
+
 	if p.DryRun {
-		status.Update(idx, pr.StatusSkipped, "dry-run")
+		detail := "dry-run"
+		if !selfAuthored {
+			if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
+				detail = withNote(detail, writeAccessDetail(err))
+			}
+		}
+		status.Update(idx, pr.StatusSkipped, detail)
 		return
 	}
-
-	selfAuthored := strings.EqualFold(info.Author, p.Login)
 
 	if !selfAuthored {
 		if err := p.approve(ctx, info, status, idx); err != nil {
@@ -424,11 +430,6 @@ func withNote(detail, note string) string {
 }
 
 func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) error {
-	if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
-		status.Update(idx, pr.StatusFailed, "approve refused: "+err.Error())
-		return err
-	}
-
 	reviews, _, err := p.Client.PullRequests.ListReviews(ctx, info.Owner, info.Repo, info.Number, nil)
 	if err != nil {
 		status.Update(idx, pr.StatusFailed, ghErrorDetail("review list error", err))
@@ -439,6 +440,11 @@ func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRSt
 		if r.GetUser().GetLogin() == p.Login && r.GetState() == "APPROVED" {
 			return nil
 		}
+	}
+
+	if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
+		status.Update(idx, pr.StatusFailed, writeAccessDetail(err))
+		return err
 	}
 
 	status.Update(idx, pr.StatusApproving, "")

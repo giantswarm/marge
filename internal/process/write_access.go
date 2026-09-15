@@ -16,16 +16,22 @@ import (
 // permission that confers that access.
 var errNoWriteAccess = errors.New("no write access to the repository")
 
+// errWriteAccessUnknown separates "GitHub reported no write access" from
+// "GitHub reported nothing to read". The repository payload carries
+// permissions.push only for an actor GitHub resolves permissions for; an
+// absent field is an unanswered question, not a denial. Both refuse the
+// approval, because an approval that does not count is worse than a stopped
+// sweep, but only one of them means the permission set is wrong.
+var errWriteAccessUnknown = errors.New("repository carried no permissions.push field")
+
 // ensureWriteAccess returns nil when the authenticated actor holds write
-// access to the repository, and errNoWriteAccess when it does not. The answer
-// is read once per repository and memoised for the rest of the sweep.
+// access to the repository, errNoWriteAccess when GitHub reports it does not,
+// and errWriteAccessUnknown when GitHub reports no answer at all. A settled
+// answer is read once per repository and memoised for the rest of the sweep.
 func (p *Processor) ensureWriteAccess(ctx context.Context, owner, repo string) error {
 	key := owner + "/" + repo
 
 	p.writeAccessMu.Lock()
-	if p.writeAccessCache == nil {
-		p.writeAccessCache = make(map[string]bool)
-	}
 	allowed, cached := p.writeAccessCache[key]
 	p.writeAccessMu.Unlock()
 
@@ -34,9 +40,16 @@ func (p *Processor) ensureWriteAccess(ctx context.Context, owner, repo string) e
 		if err != nil {
 			return fmt.Errorf("write access check on %s: %w", key, err)
 		}
-		allowed = repository.GetPermissions().GetPush()
+		permissions := repository.GetPermissions()
+		if permissions == nil || permissions.Push == nil {
+			return fmt.Errorf("%w: %s", errWriteAccessUnknown, key)
+		}
+		allowed = *permissions.Push
 
 		p.writeAccessMu.Lock()
+		if p.writeAccessCache == nil {
+			p.writeAccessCache = make(map[string]bool)
+		}
 		p.writeAccessCache[key] = allowed
 		p.writeAccessMu.Unlock()
 	}
@@ -45,6 +58,20 @@ func (p *Processor) ensureWriteAccess(ctx context.Context, owner, repo string) e
 		return fmt.Errorf("%w: %s; a GitHub App needs contents: write for its approval to count", errNoWriteAccess, key)
 	}
 	return nil
+}
+
+// writeAccessDetail renders an ensureWriteAccess failure for status output. A
+// proven denial reads as a refusal; a failed or unanswered lookup must not,
+// because the two need different repairs.
+func writeAccessDetail(err error) string {
+	switch {
+	case errors.Is(err, errNoWriteAccess):
+		return "approve refused: " + err.Error()
+	case errors.Is(err, errWriteAccessUnknown):
+		return "write access unknown: " + err.Error()
+	default:
+		return ghErrorDetail("write access check error", err)
+	}
 }
 
 // accessCache is the per-Processor memo used by ensureWriteAccess. It lives
