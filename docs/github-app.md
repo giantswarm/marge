@@ -1,7 +1,8 @@
 # The sweep GitHub App
 
 marge acts on GitHub through one GitHub App, owned by the `giantswarm`
-organization and installed on all repositories. The App serves both paths:
+organization and installed on all repositories. The App is registered and its
+permissions are settled. The App serves both paths:
 
 - **Interactive.** The App's user-to-server flow backs muster's GitHub
   connector. The token is the person's. The person's effective rights are the
@@ -10,7 +11,16 @@ organization and installed on all repositories. The App serves both paths:
 - **Unattended.** Installation tokens, minted on demand from the private key,
   back the scheduled sweep and the weekly rescue run. GitHub sees the App.
 
-No personal access token is used anywhere.
+**Neither path runs yet.** This page records the App, not marge's behaviour
+today. `internal/github` authenticates with one token string read from
+`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth login`. marge holds no App ID, no
+private key and no client credentials, and it mints no installation token.
+Read every claim below about what marge does as the target state. The
+interactive path needs the callback URLs (roadmap#4357); the unattended path
+needs App authentication in `internal/github` and the credentials in cluster
+Secrets (roadmap#4356).
+
+The target is that no personal access token is used anywhere.
 
 | Field | Value |
 |---|---|
@@ -114,7 +124,8 @@ Rotate the private key:
 1. Generate a second private key on the App's settings page. The App now
    accepts both.
 2. Put the new key in the 1Password item and update the cluster Secret.
-3. Confirm that a sweep mints a token with the new key.
+3. Confirm that a token mints with the new key. Once marge mints its own,
+   confirm it on a sweep.
 4. Delete the old key on the settings page.
 
 Rotate the client secret:
@@ -132,13 +143,14 @@ first, then rotate. The App's installations survive; only the key dies.
 ## Installation tokens
 
 An installation token is minted on demand, for one repository, from the
-private key. Two properties hold, and both are measured:
+private key. Both properties below are measured against GitHub, by hand. The
+mint is not wired into marge yet.
 
 - **Scoped.** A token minted with `repositories: ["marge"]` lists exactly one
   repository at `GET /installation/repositories`, and answers `404` on a
   private repository outside that scope.
-- **Short-lived.** GitHub sets `expires_at` one hour after the mint. marge
-  mints a token per repository per run and never stores one.
+- **Short-lived.** GitHub sets `expires_at` one hour after the mint. The
+  design is one token per repository per run, stored nowhere.
 
 Measure the scope against a **private** repository. A public repository
 answers `200` to any valid token, in scope or not, so a public negative probe
