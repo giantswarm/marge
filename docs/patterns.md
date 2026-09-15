@@ -5,8 +5,9 @@ This document carries the sweep's knowledge of bot PR failures. Rules under
 ones a person or an agent still decides, and the hazards that make a wrong
 decision easy.
 
-Every row cites the runbook row it came from, so the runbook can be retired
-once every row lives here or in a rule.
+Every row of the runbook extraction is either a rule under `rules/` or a row
+on this page, and each one cites its runbook row. That is the condition for
+retiring the runbook.
 
 ## Patterns the engine acts on
 
@@ -18,7 +19,7 @@ the index.
 | A CircleCI build the platform cancelled | `circleci-auto-cancel` | `circleci-retry` | 74 |
 | cosign transparency-log conflict | `cosign-transparency-log-conflict` | `circleci-retry` | 32 |
 | A release asset 404 moments after publication | `release-asset-404-race` | `rerun-failed` | 33 |
-| An action or tool download that failed | `actions-runner-download-error` | `rerun-failed` | transient CI |
+| An action or tool download that failed | `actions-runner-download-error` | `rerun-failed` | 86 |
 | A dropped Go module-proxy connection | `go-module-proxy-stream-error` | `rerun-failed` | observed 2026-09-14 |
 | A failure already green on the base head | `stale-failure-green-on-base` | `update-branch` | 68 |
 | nancy guide-API error on an old orb | `nancy-guide-api-orb-delta` | `update-branch` | 37 |
@@ -27,6 +28,12 @@ the index.
 | A required context nobody reported | `required-check-name-drift` | `fix-protection-context` | 21, 44 |
 | A bump waiting on an upstream release | `ecosystem-not-ready` | `mark-wait` | 7, 9, 15, 31 |
 | gosec run without the repository configuration | `upstream-orb-gosec-fixtures` | `mark-wait` | 63 |
+
+Rows 5, 6, 86, 89 and 90 of the extraction state these patterns in their
+general form -- a stale branch, a transient failure, a job that never ran, a
+failure already fixed on the base, the release-asset race. The rules above
+are those rows with a log signal attached, which is what the engine needs to
+act on one.
 
 A failure no rule recognises is grouped by signature in the sweep report
 under `unhandled`. `marge rules draft <signature>` writes a rule skeleton and
@@ -54,8 +61,29 @@ which the sweep does not have. They become rules when those actions exist.
 | A `TEAM-NAME` placeholder in `Chart.yaml` | Replace it with the team from `CODEOWNERS` | 42 |
 | A staticcheck SA1019 deprecation after a bump | Rename the call site | 62 |
 | `github.Ptr` rejected by the `inline` analyzer | Replace it with the `new` builtin | 73 |
-| Transitive CVEs with a clean upgrade path | `go get` the parents, tidy, push | 23 |
-| A CVE with no fixed release | A time-boxed `.nancy-ignore` entry with a justification | 51 |
+| Transitive CVEs with a clean upgrade path | `go get` the parents, tidy, push | 23, 98 |
+| A CVE with no fixed release | A time-boxed `.nancy-ignore` entry with a justification | 51, 81 |
+| A custom Makefile target referencing a file the alignment migration deleted | Drop the file from the target on `teams-alignment-branch`; `Makefile.custom.mk` is the repository's own | 24 |
+| A chart icon the `abs` validator rejects (`C0004: IconDomainIsValid`) | `giantswarm-validator-ignored-checks: C0004` in `.abs/main.yaml` | 28 |
+| ATS refusing an unknown cluster type in its pre-run | Add a minimal `.ats/main.yaml` | 50 |
+| A placeholder PEM header in vendored chart docs tripping `gitleaks` | An allowlist regex in the repository's `.github/.gitleaks.toml` | 70 |
+
+The CVE rows are listed for completeness only. nancy-fixer already performs
+the bump and the time-boxed ignore, and the shared `fix-vulnerabilities`
+workflow opens the PR. marge sweeps those PRs as a bot PR kind and never
+re-implements the remedy (PRD decision 3).
+
+### Fixed on the default branch first
+
+The PR is blocked by a defect in the repository that the bump merely
+exposes. The fix is a PR on the default branch; the blocked PRs then need
+`update-branch`, which the engine does apply.
+
+| Pattern | Where the fix goes | Runbook row |
+|---|---|---|
+| architect v9 multi-arch default breaking a Dockerfile that is not arm64-ready | Pin `platforms: linux/amd64` on the default branch | 29 |
+| `check-values-schema` rejecting an empty `values.yaml` | Make the values file `{}` on the default branch | 34 |
+| A required check the Align files PR has not delivered yet (`pre-commit`, `semantic-pull-request`) | Land the align PR, then refresh each blocked PR | 36, 46 |
 
 ### Needing a person or an agent
 
@@ -67,6 +95,28 @@ which the sweep does not have. They become rules when those actions exist.
 | Entangled bumps that only pass together | The remedy is to fold several PRs into one branch | 40, 65, 66 |
 | A chart validator that newly rejects a chart | The fix is a CI values file, never a weakened guard | 22, 27 |
 | An alignment migration that renamed a built binary | The Dockerfile needs a per-architecture selection | 43 |
+| A security CVE in a transitive dependency with no clean path | The upgrade is a judgement about the dependency tree | 2 |
+| A CI configuration defect unrelated to the bump | Diagnosis comes before any remedy | 4 |
+| OCM bundle-wiring drift after several per-app releases | One combined catch-up PR, and usually a second round | 13, 103 |
+| A chart test failing in the apptestctl bootstrap (`no matches for kind "PodMonitor"`) | Merging past it is a decision, and only after the log confirms the bootstrap error | 18 |
+| An OCI artifact a component references but that was never pushed | The reference and the version must move in lockstep; the check is a repository defect | 45, 92 |
+| A major bump whose module system changed (`js-yaml` v5, ESM default export) | A small code change, spread over call sites | 53 |
+| A chart test that deploys and then goes silent until it times out | Merging past it needs the hang shape confirmed in the build log | 58 |
+| `helm dependencies update` failing on a vendir-vendored subchart | The vendor target needs a person; the PR is marked and left | 60 |
+| A test environment whose DOM implementation changed (`jsdom` v30) | A shared test setup file, written case by case | 77 |
+| An Align files PR blocked by the repository's own content | The per-repo rescue prompt, not the alignment payload | 107 |
+
+### Held by a team decision
+
+Nothing is wrong with the PR. Someone has to decide, and the sweep must not
+decide for them.
+
+| Pattern | Why the sweep leaves it | Runbook row |
+|---|---|---|
+| Upstream removed an API the consumer should stop using | The consumer's own change has to land first | 56 |
+| A vendored upstream chart going MAJOR | The repository owner owns that upgrade | 57 |
+| Renovate autoclosing a bump as a no-op after a sibling merged | The autoclose is correct; read the timeline actor before restoring anything | 75, 91 |
+| A dependency held by `allowedVersions` | The hold is the decision; the sweep reports and skips | 55 |
 
 ### Belonging upstream
 
@@ -82,33 +132,77 @@ leaves it; fixing the consumer would be undone on the next generation.
 | A vendored file tripping a pre-commit hook | `repositories/override/<repo>/` in `giantswarm/github` | 59 |
 | Renovate managing a vendored subtree | `renovate-custom.json5` in the repository | 39 |
 | A deprecated repository still receiving bumps | `lifecycle: deprecated` on the repository entry | 79 |
+| Two Renovate managers matching one image line | Delete the redundant repo-local regex manager | 76 |
+| Many pin PRs from a curate-generated chart | Renovate grouping, so one PR carries every pin | 69 |
+| A toolchain-version wave stalling the fleet on the linter | `devctl`, then `dispatch-align-workflow` per repository | 96 |
+| The same check failing across unrelated repositories in one sweep | Shared CI in `giantswarm/github` or an action it calls | 100, 104 |
+| A CircleCI project setting refusing the whole pipeline | The project setting; the sweep reports it as no verdict | 101 |
+| A central template change waiting to reach the repositories | The Align files workflow dispatch | 105 |
+
+## Mechanical, and out of the engine's reach
+
+The runbook calls these mechanical, and they are. The engine still cannot
+act on them, for a reason that is a property of the engine rather than of
+the pattern. Each says which.
+
+| Pattern | Why no rule expresses it | Runbook row |
+|---|---|---|
+| An archived repository still carrying open bot PRs | The sweep never sees them. Discovery searches `is:pr is:open archived:false`, so the PRs are filtered out before classification, and an archived repository is read-only in any case | 8 |
+| An architect-orb bump on a devctl-managed repository | The signal is the repository's own CircleCI config, not anything on the PR. A rule reads the diff, the checks and the logs, never a file on the default branch. The runbook's remedy also ends in "coordinate with the operator" | 30 |
+| A transitive-only `/v2` un-pin leaving a vulnerable v1 path | The signal is `go mod why` reporting that the main module does not need the package, which the engine cannot run. The nancy line alone does not separate a pin floor that still holds from a real finding, and the action would be `close` | 48 |
+
+## Hazards of running the sweep by hand
+
+The runbook carries these because a person drove it from a shell. The engine
+does not have them: it makes no local commit, runs no shell word-splitting,
+and never lifts admin enforcement. They are recorded so the runbook can be
+retired, not because marge acts on them.
+
+| Hazard | Runbook row |
+|---|---|
+| Reading CircleCI logs without a valid token | 78 |
+| Auditing the repository list before the sweep | 80 |
+| `require_all_checks_green` passing silently under zsh | 82 |
+| `commit.gpgsign=true` dropping a fix commit | 83 |
+| `--admin` not bypassing review while `enforce_admins` is on | 84 |
+| `gh` losing its token mid-sweep | 85 |
+| `gh pr checks` reporting all green on a head with no checks yet | 93 |
+| `set -- $var` not word-splitting under zsh | 95 |
+| Scratch clones on a tmpfs running out of space | 102 |
+| Triaging the output of `devctl pr approve-align-files` | 106 |
+| Choosing the toolchain for a rescue agent from the repository's manifest | 108 |
+| The rescue runtime's parameter names and its failure modes | 109, 110, 111 |
+
+The engine's own answer to row 93 is the `checks-settled` guard: a head that
+has not finished reporting is not a head that passed.
 
 ## Hazards
 
 These are the ways a reasonable-looking decision goes wrong. They are the
-reason several guards exist.
+reason several guards exist. Each cites the runbook row it comes from.
 
-- **A check name is not a diagnosis, and neither is a title.** Read the
+- **A check name is not a diagnosis, and neither is a title** (rows 99,
+  §2). Read the
   failing step's log. Never classify from a check name, a title, a
   repository, or a previous sweep's table. Validation refuses a rule whose
   only signal is one of those: a rule needs a log signal, or a `baseHead`,
   `files` or `match.protection.missingContexts` signal that reads the PR's
   state. A glob that matches everything is refused wherever one is
   accepted, so `files: ["**"]` is no way past it.
-- **Absent is not green.** A base branch that never ran a check has not
+- **Absent is not green** (row 89). A base branch that never ran a check has not
   passed it. A job filtered off the default branch makes "green on main"
   meaningless.
-- **A green security check is not evidence that a scan ran.** When a scanner
+- **A green security check is not evidence that a scan ran** (rows 81, 97). When a scanner
   is broken fleet-wide, a green result may mean it audited nothing.
-- **A missing CircleCI context is a stop.** A build can fail on the exact
+- **A missing CircleCI context is a stop** (row 87). A build can fail on the exact
   head without ever posting its status. Cross-check the build's
   `vcs_revision`; never merge past the gap.
-- **Twice red on the same commit is real.** One rerun or retry per change.
+- **Twice red on the same commit is real** (row 86, §2). One rerun or retry per change.
   That is the `once-per-change` guard.
-- **The branch name is part of the branch.** A failure that reproduces only
+- **The branch name is part of the branch** (row 88). A failure that reproduces only
   on one branch is not always the dependency: a long branch name has broken
   chart labels before.
-- **Teammate work comes first.** Before a migration, read the repository's
+- **Teammate work comes first** (§2). Before a migration, read the repository's
   open PRs and recent commits. An open teammate PR on the same subsystem is
   a stop, not a merge conflict to route around.
 - **A merged rule is live on the next sweep.** Nothing gates the catalogue
@@ -117,12 +211,13 @@ reason several guards exist.
   **held** in the registry until a measured run shows PRs that need it. A
   rule may name it and validation accepts it; the sweep refuses it and says
   so, so the gate is code rather than the absence of a rule.
-- **A context that has not reported is not a context nobody posts.** A
+- **A context that has not reported is not a context nobody posts** (rows
+  36, 46, 93, 94). A
   queued workflow reports nothing, which is what drift looks like. The
   `checks-settled` guard waits for the head to finish reporting, and a
   drift rule names the context shapes it diagnoses so the protection write
   touches those and no others.
-- **A generated file is never hand-edited.** `zz_*`, the generated
+- **A generated file is never hand-edited** (§2). `zz_*`, the generated
   `renovate.json5`, the align-managed `.pre-commit-config.yaml` and
   `.circleci/workflows.yml`. `Makefile.custom.mk` and `Chart.yaml` are the
   repository's own and may be written.

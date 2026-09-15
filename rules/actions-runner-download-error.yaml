@@ -1,6 +1,6 @@
 name: actions-runner-download-error
 summary: A GitHub Actions step fails while downloading an action or a tool.
-source: runbook, transient CI failures (D9)
+source: runbook row 86 (L291-316), transient infra
 match:
   states: [failed]
   log:
