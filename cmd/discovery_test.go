@@ -63,7 +63,7 @@ func TestBuildSweepResult_labelAndFailedRepositories(t *testing.T) {
 	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
 	status.Update(idx3, pr.StatusWaitingChecks, "required checks pending: go-build")
 
-	got := buildSweepResult(status, []repoFailure{{Repo: "o/broken", Err: "boom"}})
+	got := buildSweepResult(status, []repoFailure{{Repo: "o/broken", Err: "boom"}}, nil)
 
 	require.Len(t, got.Merged, 1)
 	require.Equal(t, "bot-prs-sweep/merged", got.Merged[0].Label)

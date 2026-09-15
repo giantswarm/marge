@@ -28,7 +28,7 @@ func TestBuildSweepResult_failedAndSecurityAreDisjoint(t *testing.T) {
 	idx4 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 4})
 	status.Update(idx4, pr.StatusSkipped, "dry-run")
 
-	got := buildSweepResult(status, nil)
+	got := buildSweepResult(status, nil, nil)
 
 	if got.Summary.Total != 4 {
 		t.Errorf("Total = %d, want 4", got.Summary.Total)
@@ -72,7 +72,7 @@ func TestBuildSweepResult_ciUnavailableIsSeparate(t *testing.T) {
 	idx2 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 2})
 	status.Update(idx2, pr.StatusBlockedCI, "Actions budget exhausted; no jobs ran: Test, Lint")
 
-	got := buildSweepResult(status, nil)
+	got := buildSweepResult(status, nil, nil)
 
 	if got.Summary.Failed != 1 {
 		t.Errorf("Failed = %d, want 1 (budget block must be excluded)", got.Summary.Failed)
@@ -107,7 +107,7 @@ func TestBuildSweepResult_staleAndRefreshedAreSeparate(t *testing.T) {
 	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
 	status.Update(idx3, pr.StatusRefreshed, "re-checking; go-build green on main since 2026-09-05 10:57 UTC, 5 behind")
 
-	got := buildSweepResult(status, nil)
+	got := buildSweepResult(status, nil, nil)
 
 	if got.Summary.Failed != 1 {
 		t.Errorf("Failed = %d, want 1 (stale/refreshed must be excluded)", got.Summary.Failed)
@@ -140,7 +140,7 @@ func TestBuildSweepResult_cancelledAndRetriedAreSeparate(t *testing.T) {
 	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
 	status.Update(idx3, pr.StatusRetried, "re-checking; build 1263 retried as 1272")
 
-	got := buildSweepResult(status, nil)
+	got := buildSweepResult(status, nil, nil)
 
 	if got.Summary.Failed != 1 {
 		t.Errorf("Failed = %d, want 1 (cancelled/retried must be excluded)", got.Summary.Failed)
@@ -168,7 +168,7 @@ func TestBuildSweepResult_rescueRebased(t *testing.T) {
 	status.Update(idx, pr.StatusFailed, "checks failed: build")
 	status.SetRescue(idx, &pr.RescueMarker{Tool: "klaus", Outcome: "blocked", Reason: "peer dep", Rebased: true})
 
-	got := buildSweepResult(status, nil)
+	got := buildSweepResult(status, nil, nil)
 
 	if len(got.ActionRequired) != 1 || got.ActionRequired[0].Rescue == nil {
 		t.Fatalf("ActionRequired = %+v, want one entry with a rescue object", got.ActionRequired)

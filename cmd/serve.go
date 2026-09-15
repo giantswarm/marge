@@ -297,7 +297,10 @@ func parseSweepRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 
 // SweepResult is the structured JSON output returned by the sweep MCP tool.
 type SweepResult struct {
-	Summary          SweepSummary   `json:"summary"`
+	Summary SweepSummary `json:"summary"`
+	// Rules says which rule catalogue the sweep ran, and what it could not
+	// use. An absent catalogue leaves every remedy refused.
+	Rules            *SweepRules    `json:"rules,omitempty"`
 	Merged           []SweepPREntry `json:"merged,omitempty"`
 	SecurityFailures []SweepPREntry `json:"security_failures,omitempty"`
 	ActionRequired   []SweepPREntry `json:"action_required,omitempty"`
@@ -358,6 +361,27 @@ type SweepRepoFailure struct {
 // non-security failure entries, so consumers can use
 // Failed + SecurityFailures to get the total number of action-required
 // PRs without double-counting.
+// SweepRules reports the rule catalogue of one sweep.
+type SweepRules struct {
+	// Source names the repository, ref and directory, or the local path.
+	Source string `json:"source"`
+	// Digest identifies the exact documents this sweep ran.
+	Digest string `json:"digest,omitempty"`
+	// Loaded counts the rules the sweep could use.
+	Loaded int `json:"loaded"`
+	// Skipped names the documents that failed to validate, with the reason.
+	// They cost their own rule and nothing more.
+	Skipped []SweepSkippedRule `json:"skipped,omitempty"`
+	// Error says why no catalogue could be read at all.
+	Error string `json:"error,omitempty"`
+}
+
+// SweepSkippedRule is one document the catalogue could not use.
+type SweepSkippedRule struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
 type SweepSummary struct {
 	Total            int `json:"total"`
 	Merged           int `json:"merged"`
@@ -543,12 +567,15 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	}
 	prs := filterByOrg(found.PRs, req.Opts.Org)
 
+	catalogue, rulesReport := loadRules(ctx, client, RulesSource{})
+	req.Opts.Rules = catalogue
+
 	status, err := processOnceWithStatus(ctx, client, login, prs, req.Opts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("processing PRs: %v", err)), nil
 	}
 
-	result := buildSweepResult(status, found.Failed)
+	result := buildSweepResult(status, found.Failed, rulesReport)
 
 	jsonBytes, err := json.Marshal(result)
 	if err != nil {
@@ -558,13 +585,14 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	return mcp.NewToolResultText(string(jsonBytes)), nil
 }
 
-func buildSweepResult(status *pr.PRStatus, failed []repoFailure) SweepResult {
+func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *SweepRules) SweepResult {
 	counts := status.Summary()
 	total := status.Len()
 	securityEntries := status.SecurityFailedEntries()
 	blockedEntries := status.BlockedEntries()
 
 	result := SweepResult{
+		Rules: sweepRules,
 		Summary: SweepSummary{
 			Total:            total,
 			Merged:           counts.Merged,

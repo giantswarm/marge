@@ -13,9 +13,12 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
+	"github.com/giantswarm/marge/internal/remedy"
+	"github.com/giantswarm/marge/internal/rules"
 )
 
 // RunOptions holds the configuration shared between the run and sweep commands.
@@ -45,7 +48,11 @@ type RunOptions struct {
 	CheckTimeout time.Duration
 	// Policies is the sweep policy of the scope, resolved from the policy
 	// files by resolveScope before the sweep starts.
-	Policies         *policy.Set
+	Policies *policy.Set
+	// Rules is the rule catalogue, loaded from marge's own repository
+	// before the sweep starts. Nil refuses every remedy and leaves
+	// classification, approval and merging unchanged.
+	Rules            *rules.Catalogue
 	Org              string
 	ReposFile        string // repositories to scan instead of searching GitHub; see resolveScope
 	Grouping         string
@@ -188,7 +195,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc.Actions = opts.Actions
 	proc.CheckTimeout = opts.CheckTimeout
 	proc.Policies = opts.Policies
+	proc.Rules = opts.Rules
+	proc.Remedies = remedy.Default()
 	proc.CircleCI = circleci.NewClient()
+	proc.Logs = &logs.Fetcher{GitHub: client, CircleCI: proc.CircleCI}
 	// Cross-PR knowledge, so it is computed once from the whole list before
 	// the per-PR processing starts, and read without locking afterwards.
 	proc.SupersededBy = pr.FindSuperseded(prs)
@@ -354,4 +364,74 @@ func filterByOrg(prs []pr.PRInfo, org string) []pr.PRInfo {
 		}
 	}
 	return filtered
+}
+
+// RulesSource selects where the rule catalogue is read from.
+type RulesSource struct {
+	// Repo is "owner/name"; empty reads marge's own repository.
+	Repo string
+	// Ref is the branch the catalogue is read from.
+	Ref string
+	// Path reads a directory on disk instead of a repository, for
+	// developing a rule before it is merged.
+	Path string
+}
+
+// loadRules reads the rule catalogue of one sweep. It never fails the sweep:
+// a catalogue that cannot be read leaves classification, approval and merging
+// as they are, and refuses every remedy. The report says which happened.
+func loadRules(ctx context.Context, client *github.Client, src RulesSource) (*rules.Catalogue, *SweepRules) {
+	loader := rules.Loader{Client: client, Ref: src.Ref, LocalPath: src.Path}
+	if src.Repo != "" {
+		owner, name, found := strings.Cut(src.Repo, "/")
+		if !found {
+			return nil, &SweepRules{Source: src.Repo, Error: `--rules-repo takes "owner/name"`}
+		}
+		loader.Owner, loader.Repo = owner, name
+	}
+
+	catalogue, err := loader.Load(ctx, remedy.Default())
+	if err != nil {
+		return nil, &SweepRules{Source: rulesSourceName(src), Error: err.Error()}
+	}
+
+	report := &SweepRules{
+		Source: catalogue.Source,
+		Digest: catalogue.Digest,
+		Loaded: len(catalogue.Rules),
+	}
+	for _, skipped := range catalogue.Skipped {
+		report.Skipped = append(report.Skipped, SweepSkippedRule{Path: skipped.Path, Reason: skipped.Reason})
+	}
+	return catalogue, report
+}
+
+func rulesSourceName(src RulesSource) string {
+	if src.Path != "" {
+		return src.Path
+	}
+	repo := src.Repo
+	if repo == "" {
+		repo = rules.DefaultOwner + "/" + rules.DefaultRepo
+	}
+	ref := src.Ref
+	if ref == "" {
+		ref = rules.DefaultRef
+	}
+	return repo + "@" + ref + ":" + rules.DefaultDir
+}
+
+// reportRules prints what the catalogue cost the sweep. A rule that could
+// not be used is operator-visible on every surface, never silent.
+func reportRules(w io.Writer, report *SweepRules) {
+	if report == nil {
+		return
+	}
+	if report.Error != "" {
+		_, _ = fmt.Fprintf(w, "rules unavailable (%s): %s; remedies refused this run\n", report.Source, report.Error)
+		return
+	}
+	for _, skipped := range report.Skipped {
+		_, _ = fmt.Fprintf(w, "rule %s skipped: %s\n", skipped.Path, skipped.Reason)
+	}
 }

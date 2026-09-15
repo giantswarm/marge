@@ -41,7 +41,11 @@ func (p *Processor) applyRule(ctx context.Context, run *prRun) {
 	case outcome.Refused != "":
 		run.note(fmt.Sprintf("rule %s refused: %s", hit.Rule.Name, outcome.Refused))
 	case outcome.Applied:
-		run.set(pr.StatusRemedied, fmt.Sprintf("%s: %s", hit.Rule.Name, outcome.Detail))
+		if !outcome.KeepClassification {
+			run.set(pr.StatusRemedied, fmt.Sprintf("%s: %s", hit.Rule.Name, outcome.Detail))
+		} else {
+			run.note(fmt.Sprintf("rule %s: %s", hit.Rule.Name, outcome.Detail))
+		}
 		p.postOnce(ctx, run, pr.MarkerKindEvidence, string(hit.Rule.Action.Name), evidenceReason(hit, p.Rules.Digest))
 	}
 	if outcome.StopRepository {
@@ -112,6 +116,8 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 		SecurityFailure:   classifySecurityFailure(run.failing, p.securityPatterns()),
 		Required:          run.required,
 		Base:              p.baseSplit(ctx, run),
+		Check:             hit.Check,
+		CheckURL:          run.checkURL(hit.Check),
 		LogMatched:        hit.LogMatched,
 		AppliedThisChange: p.appliedThisChange(ctx, run),
 		Deps: remedy.Deps{

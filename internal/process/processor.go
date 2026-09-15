@@ -140,6 +140,15 @@ type prRun struct {
 	excerpts map[string]string
 }
 
+// checkURL says where a failing check's build or job lives: a CircleCI
+// build behind a commit status, an Actions job behind a check run.
+func (r *prRun) checkURL(check string) string {
+	if url := r.statusTargets[check]; url != "" {
+		return url
+	}
+	return r.detailsURLs[check]
+}
+
 func (r *prRun) set(state pr.StatusState, detail string) {
 	r.status.Update(r.idx, state, detail)
 }

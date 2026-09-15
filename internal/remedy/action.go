@@ -97,6 +97,12 @@ type Request struct {
 	Required        Required
 	Base            BaseStates
 
+	// Check is the failing check the rule matched, and CheckURL is where its
+	// build or job lives: a CircleCI build behind a commit status, an
+	// Actions job behind a check run.
+	Check    string
+	CheckURL string
+
 	// LogMatched reports whether the rule matched an excerpt of the failing
 	// step's log rather than a check name alone.
 	LogMatched bool
@@ -119,6 +125,9 @@ type Outcome struct {
 	// StopRepository ends the sweep for this repository, for instance when
 	// enforce_admins could not be restored.
 	StopRepository bool
+	// KeepClassification leaves the PR in the state the sweep classified it
+	// in. An action that only records why a PR waits sets it.
+	KeepClassification bool
 	// Evidence is the marker outcome written on the PR, or "" for an action
 	// that writes none.
 	Evidence string
