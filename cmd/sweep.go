@@ -22,7 +22,7 @@ func init() {
 	sweepCmd.Flags().BoolVar(&sweepOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	sweepCmd.Flags().BoolVar(&sweepOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
 	sweepCmd.Flags().BoolVar(&sweepOpts.RefreshStale, "refresh-stale", false, "Update the branch of stale PRs (behind base, failing checks green on base) so CI re-runs")
-	sweepCmd.Flags().BoolVar(&sweepOpts.RetryCancelled, "retry-cancelled", false, "Retry CircleCI builds that CircleCI auto-cancelled on the PR head so the same commit gets a real verdict")
+	sweepCmd.Flags().BoolVar(&sweepOpts.RetryCancelled, "retry-cancelled", false, "Rerun the CircleCI workflow of builds that CircleCI auto-cancelled on the PR head, from its failed jobs, so the same commit gets a real verdict")
 	sweepCmd.Flags().StringVar(&sweepOpts.TrustedAuthors, "trusted-authors", "renovate[bot],dependabot[bot]", "Comma-separated list of trusted PR author logins")
 	sweepCmd.Flags().StringVar(&sweepOpts.SecurityPatterns, "security-patterns", "", "Comma-separated list of case-insensitive substrings used to flag failing CI checks as security-related (defaults to a built-in list)")
 
@@ -47,10 +47,12 @@ their base (the "Update branch" button) so CI re-runs, and reports them as
 A failing PR whose every failing check is a CircleCI build that CircleCI
 itself auto-cancelled (a newer pipeline on the branch, a redundant workflow)
 is reported as "Cancelled" instead of "Failed": there is no verdict on the
-code yet. With --retry-cancelled, marge retries such builds on the same
-commit and reports the PR as "Retried". Private CircleCI projects need a
-token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); without one the build
-cannot be inspected and the PR stays "Failed", annotated.`,
+code yet. With --retry-cancelled, marge reruns the workflow those builds
+belong to from its failed jobs, so the jobs the cancel left blocked run too,
+and reports the PR as "Retried". A build with no failed job to rerun from
+falls back to the single-build retry. Private CircleCI projects need a token
+(CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); without one the build cannot be
+inspected and the PR stays "Failed", annotated.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

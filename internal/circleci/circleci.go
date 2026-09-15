@@ -1,10 +1,13 @@
-// Package circleci is a minimal client for the CircleCI v1.1 API. marge uses
-// it to look behind a failing "ci/circleci: <job>" commit status and tell a
+// Package circleci is a minimal client for the CircleCI API. marge uses it
+// to look behind a failing "ci/circleci: <job>" commit status and tell a
 // build that really failed apart from one CircleCI cancelled itself, and to
-// retry the latter so the same commit gets a real verdict.
+// rerun the latter so the same commit gets a real verdict.
+//
+// Builds are read through the v1.1 API; reruns go through the v2 workflow
+// rerun endpoint, which also releases the jobs the cancel left blocked.
 //
 // Only the handful of fields marge needs are modelled. The v1.1 build JSON
-// is public for public projects; private projects and the retry endpoint
+// is public for public projects; private projects and every rerun endpoint
 // need an API token, sent as the Circle-Token header (never as basic auth or
 // a query parameter).
 package circleci
@@ -101,18 +104,25 @@ func (r BuildRef) path() string {
 
 // Build is the subset of a v1.1 build that marge inspects.
 type Build struct {
-	BuildNum    int    `json:"build_num"`
-	BuildURL    string `json:"build_url"`
-	Branch      string `json:"branch"`
-	Status      string `json:"status"`
-	Outcome     string `json:"outcome"`
-	Lifecycle   string `json:"lifecycle"`
-	VCSRevision string `json:"vcs_revision"`
-	Canceled    bool   `json:"canceled"`
-	Steps       []Step `json:"steps"`
-	Workflows   struct {
-		JobName string `json:"job_name"`
-	} `json:"workflows"`
+	BuildNum    int      `json:"build_num"`
+	BuildURL    string   `json:"build_url"`
+	Branch      string   `json:"branch"`
+	Status      string   `json:"status"`
+	Outcome     string   `json:"outcome"`
+	Lifecycle   string   `json:"lifecycle"`
+	VCSRevision string   `json:"vcs_revision"`
+	Canceled    bool     `json:"canceled"`
+	Steps       []Step   `json:"steps"`
+	Workflows   Workflow `json:"workflows"`
+}
+
+// Workflow is the workflow run a build belongs to. A build outside a
+// workflow carries an empty one.
+type Workflow struct {
+	JobName string `json:"job_name"`
+	// WorkflowID is the handle the v2 rerun endpoint takes.
+	WorkflowID   string `json:"workflow_id"`
+	WorkflowName string `json:"workflow_name"`
 }
 
 // Step is one named step of a build; a step has one action per parallel
@@ -243,7 +253,7 @@ func tokenFromCLIConfig(path string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "token:") {
 			continue
@@ -258,22 +268,66 @@ func (c *Client) Build(ctx context.Context, ref BuildRef) (*Build, error) {
 	return c.do(ctx, http.MethodGet, ref.path())
 }
 
-// Retry asks CircleCI to run the build again on the same commit and returns
-// the new build. The endpoint requires a token.
+// Retry asks CircleCI to run the single build again on the same commit and
+// returns the new build. The endpoint requires a token.
+//
+// A build retried this way runs on its own: the jobs that the workflow had
+// left blocked or not run because of the cancel stay where they are. Prefer
+// RerunWorkflowFromFailed whenever the build carries a workflow id.
 func (c *Client) Retry(ctx context.Context, ref BuildRef) (*Build, error) {
-	return c.do(ctx, http.MethodPost, ref.path()+"/retry")
+	body, err := c.request(ctx, http.MethodPost, ref.path()+"/retry", nil)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBuild(body)
+}
+
+// RerunWorkflowFromFailed asks CircleCI to run the workflow again from its
+// failed jobs. Unlike Retry it also releases the jobs that depend on the
+// failed one, so a repository whose branch protection requires those
+// downstream contexts gets them.
+//
+// CircleCI reruns from a failed job, so it needs one: a workflow cancelled
+// before any job failed has none and the endpoint answers 400. The id of
+// the new workflow run is not read; the caller identifies the rerun by the
+// workflow it asked for. The endpoint requires a token.
+func (c *Client) RerunWorkflowFromFailed(ctx context.Context, workflowID string) error {
+	payload, err := json.Marshal(map[string]bool{"from_failed": true})
+	if err != nil {
+		return err
+	}
+	path := "/api/v2/workflow/" + url.PathEscape(workflowID) + "/rerun"
+	_, err = c.request(ctx, http.MethodPost, path, payload)
+	return err
 }
 
 func (c *Client) do(ctx context.Context, method, path string) (*Build, error) {
+	body, err := c.request(ctx, method, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBuild(body)
+}
+
+// request performs one API call and returns the raw response body. A
+// non-nil payload is sent as a JSON request body.
+func (c *Client) request(ctx context.Context, method, path string, payload []byte) ([]byte, error) {
 	base := c.BaseURL
 	if base == "" {
 		base = DefaultBaseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+path, nil)
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+path, reader)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if c.Token != "" {
 		req.Header.Set("Circle-Token", c.Token)
 	}
@@ -295,7 +349,7 @@ func (c *Client) do(ctx context.Context, method, path string) (*Build, error) {
 	if resp.StatusCode/100 != 2 {
 		return nil, &APIError{StatusCode: resp.StatusCode, Message: errorMessage(body), Authenticated: c.Token != ""}
 	}
-	return decodeBuild(body)
+	return body, nil
 }
 
 // errorMessage extracts the "message" field CircleCI puts in error bodies.

@@ -1,9 +1,11 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,7 +42,16 @@ type circleStatus struct {
 	context string
 	num     int
 	fixture string
+	// workflowID replaces the workflow id recorded in the fixture. An
+	// explicit "" (see noWorkflow) models a build that runs outside a
+	// workflow, which only the v1.1 single-build retry can rerun.
+	workflowID string
+	noWorkflow bool
 }
+
+// fxWorkflowID is the workflow id recorded in every cancelled fixture: all
+// of them come from the same mcp-capi "build" workflow.
+const fxWorkflowID = "ea42abad-ba5a-4169-854b-001d55b79c1a"
 
 // cancelledFixture wires a fake GitHub API for one Renovate PR (org/repo#1,
 // base main) whose failing checks are CircleCI commit statuses, plus a fake
@@ -55,14 +66,22 @@ type cancelledFixture struct {
 	private         bool
 	token           string
 	behindBy        int
+	// rerunStatus overrides the HTTP status the fake v2 rerun endpoint
+	// answers with. Zero means 202 Accepted. rerunMessage is the message
+	// CircleCI puts in the error body, "Permission denied" by default.
+	rerunStatus  int
+	rerunMessage string
 
 	buildCalls      atomic.Int32
 	retryCalls      atomic.Int32
+	rerunCalls      atomic.Int32
 	baseLookupCalls atomic.Int32
 
 	mu           sync.Mutex
 	circleTokens []string
 	retryPaths   []string
+	rerunPaths   []string
+	rerunBodies  []string
 }
 
 func (f *cancelledFixture) github(t *testing.T) *httptest.Server {
@@ -150,9 +169,9 @@ func (f *cancelledFixture) github(t *testing.T) *httptest.Server {
 
 func (f *cancelledFixture) circle(t *testing.T) *httptest.Server {
 	t.Helper()
-	byNum := make(map[int]string, len(f.statuses))
+	byNum := make(map[int]circleStatus, len(f.statuses))
 	for _, s := range f.statuses {
-		byNum[s.num] = s.fixture
+		byNum[s.num] = s
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +186,32 @@ func (f *cancelledFixture) circle(t *testing.T) *httptest.Server {
 		}
 
 		var num int
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v2/workflow/") {
+			if token == "" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"message":"Permission denied"}`))
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			f.rerunCalls.Add(1)
+			f.mu.Lock()
+			f.rerunPaths = append(f.rerunPaths, r.URL.Path)
+			f.rerunBodies = append(f.rerunBodies, string(body))
+			f.mu.Unlock()
+			if f.rerunStatus != 0 {
+				message := f.rerunMessage
+				if message == "" {
+					message = "Permission denied"
+				}
+				w.WriteHeader(f.rerunStatus)
+				_, _ = w.Write([]byte(`{"message":"` + message + `"}`))
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"workflow_id":"9b9c4a0e-0000-4000-8000-000000000001"}`))
+			return
+		}
+
 		if r.Method == http.MethodPost {
 			if _, err := fmt.Sscanf(r.URL.Path, "/api/v1.1/project/github/giantswarm/mcp-capi/%d/retry", &num); err != nil {
 				t.Errorf("unexpected CircleCI request: %s %s", r.Method, r.URL.Path)
@@ -186,17 +231,17 @@ func (f *cancelledFixture) circle(t *testing.T) *httptest.Server {
 			return
 		}
 
-		if _, err := fmt.Sscanf(r.URL.Path, "/api/v1.1/project/github/giantswarm/mcp-capi/%d", &num); err != nil || byNum[num] == "" {
+		if _, err := fmt.Sscanf(r.URL.Path, "/api/v1.1/project/github/giantswarm/mcp-capi/%d", &num); err != nil || byNum[num].fixture == "" {
 			t.Errorf("unexpected CircleCI request: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
 		f.buildCalls.Add(1)
-		data, err := os.ReadFile(filepath.Join("..", "circleci", "testdata", byNum[num]))
+		data, err := os.ReadFile(filepath.Join("..", "circleci", "testdata", byNum[num].fixture))
 		if err != nil {
 			t.Fatalf("reading fixture: %v", err)
 		}
-		_, _ = w.Write(data)
+		_, _ = w.Write(retargetWorkflow(data, byNum[num]))
 	})
 	return httptest.NewServer(mux)
 }
@@ -222,6 +267,19 @@ func (f *cancelledFixture) run(t *testing.T, configure func(*Processor)) pr.Stat
 
 	proc.ProcessPR(context.Background(), info, status, idx)
 	return status.Snapshot()[idx]
+}
+
+// retargetWorkflow rewrites the workflows.workflow_id of a recorded build so
+// one fixture can stand in for several workflows, or for a build that runs
+// outside a workflow at all.
+func retargetWorkflow(data []byte, s circleStatus) []byte {
+	switch {
+	case s.noWorkflow:
+		return bytes.ReplaceAll(data, []byte(`"`+fxWorkflowID+`"`), []byte(`""`))
+	case s.workflowID != "":
+		return bytes.ReplaceAll(data, []byte(fxWorkflowID), []byte(s.workflowID))
+	}
+	return data
 }
 
 func goBuildStatus(num int, fixture string) []circleStatus {
@@ -285,11 +343,19 @@ func TestClassifyCancelled_retryOnHead(t *testing.T) {
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
 	}
-	if got.Detail != "re-checking; build 1263 retried as 1272" {
+	if got.Detail != "re-checking; workflow build rerun from failed" {
 		t.Errorf("detail = %q", got.Detail)
 	}
-	if f.retryCalls.Load() != 1 || f.retryPaths[0] != "/api/v1.1/project/github/giantswarm/mcp-capi/1263/retry" {
-		t.Errorf("retry calls = %d %q, want one POST to the v1.1 retry endpoint", f.retryCalls.Load(), f.retryPaths)
+	// The workflow rerun, not the single-build retry: only the former
+	// releases the downstream jobs the cancel left blocked.
+	if f.rerunCalls.Load() != 1 || f.rerunPaths[0] != "/api/v2/workflow/"+fxWorkflowID+"/rerun" {
+		t.Fatalf("rerun calls = %d %q, want one POST to the v2 workflow rerun endpoint", f.rerunCalls.Load(), f.rerunPaths)
+	}
+	if f.retryCalls.Load() != 0 {
+		t.Errorf("v1.1 build retry called %d times for a build inside a workflow, want 0", f.retryCalls.Load())
+	}
+	if f.rerunBodies[0] != `{"from_failed":true}` {
+		t.Errorf("rerun body = %q, want from_failed", f.rerunBodies[0])
 	}
 	for _, tok := range f.circleTokens {
 		if tok != "tok" {
@@ -298,7 +364,9 @@ func TestClassifyCancelled_retryOnHead(t *testing.T) {
 	}
 }
 
-func TestClassifyCancelled_retryMultipleBuilds(t *testing.T) {
+func TestClassifyCancelled_retryOneRerunPerWorkflow(t *testing.T) {
+	// Two cancelled jobs of the same workflow: rerunning the workflow once
+	// covers both, and a second rerun would restart the first job.
 	f := &cancelledFixture{head: cxHeadCancelled, token: "tok", statuses: []circleStatus{
 		{context: "ci/circleci: go-test", num: 1265, fixture: fixtureCancelledHead},
 		{context: "ci/circleci: go-build", num: 1263, fixture: fixtureCancelledHead},
@@ -308,12 +376,83 @@ func TestClassifyCancelled_retryMultipleBuilds(t *testing.T) {
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
 	}
-	// Ordered by check name: go-build before go-test.
-	if got.Detail != "re-checking; build 1263 retried as 1272, build 1265 retried as 1274" {
+	if got.Detail != "re-checking; workflow build rerun from failed" {
 		t.Errorf("detail = %q", got.Detail)
 	}
-	if f.retryCalls.Load() != 2 {
-		t.Errorf("retry calls = %d, want 2", f.retryCalls.Load())
+	if f.rerunCalls.Load() != 1 {
+		t.Errorf("rerun calls = %d, want 1 for two jobs of one workflow", f.rerunCalls.Load())
+	}
+}
+
+func TestClassifyCancelled_retryRerunsEachWorkflow(t *testing.T) {
+	const otherWorkflow = "1f6d4b52-7e30-4a0f-9d4e-9f0f5c2b1a77"
+	f := &cancelledFixture{head: cxHeadCancelled, token: "tok", statuses: []circleStatus{
+		{context: "ci/circleci: go-test", num: 1265, fixture: fixtureCancelledHead, workflowID: otherWorkflow},
+		{context: "ci/circleci: go-build", num: 1263, fixture: fixtureCancelledHead},
+	}}
+	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+
+	if got.State != pr.StatusRetried {
+		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
+	}
+	if f.rerunCalls.Load() != 2 {
+		t.Errorf("rerun calls = %d, want 2 for two distinct workflows", f.rerunCalls.Load())
+	}
+}
+
+func TestClassifyCancelled_retryFallsBackWithoutWorkflow(t *testing.T) {
+	// A build outside a workflow has nothing to rerun from failed, so the
+	// v1.1 single-build retry stays the remedy.
+	f := &cancelledFixture{head: cxHeadCancelled, token: "tok", statuses: []circleStatus{
+		{context: "ci/circleci: go-build", num: 1263, fixture: fixtureCancelledHead, noWorkflow: true},
+	}}
+	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+
+	if got.State != pr.StatusRetried {
+		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
+	}
+	if got.Detail != "re-checking; build 1263 retried as 1272" {
+		t.Errorf("detail = %q", got.Detail)
+	}
+	if f.retryCalls.Load() != 1 || f.rerunCalls.Load() != 0 {
+		t.Errorf("retries = %d, reruns = %d; want 1 and 0", f.retryCalls.Load(), f.rerunCalls.Load())
+	}
+}
+
+func TestClassifyCancelled_rerunDeniedKeepsCancelled(t *testing.T) {
+	// A token that may not rerun the workflow may not retry the build
+	// either, so there is nothing to fall back to.
+	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok", rerunStatus: http.StatusForbidden}
+	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+
+	if got.State != pr.StatusCancelled {
+		t.Fatalf("state = %v (%s), want StatusCancelled when the rerun is refused", got.State, got.Detail)
+	}
+	want := "build 1263 auto-cancelled; retry needed; rerun of workflow build failed: HTTP 403: Permission denied"
+	if got.Detail != want {
+		t.Errorf("detail = %q\nwant     %q", got.Detail, want)
+	}
+	if f.retryCalls.Load() != 0 {
+		t.Errorf("v1.1 retry called %d times after a denied rerun, want 0", f.retryCalls.Load())
+	}
+}
+
+func TestClassifyCancelled_rerunWithoutFailedJobFallsBack(t *testing.T) {
+	// A workflow cancelled before any job failed has nothing to rerun from
+	// and CircleCI answers 400. The v1.1 single-build retry still runs the
+	// job, so the PR gets a verdict instead of staying stuck.
+	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok",
+		rerunStatus: http.StatusBadRequest, rerunMessage: "Workflow has no failed jobs to rerun from"}
+	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+
+	if got.State != pr.StatusRetried {
+		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
+	}
+	if got.Detail != "re-checking; build 1263 retried as 1272" {
+		t.Errorf("detail = %q", got.Detail)
+	}
+	if f.rerunCalls.Load() != 1 || f.retryCalls.Load() != 1 {
+		t.Errorf("reruns = %d, retries = %d; want 1 and 1", f.rerunCalls.Load(), f.retryCalls.Load())
 	}
 }
 
