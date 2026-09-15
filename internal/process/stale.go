@@ -67,20 +67,11 @@ func (c contextState) green() bool {
 // job that only runs on pushes) cannot be proven green, so the failure
 // stays real. Every API error degrades to "not stale": a lookup problem
 // must never soften a failure into a refresh.
-func (p *Processor) classifyStale(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, failedChecks []string) *staleResult {
-	if len(failedChecks) == 0 {
+func (p *Processor) classifyStale(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, failedChecks []string, cmp *github.CommitsComparison) *staleResult {
+	if len(failedChecks) == 0 || cmp == nil || cmp.GetBehindBy() <= 0 {
 		return nil
 	}
 	base := pullReq.GetBase().GetRef()
-	head := pullReq.GetHead().GetSHA()
-	if base == "" || head == "" {
-		return nil
-	}
-
-	cmp, _, err := p.Client.Repositories.CompareCommits(ctx, info.Owner, info.Repo, base, head, &github.ListOptions{PerPage: 1})
-	if err != nil || cmp.GetBehindBy() <= 0 {
-		return nil
-	}
 
 	baseSHA := cmp.GetBaseCommit().GetSHA()
 	if baseSHA == "" {

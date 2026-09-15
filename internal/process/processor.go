@@ -62,6 +62,12 @@ type Processor struct {
 	// a cancelled PR is only reported as such. Ignored in dry-run mode.
 	RetryCancelled bool
 
+	// SupersededBy maps a PR to the sibling that carries a higher version of
+	// the same dependency (see pr.FindSuperseded). It is computed once from
+	// the sweep's PR list before processing starts and only read afterwards,
+	// so it needs no lock. A nil map supersedes nothing.
+	SupersededBy pr.SupersededBy
+
 	staleCache
 	accessCache
 }
@@ -110,6 +116,10 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 
 	if pullReq.GetMergeableState() == "dirty" {
+		if reason, detail := p.classifyObsolete(ctx, info, pullReq, nil); reason != "" {
+			status.MarkObsolete(idx, reason, detail)
+			return
+		}
 		status.Update(idx, pr.StatusConflict, "merge conflict")
 		return
 	}
@@ -181,13 +191,23 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 				p.handleCancelled(ctx, cancelled, status, idx)
 				return fmt.Errorf("checks cancelled")
 			}
+			// The staleness heuristic and the no-op rule both read the
+			// base...head comparison, so it is fetched once for both. An
+			// error leaves it nil and neither classification fires.
+			cmp := p.compare(ctx, info, pullReq)
 			// A failure that is already fixed on the base branch is stale,
 			// not real: the branch is behind and every failing check is
 			// green on the base head. Decided before the security split so
 			// a stale govulncheck/Trivy failure is refreshed like any other.
-			if stale := p.classifyStale(ctx, info, pullReq, outcome.failedChecks); stale != nil {
+			if stale := p.classifyStale(ctx, info, pullReq, outcome.failedChecks, cmp); stale != nil {
 				p.handleStale(ctx, info, pullReq, stale, status, idx)
 				return fmt.Errorf("checks stale")
+			}
+			// Decided last: a superseded PR and a PR that changes nothing
+			// that executes are both failures nobody has to fix.
+			if reason, detail := p.classifyObsolete(ctx, info, pullReq, cmp); reason != "" {
+				status.MarkObsolete(idx, reason, detail)
+				return fmt.Errorf("obsolete: %s", reason)
 			}
 			if name := classifySecurityFailure(outcome.failedChecks, p.securityPatterns()); name != "" {
 				status.Update(idx, pr.StatusFailedSecurity, withNote(fmt.Sprintf("security check failed: %s", name), note))
@@ -476,6 +496,53 @@ func (p *Processor) findRescueMarker(ctx context.Context, info pr.PRInfo) *pr.Re
 		opts.Page = resp.NextPage
 	}
 	return marker
+}
+
+// noOpDetail explains a no-op classification. The shape is always the same
+// one, so the text is a constant.
+const noOpDetail = "no semantic change: the pinned action SHA is unchanged, only its version comment moved"
+
+// compareFileLimit is the number of files the compare API returns at most.
+// A comparison that hits it is truncated without saying so, and a no-op
+// verdict read off a partial file list would be a guess. Staleness reads
+// only the commit counts, so the limit does not concern it.
+const compareFileLimit = 300
+
+// classifyObsolete reports whether a PR is not worth fixing, and why: a
+// sibling PR carries a higher version of the same dependency, or the diff
+// changes nothing that executes. An empty reason means neither holds.
+//
+// Supersession is read from the sweep's PR list, so it costs no request and
+// is decided first. cmp is the base...head comparison when the caller
+// already holds it, and nil when it has to be fetched; a comparison that
+// cannot be had only rules out the no-op verdict.
+func (p *Processor) classifyObsolete(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, cmp *github.CommitsComparison) (pr.ObsoleteReason, string) {
+	if detail, ok := p.SupersededBy[pr.PRKey(info)]; ok {
+		return pr.ReasonSuperseded, detail
+	}
+	if cmp == nil {
+		cmp = p.compare(ctx, info, pullReq)
+	}
+	if cmp != nil && len(cmp.Files) < compareFileLimit && pr.NoOpDiff(cmp.Files) {
+		return pr.ReasonNoOp, noOpDetail
+	}
+	return "", ""
+}
+
+// compare fetches the base...head comparison of a PR, or nil when it cannot
+// be had. Callers treat nil as "no evidence": an unknown diff never softens
+// a failure.
+func (p *Processor) compare(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest) *github.CommitsComparison {
+	base, head := pullReq.GetBase().GetRef(), pullReq.GetHead().GetSHA()
+	if base == "" || head == "" {
+		return nil
+	}
+	// per_page bounds the commit list; the file list has its own hard limit.
+	cmp, _, err := p.Client.Repositories.CompareCommits(ctx, info.Owner, info.Repo, base, head, &github.ListOptions{PerPage: 1})
+	if err != nil {
+		return nil
+	}
+	return cmp
 }
 
 // securityPatterns returns the normalized security-check pattern list to

@@ -48,6 +48,11 @@ const (
 	// rescue, and a security check in this shape is not a finding. The
 	// detail names the remedy for each check.
 	StatusNoVerdict
+	// StatusObsolete marks a bot PR that is not worth fixing: either a
+	// sibling PR carries a higher version of the same dependency, or the
+	// diff changes nothing that executes. Both want closing, not rescuing.
+	// The entry's ObsoleteReason says which, and Detail says why.
+	StatusObsolete
 )
 
 func (s StatusState) String() string {
@@ -90,6 +95,8 @@ func (s StatusState) String() string {
 		return "Retried"
 	case StatusNoVerdict:
 		return "CI unavailable (no verdict)"
+	case StatusObsolete:
+		return "Obsolete"
 	default:
 		return "Unknown"
 	}
@@ -107,7 +114,22 @@ type StatusEntry struct {
 	// Rescue is the most recent prior automated rescue attempt found on
 	// the PR, if any. Only populated for failure-state entries.
 	Rescue *RescueMarker
+	// ObsoleteReason says why an obsolete PR is obsolete, for consumers
+	// that dispatch on it rather than on Detail. Empty unless State is
+	// StatusObsolete.
+	ObsoleteReason ObsoleteReason
 }
+
+// ObsoleteReason names why a PR is not worth fixing.
+type ObsoleteReason string
+
+const (
+	// ReasonSuperseded: a sibling PR in the same repository carries a
+	// higher version of the same dependency.
+	ReasonSuperseded ObsoleteReason = "superseded"
+	// ReasonNoOp: the diff changes nothing that executes.
+	ReasonNoOp ObsoleteReason = "no_op"
+)
 
 func NewPRStatus() *PRStatus {
 	return &PRStatus{}
@@ -130,6 +152,18 @@ func (s *PRStatus) Update(idx int, state StatusState, detail string) {
 	if idx < len(s.entries) {
 		s.entries[idx].State = state
 		s.entries[idx].Detail = detail
+	}
+}
+
+// MarkObsolete records an entry as obsolete together with the reason, so a
+// consumer can dispatch on the reason instead of parsing the detail.
+func (s *PRStatus) MarkObsolete(idx int, reason ObsoleteReason, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.entries) {
+		s.entries[idx].State = StatusObsolete
+		s.entries[idx].Detail = detail
+		s.entries[idx].ObsoleteReason = reason
 	}
 }
 
@@ -179,10 +213,11 @@ func (s *PRStatus) Snapshot() []StatusEntry {
 // Actions budget block), NoVerdict (the failing checks established nothing
 // about the code), Stale (failing checks are green on the base branch head
 // and the PR is behind it), Refreshed (a stale branch was just updated from
-// its base), Cancelled (CircleCI auto-cancelled the failing builds) and
-// Retried (those builds were just retried) are counted separately from
-// Failed: none of them is a genuine CI failure and none of them belongs in
-// the rescue path.
+// its base), Cancelled (CircleCI auto-cancelled the failing builds), Retried
+// (those builds were just retried) and Obsolete (a sibling PR carries a
+// higher version of the same dependency, or the diff changes nothing that
+// executes) are counted separately from Failed: none of them is a genuine CI
+// failure and none of them belongs in the rescue path.
 type Counts struct {
 	Merged    int
 	Failed    int
@@ -192,6 +227,7 @@ type Counts struct {
 	Refreshed int
 	Cancelled int
 	Retried   int
+	Obsolete  int
 	Skipped   int
 }
 
@@ -216,6 +252,8 @@ func (s *PRStatus) countsLocked() Counts {
 			c.Cancelled++
 		case StatusRetried:
 			c.Retried++
+		case StatusObsolete:
+			c.Obsolete++
 		case StatusSkipped:
 			c.Skipped++
 		}
@@ -253,6 +291,9 @@ func (s *PRStatus) FormatSummary() string {
 	}
 	if c.Retried > 0 {
 		fmt.Fprintf(&b, ", %d retried", c.Retried)
+	}
+	if c.Obsolete > 0 {
+		fmt.Fprintf(&b, ", %d obsolete", c.Obsolete)
 	}
 	if c.Blocked > 0 {
 		fmt.Fprintf(&b, ", %d CI-unavailable", c.Blocked)
@@ -304,6 +345,14 @@ func (s *PRStatus) BlockedEntries() []StatusEntry {
 // entry's detail names its own remedy. Oldest PR first.
 func (s *PRStatus) NoVerdictEntries() []StatusEntry {
 	return s.entriesInState(StatusNoVerdict)
+}
+
+// ObsoleteEntries returns entries that are not worth fixing: a sibling PR
+// carries a higher version, or the diff changes nothing that executes. Like
+// StaleEntries they are kept out of ActionRequired and the failed counts:
+// the remedy is to close them, not to rescue them. Oldest PR first.
+func (s *PRStatus) ObsoleteEntries() []StatusEntry {
+	return s.entriesInState(StatusObsolete)
 }
 
 // StaleEntries returns entries whose failure is stale: the PR head is behind
