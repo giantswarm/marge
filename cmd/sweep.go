@@ -59,7 +59,14 @@ either. A cancelled job and a CircleCI pipeline refused because setup
 workflows are disabled for the repository are both reported as "CI
 unavailable (no verdict)", with the remedy in the detail: rerun the job, or
 change the project setting. A security check in that shape is never a
-security failure.`,
+security failure.
+
+A failing or conflicted bot PR that a sibling with a higher version of the
+same dependency replaces, or whose diff changes nothing that executes -- a
+pinned GitHub Actions SHA whose trailing version comment is all that moved
+-- is reported as "Obsolete" rather than as a failure, and stays out of the
+rescue path: it wants closing, not fixing. A green PR still merges, and
+marge never closes a PR itself.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

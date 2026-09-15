@@ -14,6 +14,9 @@ type PRInfo struct {
 	URL       string
 	Author    string
 	CreatedAt time.Time
+	// BaseRef is the branch the PR targets. Empty when the PR came from a
+	// GitHub issue search, which does not report it.
+	BaseRef string
 }
 
 type PRGroup struct {

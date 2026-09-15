@@ -113,6 +113,11 @@ func TestExtractDependencyName(t *testing.T) {
 			title: "Update github-actions action actions/checkout to v4",
 			want:  "actions/checkout",
 		},
+		{
+			name:  "renovate action title naming the action itself",
+			title: "chore(deps): update actions/checkout action to v5.1.0",
+			want:  "actions/checkout",
+		},
 		// Renovate: "Pin dependency X to Y"
 		{
 			name:  "renovate pin dependency",

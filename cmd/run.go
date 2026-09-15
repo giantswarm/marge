@@ -303,6 +303,7 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 						URL:       url,
 						Author:    author,
 						CreatedAt: pull.GetCreatedAt().Time,
+						BaseRef:   pull.GetBase().GetRef(),
 					})
 				}
 

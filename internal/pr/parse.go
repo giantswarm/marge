@@ -44,6 +44,9 @@ var dependencyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)update module ([@\w\-./]+(?:/[@\w\-./]+)*)`),
 	// Renovate: "Update github-actions action foo/bar to v1.2.3"
 	regexp.MustCompile(`(?i)update [\w\-]+ action ([@\w\-./]+(?:/[@\w\-./]+)*)`),
+	// Renovate: "Update actions/checkout action to v5.1.0" -- the action
+	// names itself, with no manager word in front.
+	regexp.MustCompile(`(?i)^update ([@\w\-./]+(?:/[@\w\-./]+)*) action\b`),
 	// Renovate: "Update rust crate kube to v3"
 	regexp.MustCompile(`(?i)update [\w\-]+ crate ([@\w\-./]+(?:/[@\w\-./]+)*)`),
 	// Renovate: "Update terraform aws to v5"
@@ -81,10 +84,8 @@ func IsDependencyUpdateTitle(title string) bool {
 	lower := strings.ToLower(title)
 
 	// Conventional commit with deps scope: "chore(deps):", "fix(deps):", etc.
-	if idx := strings.Index(lower, ":"); idx != -1 {
-		if strings.Contains(lower[:idx], "deps") {
-			return true
-		}
+	if scope, _, ok := strings.Cut(lower, ":"); ok && strings.Contains(scope, "deps") {
+		return true
 	}
 
 	// Known dependency update title patterns (Renovate/Dependabot)

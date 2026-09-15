@@ -172,10 +172,11 @@ func ColorizeStatus(state StatusState, detail string) string {
 		// both read as "not a code failure", distinct from the red used for
 		// genuine failures.
 		return fmt.Sprintf("\033[35m%s\033[0m", label)
-	case StatusSkipped, StatusStale, StatusCancelled:
+	case StatusSkipped, StatusStale, StatusCancelled, StatusObsolete:
 		// Yellow: not a real failure, but somebody has to act (a stale
-		// branch wants a refresh, a cancelled build wants a retry; the same
-		// color as a stale rescue marker).
+		// branch wants a refresh, a cancelled build wants a retry, an
+		// obsolete PR wants closing; the same color as a stale rescue
+		// marker).
 		return fmt.Sprintf("\033[33m%s\033[0m", label)
 	case StatusChecking, StatusApproving, StatusMerging, StatusRefreshed, StatusRetried:
 		// Cyan: work in progress -- a refreshed branch or a retried build
@@ -206,6 +207,7 @@ func PrintPlainResults(w *os.File, status *PRStatus) {
 	printFailureGroup(w, RefreshedGroupHeader, status.RefreshedEntries())
 	printFailureGroup(w, CancelledGroupHeader, status.CancelledEntries())
 	printFailureGroup(w, RetriedGroupHeader, status.RetriedEntries())
+	printFailureGroup(w, ObsoleteGroupHeader, status.ObsoleteEntries())
 	printFailureGroup(w, "CI unavailable (Actions budget)", blocked)
 	printFailureGroup(w, NoVerdictGroupHeader, status.NoVerdictEntries())
 
@@ -228,6 +230,10 @@ const (
 	// NoVerdictGroupHeader names the bucket for checks that established
 	// nothing about the code. Each entry's detail names its own remedy.
 	NoVerdictGroupHeader = "CI unavailable (no verdict) -- the checks decided nothing, see the detail"
+	// ObsoleteGroupHeader names the bucket for bot PRs that are not worth
+	// fixing. Each entry's detail says whether a higher-version sibling
+	// replaced it or its diff changes nothing that executes.
+	ObsoleteGroupHeader = "Obsolete (nothing to fix -- close these)"
 )
 
 // printFailureGroup writes a header and one entry per failure including its

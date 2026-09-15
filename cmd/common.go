@@ -124,6 +124,9 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc.RefreshStale = opts.RefreshStale
 	proc.RetryCancelled = opts.RetryCancelled
 	proc.CircleCI = circleci.NewClient()
+	// Cross-PR knowledge, so it is computed once from the whole list before
+	// the per-PR processing starts, and read without locking afterwards.
+	proc.SupersededBy = pr.FindSuperseded(prs)
 
 	// Build a per-repo index so we can look up each PR's status table index.
 	indexByPR := make(map[string]int, len(prs))
@@ -208,7 +211,7 @@ func parseCSVList(csv string) []string {
 		return nil
 	}
 	var out []string
-	for _, p := range strings.Split(csv, ",") {
+	for p := range strings.SplitSeq(csv, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}
@@ -236,7 +239,7 @@ func readReposFile(path string) ([]string, error) {
 		return nil, fmt.Errorf("reading repos file: %w", err)
 	}
 	var repos []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

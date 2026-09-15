@@ -167,7 +167,7 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, addr string, lo
 func sweepTool() mcp.Tool {
 	return mcp.NewTool("sweep",
 		mcp.WithDescription("Sweep dependency update PRs: find, approve, and merge Renovate/Dependabot PRs. "+
-			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable, ci_no_verdict and skipped lists. "+
+			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable, ci_no_verdict, obsolete and skipped lists. "+
 			"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
 			"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
 			"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
@@ -177,6 +177,9 @@ func sweepTool() mcp.Tool {
 			"A failing check that established nothing about the code is excluded from action_required too and listed under ci_no_verdict, with the remedy in its detail: "+
 			"a cancelled job (rerun it), or a CircleCI pipeline refused because setup workflows are disabled for the repository (a human must change the project setting). "+
 			"A security check in that shape is not a finding and is never listed under security_failures. "+
+			"A failing or conflicted bot PR that a sibling with a higher version of the same dependency replaces, or whose diff changes nothing that executes "+
+			"(a pinned GitHub Actions SHA whose trailing version comment is all that moved), is listed under obsolete with a reason of superseded or no_op: "+
+			"it wants closing, not fixing, so it is not in action_required. A green PR still merges. "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
 			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
 		mcp.WithString("query",
@@ -322,7 +325,12 @@ type SweepResult struct {
 	// shape is NOT a finding, so they are excluded from action_required and
 	// security_failures. Each entry's detail names its own remedy.
 	CINoVerdict []SweepPREntry `json:"ci_no_verdict,omitempty"`
-	Skipped     []SweepPREntry `json:"skipped,omitempty"`
+	// Obsolete lists bot PRs that are not worth fixing: a sibling PR carries
+	// a higher version of the same dependency, or the diff changes nothing
+	// that executes. Each entry's reason says which. The remedy is to close
+	// them, so they are excluded from action_required.
+	Obsolete []SweepPREntry `json:"obsolete,omitempty"`
+	Skipped  []SweepPREntry `json:"skipped,omitempty"`
 }
 
 // SweepSummary contains aggregate counts from the sweep.
@@ -353,7 +361,11 @@ type SweepSummary struct {
 	// Failed.
 	Cancelled int `json:"cancelled"`
 	Retried   int `json:"retried"`
-	Skipped   int `json:"skipped"`
+	// Obsolete counts bot PRs that are not worth fixing, whether a
+	// higher-version sibling replaced them or their diff changes nothing
+	// that executes. Disjoint from Failed.
+	Obsolete int `json:"obsolete"`
+	Skipped  int `json:"skipped"`
 }
 
 // SweepPREntry represents a single PR in the sweep results.
@@ -372,6 +384,9 @@ type SweepPREntry struct {
 	// dispatching rescue agents should skip entries with a non-stale
 	// failed rescue and escalate them to a human instead.
 	Rescue *SweepRescueInfo `json:"rescue,omitempty"`
+	// Reason says why an obsolete PR is obsolete: "superseded" or "no_op".
+	// Only set on entries in the obsolete list.
+	Reason string `json:"reason,omitempty"`
 }
 
 // SweepRescueInfo is the JSON projection of a pr.RescueMarker.
@@ -448,6 +463,7 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 			Refreshed:        counts.Refreshed,
 			Cancelled:        counts.Cancelled,
 			Retried:          counts.Retried,
+			Obsolete:         counts.Obsolete,
 			Skipped:          counts.Skipped,
 		},
 	}
@@ -462,6 +478,7 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 			URL:    e.PR.URL,
 			Status: e.State.String(),
 			Detail: e.Detail,
+			Reason: string(e.ObsoleteReason),
 		}
 		if !e.PR.CreatedAt.IsZero() {
 			entry.CreatedAt = e.PR.CreatedAt.UTC().Format(time.RFC3339)
@@ -496,6 +513,10 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 
 	for _, e := range status.NoVerdictEntries() {
 		result.CINoVerdict = append(result.CINoVerdict, toEntry(e))
+	}
+
+	for _, e := range status.ObsoleteEntries() {
+		result.Obsolete = append(result.Obsolete, toEntry(e))
 	}
 
 	for _, e := range status.StaleEntries() {
