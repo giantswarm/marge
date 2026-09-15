@@ -29,16 +29,21 @@ Read this table before you trim a permission. Each row states what the
 permission is for. A permission with no stated reason is a permission somebody
 deletes.
 
-| Permission | Level | Why marge holds it |
-|---|---|---|
-| Metadata | read | Mandatory. GitHub grants it to every App |
-| Pull requests | write | Read the queue, submit approving reviews, merge, label, comment, and write markers and evidence |
-| Contents | write | Two reasons. **(1)** Push branch-writing remedies, `update-branch` merge commits and the strict merge chain. **(2)** Make the App's approving review count. See the hazard below |
-| Checks | read | Read check runs to classify a failure |
-| Commit statuses | read | Read commit statuses, which is how CircleCI reports |
-| Issues | write | Labels and comments on a pull request go through the Issues API. `Pull requests: write` also covers this today. The permission is held because D4 grants it. Confirm that it is dead before you remove it |
-| Actions | write | Re-run a wedged workflow run, and dispatch the Align files workflow |
-| Administration | write | Lift `enforce_admins` for an admin merge and restore it in the same run, and repair a renamed required check after an alignment migration |
+The Key column is the manifest key in `docs/github-app-manifest.json`.
+`TestManifestMatchesTheRecord` compares the two, so the table and the manifest
+can not drift apart. Metadata carries no key: GitHub grants it implicitly and
+the manifest must not name it.
+
+| Permission | Key | Level | Why marge holds it |
+|---|---|---|---|
+| Metadata | | read | Mandatory. GitHub grants it to every App |
+| Pull requests | `pull_requests` | write | Read the queue, submit approving reviews, merge, label, comment, and write markers and evidence |
+| Contents | `contents` | write | Two reasons. **(1)** Push branch-writing remedies, `update-branch` merge commits and the strict merge chain. **(2)** Make the App's approving review count. See the hazard below |
+| Checks | `checks` | read | Read check runs to classify a failure |
+| Commit statuses | `statuses` | read | Read commit statuses, which is how CircleCI reports |
+| Issues | `issues` | write | Labels and comments on a pull request go through the Issues API. `Pull requests: write` also covers this today. The permission is held because D4 grants it. Before you remove it, run one sweep with `issues` dropped from the installation and confirm that labels and comments still land |
+| Actions | `actions` | write | Re-run a wedged workflow run, and dispatch the Align files workflow |
+| Administration | `administration` | write | Lift `enforce_admins` for an admin merge and restore it in the same run, and repair a renamed required check after an alignment migration |
 
 marge dispatches a workflow on `giantswarm/github` only. `Actions: write` is
 organization-wide once the App is installed everywhere, so GitHub does not
@@ -64,9 +69,21 @@ no new action, appeared in `latestOpinionatedReviews`. `reviewDecision` became
 reviewer's repository write access when it reads the reviews, and
 `Contents: write` is what confers that access.
 
-marge asserts this before it approves anything. `ensureWriteAccess` reads the
-repository once per sweep and refuses the approve path when the actor has no
-write access. A loud refusal beats a silent no-op.
+marge asserts this before it submits a review. `ensureWriteAccess` reads
+`GET /repos/{owner}/{repo}` once per repository per sweep and refuses the
+approval when `permissions.push` is `false`. A loud refusal beats a silent
+no-op. The check runs on the dry-run path too, so `--dry-run` names the
+refusal after a permission change instead of reporting a plain skip.
+
+**Not yet measured: `permissions.push` under an installation token.** The
+review-counting result below is measured. The field marge reads to predict it
+is not. Nobody has confirmed that `GET /repos` under an installation token
+with `Pull requests: write` and no `Contents: write` answers
+`permissions.push: false`. Until somebody does, two outcomes stay open: the
+field always reports `true`, which makes the guard a no-op, or the field is
+absent, which marge reports as `write access unknown` and treats as a refusal.
+Measure both permission states on the roadmap#4349 repository and record the
+result here.
 
 Two more results from the same test, both permanent:
 
