@@ -1,0 +1,11 @@
+name: a type error is not an ecosystem wait
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update dependency lint-staged to v17"
+  failing: ["node-build"]
+  logs:
+    "actions:node-build": |
+      src/index.ts(12,7): error TS2307: Cannot find module '@material-table/core' or its corresponding type declarations.
+expect:
+  rule: ""

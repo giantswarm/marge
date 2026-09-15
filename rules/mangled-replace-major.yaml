@@ -1,0 +1,13 @@
+name: mangled-replace-major
+summary: Renovate rewrote the module-path side of a self-replace to a wrong major.
+source: runbook row 38 (L156)
+match:
+  states: [failed]
+  kinds: [renovate]
+  log:
+    source: actions
+    pattern: 'go\.mod:\d+: replace [^ ]+: version "v\d+[^"]*" invalid: should be v\d+, not v\d+'
+action:
+  name: close
+evidence:
+  reason: the replace directive now names a major the module does not declare, so the PR was closed

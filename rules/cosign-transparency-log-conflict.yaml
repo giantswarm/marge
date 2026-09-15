@@ -1,0 +1,14 @@
+name: cosign-transparency-log-conflict
+summary: cosign fails when an equivalent entry already exists in the transparency log.
+source: runbook row 32 (L150)
+match:
+  states: [failed]
+  check:
+    name: "*push-to-registries*"
+  log:
+    source: circleci
+    pattern: 'createLogEntryConflict|an equivalent entry already exists in the transparency log'
+action:
+  name: circleci-retry
+evidence:
+  reason: the signature was already in the transparency log, so the build was rerun

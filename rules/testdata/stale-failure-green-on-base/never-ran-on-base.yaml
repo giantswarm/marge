@@ -1,0 +1,10 @@
+name: a check the base head never ran is not green
+subject:
+  state: stale
+  kind: renovate
+  title: "chore(deps): update module golang.org/x/net to v0.46.0"
+  failing: ["build-chart"]
+  baseState:
+    build-chart: absent
+expect:
+  rule: ""

@@ -1,0 +1,12 @@
+name: a dependency demanding a newer Node waits
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update dependency lint-staged to v17"
+  failing: ["node-build"]
+  logs:
+    "actions:node-build": |
+      error lint-staged@17.0.5: The engine "node" is incompatible with this module. Expected version ">=22.0.0". Got "20.19.0"
+      error Found incompatible module.
+expect:
+  rule: ecosystem-not-ready

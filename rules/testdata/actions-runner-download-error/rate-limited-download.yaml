@@ -1,0 +1,12 @@
+name: a rate-limited action download is a rerun
+subject:
+  state: failed
+  kind: dependabot
+  title: "chore(deps): bump actions/checkout from 5.0.0 to 5.1.0"
+  failing: ["build"]
+  logs:
+    "actions:build": |
+      Download action repository 'actions/checkout@v5.1.0' (SHA:fbc6f39)
+      Error: Failed to download action 'https://api.github.com/repos/actions/checkout/tarball/v5.1.0'. Error: Response status code does not indicate success: 429 Too Many Requests
+expect:
+  rule: actions-runner-download-error

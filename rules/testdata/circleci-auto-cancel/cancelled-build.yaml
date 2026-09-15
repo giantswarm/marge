@@ -1,0 +1,14 @@
+name: a build cancelled by a newer pipeline is retried
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update module github.com/google/go-github/v92 to v92.1.0"
+  failing: ["ci/circleci: go-build"]
+  logs:
+    "circleci:ci/circleci: go-build": |
+      #!/bin/bash -eo pipefail
+      Too long with no output (exceeded 10m0s): context canceled
+      Canceled: a newer pipeline started on this branch
+expect:
+  rule: circleci-auto-cancel
+  check: "ci/circleci: go-build"

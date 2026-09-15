@@ -1,0 +1,11 @@
+name: stale-failure-green-on-base
+summary: A failure already fixed on the base branch; the branch only needs refreshing.
+source: runbook row 68 (L186)
+match:
+  states: [stale]
+  pr:
+    baseHead: green
+action:
+  name: update-branch
+evidence:
+  reason: every failing check is green on the base head, so the branch was updated from it

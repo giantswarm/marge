@@ -44,8 +44,10 @@ type Loader struct {
 
 // Catalogue is the loaded rule set of one sweep.
 type Catalogue struct {
-	// Rules are ordered by name. The first rule that matches a PR wins, so
-	// the order is part of the contract and a scenario test pins it.
+	// Rules are ordered by how much they ask of a PR, the most specific
+	// first, and by name among equals. The first rule that matches wins, so
+	// a narrow rule is never shadowed by a broad one that happens to sort
+	// earlier. The order is part of the contract and scenarios pin it.
 	Rules []*Rule
 	// Digest identifies the exact catalogue this sweep ran, and is written
 	// into the evidence of every action a rule selected.
@@ -91,6 +93,12 @@ func (l Loader) Load(ctx context.Context, reg *remedy.Registry) (*Catalogue, err
 	if err := cat.checkNames(); err != nil {
 		return nil, err
 	}
+	slices.SortStableFunc(cat.Rules, func(a, b *Rule) int {
+		if d := b.specificity() - a.specificity(); d != 0 {
+			return d
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
 	return cat, nil
 }
 

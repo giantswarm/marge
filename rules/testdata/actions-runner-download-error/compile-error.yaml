@@ -1,0 +1,12 @@
+name: a compile error is left alone
+subject:
+  state: failed
+  kind: dependabot
+  title: "chore(deps): bump actions/checkout from 5.0.0 to 5.1.0"
+  failing: ["build"]
+  logs:
+    "actions:build": |
+      internal/pr/kind.go:88:9: cannot use kind (variable of type string) as pr.Kind value
+      Error: Process completed with exit code 1.
+expect:
+  rule: ""
