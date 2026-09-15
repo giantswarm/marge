@@ -308,11 +308,13 @@ func TestMergeRepos(t *testing.T) {
 	}
 }
 
-// TestSweepRequest_repoList guards that the sweep tool honours repos and
-// repos_file together instead of dropping one: the merged list holds the
-// explicit entries first, then the file's entries, without duplicates and
-// without ever touching a temporary file.
-func TestSweepRequest_repoList(t *testing.T) {
+// TestSweepRequest_resolveScope guards that the sweep tool honours repos
+// and repos_file together instead of dropping one: the merged list holds
+// the explicit entries first, then the file's entries, without duplicates
+// and without ever touching a temporary file.
+func TestSweepRequest_resolveScope(t *testing.T) {
+	client := contentsMux(t, "giantswarm", "github", nil)
+
 	reposFile := filepath.Join(t.TempDir(), "repos.txt")
 	content := "# team repos\n\nmy-org/a\n  My-Org/c  \nother/d\n"
 	if err := os.WriteFile(reposFile, []byte(content), 0o600); err != nil {
@@ -336,21 +338,21 @@ func TestSweepRequest_repoList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.req.repoList(t.Context(), nil)
+			scope, err := tt.req.resolveScope(t.Context(), client)
 			if err != nil {
-				t.Fatalf("repoList: %v", err)
+				t.Fatalf("resolveScope: %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("repoList = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(scope.Repos, tt.want) {
+				t.Errorf("resolveScope = %v, want %v", scope.Repos, tt.want)
 			}
 		})
 	}
 
 	t.Run("unreadable repos_file is an error", func(t *testing.T) {
 		req := sweepRequest{Repos: []string{"my-org/b"}, Opts: RunOptions{ReposFile: filepath.Join(t.TempDir(), "missing.txt")}}
-		got, err := req.repoList(t.Context(), nil)
+		scope, err := req.resolveScope(t.Context(), client)
 		if err == nil || !strings.Contains(err.Error(), "reading repos file") {
-			t.Fatalf("repoList = %v, %v; want a reading repos file error", got, err)
+			t.Fatalf("resolveScope = %v, %v; want a reading repos file error", scope.Repos, err)
 		}
 	})
 }

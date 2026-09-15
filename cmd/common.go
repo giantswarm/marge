@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/google/go-github/v92/github"
-	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
 )
@@ -42,26 +42,57 @@ type RunOptions struct {
 	Actions process.ActionSet
 	// CheckTimeout is how long one PR waits for pending checks; zero means
 	// no wait.
-	CheckTimeout     time.Duration
+	CheckTimeout time.Duration
+	// Policies is the sweep policy of the scope, resolved from the policy
+	// files by resolveScope before the sweep starts.
+	Policies         *policy.Set
 	Org              string
-	ReposFile        string // repositories to scan instead of searching GitHub; see repoList
+	ReposFile        string // repositories to scan instead of searching GitHub; see resolveScope
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
 }
 
-// repoList returns the repositories a run is restricted to: the team's
-// repositories under the team scope, else the entries of ReposFile when
-// one was given. Nil means no restriction, so the PRs come from the GitHub
-// search.
-func (o RunOptions) repoList(ctx context.Context, client *github.Client) ([]string, error) {
+// resolveScope reads the policy files and returns what the run covers: the
+// repositories it is restricted to and the policy they are swept under. The
+// team scope takes both from the team's files; every other scope takes the
+// repositories from ReposFile, or nothing, which leaves the PRs to the
+// GitHub search, and the policy from the company default file alone.
+//
+// It runs at the start of every sweep, so a policy change takes effect on
+// the next run without a restart.
+func (o RunOptions) resolveScope(ctx context.Context, client *github.Client) (policy.Scope, error) {
+	loader, err := policyLoader(client)
+	if err != nil {
+		return policy.Scope{}, err
+	}
 	if o.Team != "" {
-		return teamRepos(ctx, client, o.Team)
+		return loader.TeamScope(ctx, o.Team)
+	}
+	scope, err := loader.QueryScope(ctx)
+	if err != nil {
+		return policy.Scope{}, err
 	}
 	if o.ReposFile == "" {
-		return nil, nil
+		return scope, nil
 	}
-	return readReposFile(o.ReposFile)
+	repos, err := readReposFile(o.ReposFile)
+	if err != nil {
+		return policy.Scope{}, err
+	}
+	scope.Repos = repos
+	return scope, nil
+}
+
+// policyLoader returns a loader over the repository that holds the team
+// files and the policy files.
+func policyLoader(client *github.Client) (policy.Loader, error) {
+	owner, name, err := teamFileRepo()
+	if err != nil {
+		return policy.Loader{}, err
+	}
+	source := policy.GitHubSource{Client: client, Owner: owner, Repo: name}
+	return policy.Loader{Source: source, Owner: owner}, nil
 }
 
 // teamFileRepoEnv names the owner/repo that holds one file per team
@@ -83,50 +114,6 @@ func teamFileRepo() (owner, name string, err error) {
 		return "", "", fmt.Errorf("%s=%q: want owner/repo", teamFileRepoEnv, spec)
 	}
 	return owner, name, nil
-}
-
-// teamRepos resolves a team's repositories from repositories/team-<name>.yaml
-// in the team-file repository. Only each entry's name is read; every other
-// key of the team file belongs to the generators and changes without
-// notice. The repositories live under the team-file repository's owner.
-func teamRepos(ctx context.Context, client *github.Client, team string) ([]string, error) {
-	owner, name, err := teamFileRepo()
-	if err != nil {
-		return nil, err
-	}
-	path := fmt.Sprintf("repositories/team-%s.yaml", team)
-	file, _, resp, err := client.Repositories.GetContents(ctx, owner, name, path, nil)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("no team file for %q: %s/%s has no %s", team, owner, name, path)
-		}
-		return nil, fmt.Errorf("reading team file %s: %w", path, err)
-	}
-	content, err := file.GetContent()
-	if err != nil {
-		return nil, fmt.Errorf("decoding team file %s: %w", path, err)
-	}
-	return parseTeamFile(content, owner, path)
-}
-
-// parseTeamFile returns the owner/name entries of a team file's content.
-func parseTeamFile(content, owner, path string) ([]string, error) {
-	var entries []struct {
-		Name string `yaml:"name"`
-	}
-	if err := yaml.Unmarshal([]byte(content), &entries); err != nil {
-		return nil, fmt.Errorf("parsing team file %s: %w", path, err)
-	}
-	var repos []string
-	for _, e := range entries {
-		if name := strings.TrimSpace(e.Name); name != "" {
-			repos = append(repos, owner+"/"+name)
-		}
-	}
-	if len(repos) == 0 {
-		return nil, fmt.Errorf("team file %s lists no repositories", path)
-	}
-	return repos, nil
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
@@ -200,6 +187,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc.SecurityCheckPatterns = parseCSVList(opts.SecurityPatterns)
 	proc.Actions = opts.Actions
 	proc.CheckTimeout = opts.CheckTimeout
+	proc.Policies = opts.Policies
 	proc.CircleCI = circleci.NewClient()
 	// Cross-PR knowledge, so it is computed once from the whole list before
 	// the per-PR processing starts, and read without locking afterwards.
@@ -212,29 +200,11 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	// Group PRs by owner/repo. PRs within the same repo are processed
-	// sequentially to avoid "base branch was modified" failures. Different
-	// repo groups run in parallel, bounded by the semaphore.
-	repoGroups := pr.GroupByRepo(prs)
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
-
-	for _, group := range repoGroups {
-		wg.Add(1)
-		go func(repoPRs []pr.PRInfo) {
-			defer wg.Done()
-			for _, info := range repoPRs {
-				sem <- struct{}{}
-				key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
-				idx := indexByPR[key]
-				proc.ProcessPR(ctx, info, status, idx)
-				<-sem
-			}
-		}(group.PRs)
-	}
-
-	wg.Wait()
+	// Group PRs by owner/repo, then fan out under the policy's concurrency.
+	forEachPR(pr.GroupByRepo(prs), opts.Policies.Base().Concurrency, func(info pr.PRInfo) {
+		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
+		proc.ProcessPR(ctx, info, status, indexByPR[key])
+	})
 
 	close(stopRefresh)
 	<-refreshStopped
@@ -254,9 +224,60 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 
 	if !opts.Quiet {
 		fmt.Fprintf(os.Stderr, "\n%s\n", status.FormatSummary())
+		reportUnenforced(os.Stderr, opts.Policies.Base())
 	}
 
 	return status, nil
+}
+
+// forEachPR runs fn on every PR of every group, under the two bounds the
+// policy declares: perTeam repositories run at once, and within one
+// repository perRepo PRs. A repository holds its slot for as long as it has
+// work, so perTeam bounds repositories and not the PRs they hold together.
+// The default perRepo of 1 keeps the PRs of a repository sequential, which
+// is what avoids "base branch was modified" failures.
+func forEachPR(groups []pr.PRGroup, concurrency pr.Concurrency, fn func(pr.PRInfo)) {
+	var wg sync.WaitGroup
+	repoSlots := make(chan struct{}, max(concurrency.PerTeam, 1))
+
+	for _, group := range groups {
+		wg.Add(1)
+		go func(repoPRs []pr.PRInfo) {
+			defer wg.Done()
+			repoSlots <- struct{}{}
+			defer func() { <-repoSlots }()
+
+			var repoWG sync.WaitGroup
+			prSlots := make(chan struct{}, max(concurrency.PerRepo, 1))
+			for _, info := range repoPRs {
+				prSlots <- struct{}{}
+				repoWG.Add(1)
+				go func(info pr.PRInfo) {
+					defer repoWG.Done()
+					defer func() { <-prSlots }()
+					fn(info)
+				}(info)
+			}
+			repoWG.Wait()
+		}(group.PRs)
+	}
+
+	wg.Wait()
+}
+
+// reportUnenforced names the caps the policy declares that this build does
+// not enforce. A cap a team wrote down and nothing applies must be said out
+// loud, or the team reads the file as a guarantee.
+func reportUnenforced(w io.Writer, resolved pr.Policy) {
+	unenforced := resolved.DeclaredUnenforced()
+	if len(unenforced) == 0 {
+		return
+	}
+	subject := "it"
+	if len(unenforced) > 1 {
+		subject = "them"
+	}
+	_, _ = fmt.Fprintf(w, "policy declares %s; this build does not enforce %s yet\n", strings.Join(unenforced, ", "), subject)
 }
 
 func watchLoop(ctx context.Context, watch bool, fn func(ctx context.Context) error) error {

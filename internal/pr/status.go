@@ -146,6 +146,9 @@ type StatusEntry struct {
 	// that dispatch on it rather than on Detail. Empty unless State is
 	// StatusObsolete.
 	ObsoleteReason ObsoleteReason
+	// Policy is the sweep policy resolved for this PR's repository. Nil
+	// for a PR the sweep could not fetch.
+	Policy *Policy
 }
 
 // ObsoleteReason names why a PR is not worth fixing.
@@ -203,6 +206,16 @@ func (s *PRStatus) SetClassification(idx int, kind Kind, updateType UpdateType) 
 	if idx < len(s.entries) {
 		s.entries[idx].Kind = kind
 		s.entries[idx].UpdateType = updateType
+	}
+}
+
+// SetPolicy records the sweep policy resolved for the entry's repository,
+// so every decision the sweep took can be explained afterwards.
+func (s *PRStatus) SetPolicy(idx int, policy Policy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.entries) {
+		s.entries[idx].Policy = &policy
 	}
 }
 
