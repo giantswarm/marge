@@ -55,15 +55,7 @@ func isBudgetBlockMessage(msg string) bool {
 // exercised without hitting the GitHub API: the processor gathers the output
 // strings and annotation messages and delegates the decision here.
 func isBudgetBlockOutput(title, summary, text string, annotationMessages []string) bool {
-	if isBudgetBlockMessage(title) || isBudgetBlockMessage(summary) || isBudgetBlockMessage(text) {
-		return true
-	}
-	for _, m := range annotationMessages {
-		if isBudgetBlockMessage(m) {
-			return true
-		}
-	}
-	return false
+	return matchesAnyMessage(isBudgetBlockMessage, title, summary, text, annotationMessages)
 }
 
 // blockedDetail builds a human-readable detail string for a PR whose CI
@@ -74,10 +66,5 @@ func blockedDetail(blockedChecks []string) string {
 	if len(blockedChecks) == 0 {
 		return "Actions budget exhausted; no jobs ran"
 	}
-	const maxShow = 3
-	if len(blockedChecks) <= maxShow {
-		return fmt.Sprintf("Actions budget exhausted; no jobs ran: %s", strings.Join(blockedChecks, ", "))
-	}
-	return fmt.Sprintf("Actions budget exhausted; no jobs ran: %s (+%d more)",
-		strings.Join(blockedChecks[:maxShow], ", "), len(blockedChecks)-maxShow)
+	return fmt.Sprintf("Actions budget exhausted; no jobs ran: %s", joinCapped(blockedChecks))
 }

@@ -167,9 +167,10 @@ func ColorizeStatus(state StatusState, detail string) string {
 		return fmt.Sprintf("\033[1;91m%s\033[0m", label)
 	case StatusFailed, StatusConflict, StatusUntrustedAuthor:
 		return fmt.Sprintf("\033[31m%s\033[0m", label) // red
-	case StatusBlockedCI:
-		// Magenta so a billing/budget block reads as "not a code failure",
-		// distinct from the red used for genuine failures.
+	case StatusBlockedCI, StatusNoVerdict:
+		// Magenta so a budget block and a check that established nothing
+		// both read as "not a code failure", distinct from the red used for
+		// genuine failures.
 		return fmt.Sprintf("\033[35m%s\033[0m", label)
 	case StatusSkipped, StatusStale, StatusCancelled:
 		// Yellow: not a real failure, but somebody has to act (a stale
@@ -206,6 +207,7 @@ func PrintPlainResults(w *os.File, status *PRStatus) {
 	printFailureGroup(w, CancelledGroupHeader, status.CancelledEntries())
 	printFailureGroup(w, RetriedGroupHeader, status.RetriedEntries())
 	printFailureGroup(w, "CI unavailable (Actions budget)", blocked)
+	printFailureGroup(w, NoVerdictGroupHeader, status.NoVerdictEntries())
 
 	if len(skipped) > 0 {
 		_, _ = fmt.Fprintf(w, "Skipped (%d):\n", len(skipped))
@@ -223,6 +225,9 @@ const (
 	RefreshedGroupHeader = "Refreshed (re-checking)"
 	CancelledGroupHeader = "Cancelled (CircleCI auto-cancelled the build -- retry first)"
 	RetriedGroupHeader   = "Retried (re-checking)"
+	// NoVerdictGroupHeader names the bucket for checks that established
+	// nothing about the code. Each entry's detail names its own remedy.
+	NoVerdictGroupHeader = "CI unavailable (no verdict) -- the checks decided nothing, see the detail"
 )
 
 // printFailureGroup writes a header and one entry per failure including its

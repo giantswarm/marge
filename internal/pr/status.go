@@ -42,6 +42,12 @@ const (
 	// StatusRetried marks a cancelled PR whose builds were just retried on
 	// the same commit; CI is running again and the next sweep decides.
 	StatusRetried
+	// StatusNoVerdict marks a failing PR whose every failing check
+	// established nothing about the code: the job was cancelled, or a
+	// CircleCI project setting refused the pipeline. There is nothing to
+	// rescue, and a security check in this shape is not a finding. The
+	// detail names the remedy for each check.
+	StatusNoVerdict
 )
 
 func (s StatusState) String() string {
@@ -82,6 +88,8 @@ func (s StatusState) String() string {
 		return "Cancelled"
 	case StatusRetried:
 		return "Retried"
+	case StatusNoVerdict:
+		return "CI unavailable (no verdict)"
 	default:
 		return "Unknown"
 	}
@@ -168,9 +176,10 @@ func (s *PRStatus) Snapshot() []StatusEntry {
 //
 // Failed covers every action-required outcome (plain and security failures,
 // conflicts, untrusted authors). Blocked (CI could not run because of an
-// Actions budget block), Stale (failing checks are green on the base branch
-// head and the PR is behind it), Refreshed (a stale branch was just updated
-// from its base), Cancelled (CircleCI auto-cancelled the failing builds) and
+// Actions budget block), NoVerdict (the failing checks established nothing
+// about the code), Stale (failing checks are green on the base branch head
+// and the PR is behind it), Refreshed (a stale branch was just updated from
+// its base), Cancelled (CircleCI auto-cancelled the failing builds) and
 // Retried (those builds were just retried) are counted separately from
 // Failed: none of them is a genuine CI failure and none of them belongs in
 // the rescue path.
@@ -178,6 +187,7 @@ type Counts struct {
 	Merged    int
 	Failed    int
 	Blocked   int
+	NoVerdict int
 	Stale     int
 	Refreshed int
 	Cancelled int
@@ -196,6 +206,8 @@ func (s *PRStatus) countsLocked() Counts {
 			c.Failed++
 		case StatusBlockedCI:
 			c.Blocked++
+		case StatusNoVerdict:
+			c.NoVerdict++
 		case StatusStale:
 			c.Stale++
 		case StatusRefreshed:
@@ -245,6 +257,9 @@ func (s *PRStatus) FormatSummary() string {
 	if c.Blocked > 0 {
 		fmt.Fprintf(&b, ", %d CI-unavailable", c.Blocked)
 	}
+	if c.NoVerdict > 0 {
+		fmt.Fprintf(&b, ", %d no-verdict", c.NoVerdict)
+	}
 	fmt.Fprintf(&b, ", %d skipped", c.Skipped)
 	return b.String()
 }
@@ -281,6 +296,14 @@ func (s *PRStatus) BlockedEntries() []StatusEntry {
 		}
 	}
 	return result
+}
+
+// NoVerdictEntries returns entries whose every failing check established
+// nothing about the code. Like BlockedEntries they are kept out of
+// ActionRequired and the failed counts: there is nothing to rescue, and each
+// entry's detail names its own remedy. Oldest PR first.
+func (s *PRStatus) NoVerdictEntries() []StatusEntry {
+	return s.entriesInState(StatusNoVerdict)
 }
 
 // StaleEntries returns entries whose failure is stale: the PR head is behind

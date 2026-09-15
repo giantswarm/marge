@@ -52,7 +52,14 @@ belong to from its failed jobs, so the jobs the cancel left blocked run too,
 and reports the PR as "Retried". A build with no failed job to rerun from
 falls back to the single-build retry. Private CircleCI projects need a token
 (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); without one the build cannot be
-inspected and the PR stays "Failed", annotated.`,
+inspected and the PR stays "Failed", annotated.
+
+A failing check that established nothing about the code is not a failure
+either. A cancelled job and a CircleCI pipeline refused because setup
+workflows are disabled for the repository are both reported as "CI
+unavailable (no verdict)", with the remedy in the detail: rerun the job, or
+change the project setting. A security check in that shape is never a
+security failure.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
