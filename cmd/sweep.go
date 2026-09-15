@@ -15,6 +15,7 @@ import (
 
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/process"
+	"github.com/giantswarm/marge/internal/rules"
 )
 
 var sweepOpts RunOptions
@@ -23,6 +24,9 @@ var sweepFlags struct {
 	actions      string
 	output       string
 	checkTimeout time.Duration
+	rulesRepo    string
+	rulesRef     string
+	rulesPath    string
 }
 
 // interactiveCheckTimeout is how long the interactive command waits for
@@ -42,6 +46,9 @@ func init() {
 	sweepCmd.Flags().BoolVar(&sweepOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	sweepCmd.Flags().StringVar(&sweepFlags.output, "output", "table", "Output format: table or json")
 	sweepCmd.Flags().BoolVar(&sweepOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
+	sweepCmd.Flags().StringVar(&sweepFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name (default "+rules.DefaultOwner+"/"+rules.DefaultRepo+")")
+	sweepCmd.Flags().StringVar(&sweepFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from (default "+rules.DefaultRef+")")
+	sweepCmd.Flags().StringVar(&sweepFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")
 	sweepCmd.Flags().StringVar(&sweepOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(sweepCmd)
@@ -159,6 +166,8 @@ marge never closes a PR itself.`,
 		}
 		login := me.GetLogin()
 
+		source := RulesSource{Repo: sweepFlags.rulesRepo, Ref: sweepFlags.rulesRef, Path: sweepFlags.rulesPath}
+
 		return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
 			scope, err := sweepOpts.resolveScope(ctx, client)
 			if err != nil {
@@ -166,6 +175,12 @@ marge never closes a PR itself.`,
 			}
 			opts := sweepOpts
 			opts.Policies = scope.Policies
+
+			catalogue, rulesReport := loadRules(ctx, client, source)
+			opts.Rules = catalogue
+			if sweepFlags.output != "json" {
+				reportRules(os.Stderr, rulesReport)
+			}
 
 			found, err := searchPRs(ctx, client, opts.Query, login, scope.Repos)
 			if err != nil {
@@ -178,7 +193,7 @@ marge never closes a PR itself.`,
 				return err
 			}
 			if sweepFlags.output == "json" {
-				return json.NewEncoder(os.Stdout).Encode(buildSweepResult(status, found.Failed))
+				return json.NewEncoder(os.Stdout).Encode(buildSweepResult(status, found.Failed, rulesReport))
 			}
 			for _, f := range found.Failed {
 				fmt.Fprintf(os.Stderr, "repository %s not listed: %s\n", f.Repo, f.Err)

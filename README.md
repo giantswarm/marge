@@ -95,7 +95,7 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 | `--dry-run` | | `false` | Show what would be done without making changes |
 | `--watch` | `-w` | `false` | Keep polling for new PRs every 60 seconds |
 | `--grouping` | | `repo` | Group by `repo` or `dependency` |
-| `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `mark` (see [Actions](#actions)) |
+| `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `remedy`, `mark` (see [Actions](#actions)) |
 | `--org` | | | Limit to repos owned by this org or user |
 | `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan for bot PRs instead of searching GitHub. A query then keeps only the listed repos whose `org/repo` contains it (case-insensitive) |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
@@ -192,7 +192,34 @@ An action marge performed, or a guard decision a person needs to see, is written
 
 #### Actions
 
-`--actions` runs a subset of the sweep steps, always in this order: `classify` (read the PR, its checks and markers, decide the state, write the label; always runs), `approve`, `merge`, `refresh` (update stale branches from their base), `retry` (re-run auto-cancelled CircleCI builds on the same head), `mark` (write markers and evidence comments). `--dry-run` decides every outcome and writes nothing, labels included.
+`--actions` runs a subset of the sweep steps, always in this order: `classify` (read the PR, its checks and markers, decide the state, write the label; always runs), `approve`, `merge`, `refresh` (update stale branches from their base), `retry` (re-run auto-cancelled CircleCI builds on the same head), `remedy` (apply the catalogue rule that matches the classification; see [Rules](#rules)), `mark` (write markers and evidence comments). `remedy` needs `mark` and is refused without it: the one-attempt-per-change guard reads the evidence marker, so a remedy that writes none repeats on every sweep. `--dry-run` decides every outcome and writes nothing, labels included.
+
+#### Rules
+
+The `remedy` step matches a classified PR against a catalogue of rules and applies the action the matching rule names. Rules live in this repository under `rules/`, one YAML document per file, and are **read at the start of every sweep from the default branch**. The binary does not embed them, so a merged rule is live on the next run without a release. `--rules-ref`, `--rules-repo` and `--rules-path` change where the catalogue is read from; `--rules-path` reads a directory on disk, which is how a rule is tried before it is merged.
+
+A rule carries a detection signal, the name of one action, refusals it adds, and the evidence line written on the PR. The signal is a check-name glob (`match.check.name`), a bounded log-excerpt expression (`match.log`), PR metadata (`match.pr`) -- the title (`titlePattern`), the diff (`files`), or what the base head reported for the failing checks (`baseHead`) -- or the base branch's protection (`match.protection.missingContexts`), globs over the required contexts the head never reported. A `baseHead` condition must hold for every check the rule selected, so a PR carrying one transient failure and one real failure matches neither `green` nor `red`. A glob that matches everything is refused wherever one is accepted: a rule names at least one literal segment, or it is a classification restated rather than a signal.
+
+```yaml
+name: circleci-auto-cancel
+summary: A build CircleCI itself cancelled established nothing about the code.
+source: runbook row 74
+match:
+  states: [failed]
+  check:
+    name: "ci/circleci: *"
+  log:
+    source: circleci
+    pattern: 'canceled'
+action:
+  name: circleci-retry
+evidence:
+  reason: the auto-cancelled build was retried on the same commit
+```
+
+Documents are decoded strictly, so an unknown key is an error. **A rule cannot do what its action forbids**: each action enforces its own guards, a rule may only add refusals, and there is no syntax for removing one. The guard vocabulary is the trusted bot author, no failing security check, the required checks, checks settled on the head, one attempt per change, a log excerpt behind every write, and the generated files a remedy may never hand-edit. Each action carries the subset it needs, not all of them, and `marge rules validate` prints the set an action enforces. Rules are tried in name order and the first match wins, so a catalogue decides the same way however it was read.
+
+A rule that fails to validate is skipped and named on stderr and in the JSON `rules` object; the rest of the catalogue still runs. A catalogue that cannot be read at all refuses every remedy for that run and leaves classification, approval and merging unchanged. Every sweep reports the catalogue digest it ran, and every evidence comment names the rule and that digest.
 
 #### Security check patterns
 
@@ -323,9 +350,12 @@ The live table shows every PR's outcome, including the failure reason and any ai
 |------|-------|---------|-------------|
 | `--team` | | | Team whose repositories are swept (team scope) |
 | `--query` | | | GitHub search text (query scope) |
-| `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `mark` (see [Actions](#actions)) |
+| `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `remedy`, `mark` (see [Actions](#actions)) |
 | `--dry-run` | | `false` | Decide every outcome, write nothing |
 | `--check-timeout` | | `0` | How long to wait for one PR's pending checks; zero reports the PR as waiting |
+| `--rules-repo` | | `giantswarm/marge` | Repository the rule catalogue is read from, as `owner/name` |
+| `--rules-ref` | | `main` | Branch the rule catalogue is read from |
+| `--rules-path` | | | Read the catalogue from this directory instead of the repository |
 | `--watch` | `-w` | `false` | Keep polling for new PRs every 60 seconds |
 | `--org` | | | Limit to repos owned by this org or user (query scope) |
 | `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan instead of searching GitHub (query scope) |
@@ -355,7 +385,7 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 Starts an MCP server exposing two tools:
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `policy` (the resolved policy the PR was decided under, with the `sources` that produced it), `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`rules`, `summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `policy` (the resolved policy the PR was decided under, with the `sources` that produced it), `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
 
 | Flag | Default | Description |

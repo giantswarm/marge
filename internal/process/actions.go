@@ -23,12 +23,15 @@ const (
 	ActionRefresh Action = "refresh"
 	// ActionRetry retries auto-cancelled CircleCI builds on the PR head.
 	ActionRetry Action = "retry"
+	// ActionRemedy applies the catalogue rule that matches a classified PR,
+	// through the action the rule names and that action's guards.
+	ActionRemedy Action = "remedy"
 	// ActionMark writes markers and evidence comments on the PR.
 	ActionMark Action = "mark"
 )
 
 // AllActions lists every action in execution order.
-var AllActions = []Action{ActionClassify, ActionApprove, ActionMerge, ActionRefresh, ActionRetry, ActionMark}
+var AllActions = []Action{ActionClassify, ActionApprove, ActionMerge, ActionRefresh, ActionRetry, ActionRemedy, ActionMark}
 
 // ActionSet is the subset of actions one sweep performs.
 type ActionSet map[Action]bool
@@ -54,6 +57,9 @@ func ParseActions(csv string) (ActionSet, error) {
 		set[name] = true
 	}
 	set[ActionClassify] = true
+	if set[ActionRemedy] && !set[ActionMark] {
+		return nil, fmt.Errorf("action %q needs %q: the once-per-change guard reads the evidence marker, so a remedy without it repeats on every sweep", ActionRemedy, ActionMark)
+	}
 	return set, nil
 }
 

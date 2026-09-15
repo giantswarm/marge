@@ -11,8 +11,11 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/remedy"
+	"github.com/giantswarm/marge/internal/rules"
 )
 
 const (
@@ -44,6 +47,17 @@ type Processor struct {
 
 	// Actions selects the steps this sweep performs. Nil performs all.
 	Actions ActionSet
+
+	// Rules is the catalogue loaded at the start of the sweep. Nil refuses
+	// every remedy and leaves classification, approval and merging as they
+	// are.
+	Rules *rules.Catalogue
+	// Remedies is the action vocabulary a rule may name. Nil refuses every
+	// remedy.
+	Remedies *remedy.Registry
+	// Logs reads the excerpt a rule's log signal matches against. Nil leaves
+	// every log signal unmatched.
+	Logs *logs.Fetcher
 
 	// Policies is the resolved bot PR sweep policy of the scope, read from
 	// the policy files before the sweep starts. Nil applies the company
@@ -103,6 +117,43 @@ type prRun struct {
 	// off. Such a repository receives no write at all, the classification
 	// label included.
 	untouched bool
+
+	// kind and updateType are the classification of the PR's author and its
+	// dependency change.
+	kind       pr.Kind
+	updateType pr.UpdateType
+	// failing names the red checks on the head that produced a verdict.
+	failing []string
+	// required is what the head reported for the base branch's required
+	// contexts.
+	required remedy.Required
+	// reported counts the contexts the head reported in any state, and
+	// settledAt is the newest completion among them. checksPending reports
+	// whether one of them has not finished. Together they say whether a
+	// context nobody reported may still report.
+	reported      int
+	checksPending bool
+	settledAt     time.Time
+	// files are the paths of the PR diff, fetched once and only for a rule
+	// that carries a file signal.
+	files       []string
+	filesLoaded bool
+	// statusTargets and detailsURLs say where each failing check's log
+	// lives: a CircleCI build behind a commit status, an Actions job behind
+	// a check run.
+	statusTargets map[string]string
+	detailsURLs   map[string]string
+	// excerpts memoises one log excerpt per check and source.
+	excerpts map[string]string
+}
+
+// checkURL says where a failing check's build or job lives: a CircleCI
+// build behind a commit status, an Actions job behind a check run.
+func (r *prRun) checkURL(check string) string {
+	if url := r.statusTargets[check]; url != "" {
+		return url
+	}
+	return r.detailsURLs[check]
 }
 
 func (r *prRun) set(state pr.StatusState, detail string) {
@@ -195,6 +246,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
+	run.kind, run.updateType = kind, updateType
 	status.SetClassification(idx, kind, updateType)
 
 	if pullReq.GetMerged() {
@@ -274,6 +326,7 @@ func (p *Processor) finish(ctx context.Context, run *prRun) {
 	if run.untouched {
 		return
 	}
+	p.applyRule(ctx, run)
 	p.attachRescueMarker(ctx, run)
 	state := run.status.StateAt(run.idx)
 	if class := pr.LabelClass(state); class != "" && !p.DryRun {
@@ -327,6 +380,13 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 			return false
 		}
 		required := evaluateRequired(prot.Contexts, outcome.reported)
+		run.failing = outcome.failedChecks
+		run.required = remedy.Required(required)
+		run.statusTargets = outcome.statusTargets
+		run.detailsURLs = outcome.detailsURLs
+		run.reported = len(outcome.reported)
+		run.checksPending = outcome.state == statePending
+		run.settledAt = outcome.settledAt
 
 		if len(required.Failed) > 0 || outcome.state == stateFailure || outcome.state == stateError {
 			if !p.classifyFailure(ctx, run, outcome, prot) {
@@ -460,6 +520,11 @@ type checkOutcome struct {
 	// target_url, so the CircleCI lookup can find the build behind it.
 	// Check runs have no entry.
 	statusTargets map[string]string
+	// detailsURLs maps each failing check run to its details URL, which
+	// carries the Actions job id the log excerpt is read from.
+	detailsURLs map[string]string
+	// settledAt is the newest completion time among the head's contexts.
+	settledAt time.Time
 }
 
 func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (checkOutcome, error) {
@@ -477,8 +542,8 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	}
 
 	reported := make(map[string]contextState)
-	record := func(name string, success, failed bool) {
-		recordContext(reported, name, success, failed, time.Time{})
+	record := func(name string, success, failed bool, at time.Time) {
+		recordContext(reported, name, success, failed, at)
 	}
 
 	if checkRuns.GetTotal() == 0 && len(combined.Statuses) == 0 {
@@ -486,6 +551,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	}
 
 	var failedChecks []string
+	var detailsURLs map[string]string
 	var blockedChecks []string
 	var noVerdictChecks []noVerdictCheck
 	allComplete := true
@@ -494,9 +560,10 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		name := cr.GetName()
 		if cr.GetStatus() != statusCompleted {
 			allComplete = false
-			record(name, false, false)
+			record(name, false, false, time.Time{})
 			continue
 		}
+		completed := cr.GetCompletedAt().Time
 		conclusion := cr.GetConclusion()
 		if isFailedConclusion(conclusion) {
 			// A check run that reports failure although it never produced a
@@ -508,25 +575,31 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 				if name != "" {
 					blockedChecks = append(blockedChecks, name)
 				}
-				record(name, false, false)
+				record(name, false, false, completed)
 				continue
 			case kindNoVerdict:
 				if name != "" {
 					noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: reason})
 				}
-				record(name, false, false)
+				record(name, false, false, completed)
 				continue
 			}
 			hasFailure = true
 			if name != "" {
 				failedChecks = append(failedChecks, name)
+				if url := cr.GetDetailsURL(); url != "" {
+					if detailsURLs == nil {
+						detailsURLs = make(map[string]string)
+					}
+					detailsURLs[name] = url
+				}
 			}
-			record(name, false, true)
+			record(name, false, true, completed)
 			continue
 		}
 		// Neutral and skipped conclusions count as a pass for the guard
 		// the way GitHub counts them for required checks.
-		record(name, conclusion == stateSuccess || conclusion == "neutral" || conclusion == "skipped", false)
+		record(name, conclusion == stateSuccess || conclusion == "neutral" || conclusion == "skipped", false, completed)
 	}
 
 	var statusTargets map[string]string
@@ -534,8 +607,9 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	for _, s := range combined.Statuses {
 		state := s.GetState()
 		name := s.GetContext()
+		updated := s.GetUpdatedAt().Time
 		if state != stateFailure && state != stateError {
-			record(name, state == stateSuccess, false)
+			record(name, state == stateSuccess, false, updated)
 			continue
 		}
 		if name == "" {
@@ -546,10 +620,10 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		// status description.
 		if isSetupWorkflowBlock(s.GetDescription()) {
 			noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: circleCISetupReason})
-			record(name, false, false)
+			record(name, false, false, updated)
 			continue
 		}
-		record(name, false, true)
+		record(name, false, true, updated)
 		hasStatusFailure = true
 		failedChecks = append(failedChecks, name)
 		if statusTargets == nil {
@@ -568,6 +642,8 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		noVerdictChecks: noVerdictChecks,
 		reported:        reported,
 		statusTargets:   statusTargets,
+		detailsURLs:     detailsURLs,
+		settledAt:       newestReport(reported),
 	}
 	switch {
 	case hasFailure || hasStatusFailure:

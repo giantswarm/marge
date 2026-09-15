@@ -138,6 +138,20 @@ type Action struct {
 	Status   string `json:"status"`
 	Canceled bool   `json:"canceled"`
 	Failed   bool   `json:"failed"`
+	// Step and Index address the action's console output.
+	Step  int `json:"step"`
+	Index int `json:"index"`
+	// HasOutput reports whether the action printed anything.
+	HasOutput bool `json:"has_output"`
+	// OutputURL is a presigned link to the same output. The API returns it
+	// for some actions only, so it is a shortcut, never the only path.
+	OutputURL string `json:"output_url"`
+}
+
+// OutputLine is one line of an action's console output.
+type OutputLine struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
 }
 
 // AutoCancelled reports whether the build ended because it was cancelled
@@ -299,6 +313,55 @@ func (c *Client) RerunWorkflowFromFailed(ctx context.Context, workflowID string)
 	path := "/api/v2/workflow/" + url.PathEscape(workflowID) + "/rerun"
 	_, err = c.request(ctx, http.MethodPost, path, payload)
 	return err
+}
+
+// StepOutput returns the console output of one action of a build. An action
+// that printed nothing yields no lines.
+func (c *Client) StepOutput(ctx context.Context, ref BuildRef, action Action) ([]OutputLine, error) {
+	if !action.HasOutput {
+		return nil, nil
+	}
+	body, err := c.outputBody(ctx, ref, action)
+	if err != nil {
+		return nil, err
+	}
+	var lines []OutputLine
+	if err := json.Unmarshal(escapeControlChars(body), &lines); err != nil {
+		return nil, fmt.Errorf("decoding step output: %w", err)
+	}
+	return lines, nil
+}
+
+// outputBody reads an action's output from the presigned URL when the API
+// gave one, and from the build's output endpoint otherwise.
+func (c *Client) outputBody(ctx context.Context, ref BuildRef, action Action) ([]byte, error) {
+	if action.OutputURL != "" {
+		return c.getURL(ctx, action.OutputURL)
+	}
+	path := fmt.Sprintf("%s/output/%d/%d", ref.path(), action.Step, action.Index)
+	return c.request(ctx, http.MethodGet, path, nil)
+}
+
+// getURL reads a presigned URL, which carries its own authorisation and
+// must not receive the API token.
+func (c *Client) getURL(ctx context.Context, raw string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := c.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &APIError{StatusCode: resp.StatusCode}
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 }
 
 func (c *Client) do(ctx context.Context, method, path string) (*Build, error) {
