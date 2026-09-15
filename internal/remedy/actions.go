@@ -23,6 +23,7 @@ func Default() *Registry {
 		markWait{},
 		dispatchAlignWorkflow{},
 		fixProtectionContext{},
+		strictChain{},
 	)
 }
 

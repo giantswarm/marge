@@ -44,6 +44,7 @@ func TestDefaultRegistryNames(t *testing.T) {
 		FixProtectionContext,
 		MarkWait,
 		RerunFailed,
+		StrictChain,
 		UpdateBranch,
 	}, Default().Names())
 }
