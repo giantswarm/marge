@@ -133,3 +133,31 @@ func TestCircleCIBuildWithoutOutput(t *testing.T) {
 
 	require.False(t, ok)
 }
+
+// A job log ends with credential cleanup, so the excerpt is anchored on the
+// last error the runner reported, not on the end of the file.
+func TestAroundErrorAnchorsOnTheFailure(t *testing.T) {
+	body := strings.Join([]string{
+		"##[group]Run go build ./...",
+		"internal/pr/kind.go:88:9: cannot use kind as pr.Kind value",
+		"##[error]Process completed with exit code 1.",
+		"Post job cleanup.",
+		"[command]/usr/bin/git config --local --unset includeif.gitdir",
+		"Removing credentials config",
+		"Cleaning up orphan processes",
+	}, "\n")
+
+	excerpt := aroundError(body, 200)
+
+	require.Contains(t, excerpt, "cannot use kind as pr.Kind value")
+	require.NotContains(t, excerpt, "Cleaning up orphan processes")
+}
+
+func TestAroundErrorWithoutAMarker(t *testing.T) {
+	require.Equal(t, "cdef", aroundError("abcdef", 4))
+}
+
+func TestAroundErrorShorterThanTheBound(t *testing.T) {
+	body := "one\n##[error]two\ntrailer\n"
+	require.Equal(t, "one\n##[error]two\n", aroundError(body, 4096))
+}
