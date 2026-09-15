@@ -106,7 +106,20 @@ func (p *Processor) logExcerpt(ctx context.Context, run *prRun) func(rules.LogSo
 	}
 }
 
+// request is the action request of a rule match: the PR's own facts plus
+// what made the rule match.
 func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *remedy.Request {
+	req := p.actionRequest(ctx, run)
+	req.Check = hit.Check
+	req.CheckURL = run.checkURL(hit.Check)
+	req.LogMatched = hit.LogMatched
+	req.MissingContexts = hit.MissingContexts
+	return req
+}
+
+// actionRequest is what every action reads about a PR, whether a rule
+// selected it or the sweep's own classification did.
+func (p *Processor) actionRequest(ctx context.Context, run *prRun) *remedy.Request {
 	return &remedy.Request{
 		Info:              run.info,
 		Pull:              run.pull,
@@ -122,10 +135,6 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 		Reported:          run.reported,
 		ChecksPending:     run.checksPending,
 		ChecksSettledAt:   run.settledAt,
-		Check:             hit.Check,
-		CheckURL:          run.checkURL(hit.Check),
-		LogMatched:        hit.LogMatched,
-		MissingContexts:   hit.MissingContexts,
 		AppliedThisChange: p.appliedThisChange(ctx, run),
 		Deps: remedy.Deps{
 			GitHub:   p.Client,

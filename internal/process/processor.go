@@ -1017,17 +1017,28 @@ func preexistingNote(run *prRun) string {
 }
 
 // updateBranch brings the PR up to date with its base (the "Update branch"
-// button). GitHub schedules the update and answers 202, which go-github
-// surfaces as an AcceptedError: that is the success path.
+// button) through the remedy action, so the hand-written path and a rule
+// that names update-branch run the same code behind the same guards.
 func (p *Processor) updateBranch(ctx context.Context, run *prRun, why string) {
-	_, _, err := p.Client.PullRequests.UpdateBranch(ctx, run.info.Owner, run.info.Repo, run.info.Number, nil)
-	var accepted *github.AcceptedError
-	if err != nil && !errors.As(err, &accepted) {
+	outcome, err := p.remedies().Apply(ctx, remedy.UpdateBranch, p.actionRequest(ctx, run), nil)
+	switch {
+	case err != nil:
 		run.set(pr.StatusFailed, ghErrorDetail("update-branch failed", err))
-		return
+	case outcome.Refused != "":
+		run.note("update-branch refused: " + outcome.Refused)
+	default:
+		run.set(pr.StatusRefreshed, "re-checking; "+why)
+		p.postOnce(ctx, run, pr.MarkerKindEvidence, string(remedy.UpdateBranch), why)
 	}
-	run.set(pr.StatusRefreshed, "re-checking; "+why)
-	p.postOnce(ctx, run, pr.MarkerKindEvidence, "update-branch", why)
+}
+
+// remedies is the action vocabulary, defaulting to the built-in one so a
+// Processor built without it still performs its own actions.
+func (p *Processor) remedies() *remedy.Registry {
+	if p.Remedies == nil {
+		p.Remedies = remedy.Default()
+	}
+	return p.Remedies
 }
 
 func ghErrorDetail(prefix string, err error) string {
