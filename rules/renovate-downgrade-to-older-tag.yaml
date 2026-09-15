@@ -2,7 +2,7 @@ name: renovate-downgrade-to-older-tag
 summary: Renovate proposes a tagged release older than the pseudo-version in use.
 source: runbook row 16 (L134)
 match:
-  states: [failed, conflict, obsolete]
+  states: [failed, obsolete]
   kinds: [renovate]
   pr:
     titlePattern: '(?i)^(chore|fix)\(deps\): update module '

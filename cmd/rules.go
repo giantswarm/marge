@@ -115,6 +115,9 @@ so a rule cannot land on a signal nobody recorded.`,
 // loadCatalogueForCLI reads the catalogue from disk, or from a repository
 // when --repo asks for it.
 func loadCatalogueForCLI(ctx context.Context) (*rules.Catalogue, error) {
+	if rulesFlags.ref != "" && rulesFlags.repo == "" {
+		return nil, fmt.Errorf("--ref names a branch of a repository: give --repo too, or drop --ref to read %s", rulesFlags.path)
+	}
 	loader := rules.Loader{LocalPath: rulesFlags.path, Ref: rulesFlags.ref}
 	if rulesFlags.repo != "" {
 		owner, name, found := strings.Cut(rulesFlags.repo, "/")

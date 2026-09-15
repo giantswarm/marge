@@ -23,7 +23,7 @@ the index.
 | nancy guide-API error on an old orb | `nancy-guide-api-orb-delta` | `update-branch` | 37 |
 | A tag older than the pseudo-version in use | `renovate-downgrade-to-older-tag` | `close` | 16 |
 | A self-replace rewritten to a wrong major | `mangled-replace-major` | `close` | 38 |
-| A required context no job posts | `required-check-name-drift` | `fix-protection-context` | 21, 44 |
+| A required context nobody reported | `required-check-name-drift` | `fix-protection-context` | 21, 44 |
 | A bump waiting on an upstream release | `ecosystem-not-ready` | `mark-wait` | 7, 9, 15, 31 |
 | gosec run without the repository configuration | `upstream-orb-gosec-fixtures` | `mark-wait` | 63 |
 
@@ -81,9 +81,11 @@ leaves it; fixing the consumer would be undone on the next generation.
 These are the ways a reasonable-looking decision goes wrong. They are the
 reason several guards exist.
 
-- **A check name is not a diagnosis.** Read the failing step's log. Never
-  classify from a check name, a repository, or a previous sweep's table.
-  Validation refuses a rule whose only signal is a check name.
+- **A check name is not a diagnosis, and neither is a title.** Read the
+  failing step's log. Never classify from a check name, a title, a
+  repository, or a previous sweep's table. Validation refuses a rule whose
+  only signal is one of those: a rule needs a log signal, or a `baseHead`,
+  `files` or `requiredMissing` signal that reads the PR's state.
 - **Absent is not green.** A base branch that never ran a check has not
   passed it. A job filtered off the default branch makes "green on main"
   meaningless.
@@ -100,6 +102,10 @@ reason several guards exist.
 - **Teammate work comes first.** Before a migration, read the repository's
   open PRs and recent commits. An open teammate PR on the same subsystem is
   a stop, not a merge conflict to route around.
+- **A merged rule is live on the next sweep.** Nothing gates the catalogue
+  but review on this repository: there is no signature and no release. That
+  is the point, and it is why `strict-chain`, the one action that merges, is
+  held out of the catalogue until a measured run shows PRs that need it.
 - **A generated file is never hand-edited.** `zz_*`, the generated
   `renovate.json5`, the align-managed `.pre-commit-config.yaml` and
   `.circleci/workflows.yml`. `Makefile.custom.mk` and `Chart.yaml` are the

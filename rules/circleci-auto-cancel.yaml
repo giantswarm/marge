@@ -7,7 +7,7 @@ match:
     name: "ci/circleci: *"
   log:
     source: circleci
-    pattern: '(?i)(canceled|cancelled)'
+    pattern: '(?im)^(canceled|cancelled)\b'
 action:
   name: circleci-retry
 evidence:

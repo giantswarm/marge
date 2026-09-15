@@ -1,0 +1,15 @@
+name: a step the runner killed for its own timeout is not a platform cancel
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update module github.com/google/go-github/v92 to v92.1.0"
+  failing: ["ci/circleci: go-test"]
+  logs:
+    "circleci:ci/circleci: go-test": |
+      === RUN   TestReconcileWaitsForTheLease
+          lease_test.go:118: rpc error: code = Canceled desc = context canceled
+      --- FAIL: TestReconcileWaitsForTheLease (30.01s)
+      FAIL	github.com/giantswarm/marge/internal/lease	30.014s
+      Exited with code exit status 1
+expect:
+  rule: ""

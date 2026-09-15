@@ -45,8 +45,11 @@ type ScenarioSubject struct {
 	Title     string                `yaml:"title"`
 	Failing   []string              `yaml:"failing"`
 	BaseState map[string]CheckState `yaml:"baseState"`
-	Files     []string              `yaml:"files"`
-	Logs      map[string]string     `yaml:"logs"`
+	// RequiredMissing records a base branch that requires a context the head
+	// never reported.
+	RequiredMissing bool              `yaml:"requiredMissing"`
+	Files           []string          `yaml:"files"`
+	Logs            map[string]string `yaml:"logs"`
 }
 
 // ScenarioExpect is the outcome the fixture asserts.
@@ -141,11 +144,12 @@ func (s *Scenario) Run(catalogue *Catalogue) string {
 
 func (s *Scenario) subject() *Subject {
 	subject := &Subject{
-		State:     remediableStates[s.Subject.State],
-		Kind:      pr.Kind(s.Subject.Kind),
-		Title:     s.Subject.Title,
-		Failing:   s.Subject.Failing,
-		BaseState: s.Subject.BaseState,
+		State:           remediableStates[s.Subject.State],
+		Kind:            pr.Kind(s.Subject.Kind),
+		Title:           s.Subject.Title,
+		Failing:         s.Subject.Failing,
+		BaseState:       s.Subject.BaseState,
+		RequiredMissing: s.Subject.RequiredMissing,
 	}
 	if len(s.Subject.Files) > 0 {
 		subject.Files = func() []string { return s.Subject.Files }

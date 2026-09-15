@@ -4,10 +4,8 @@ source: runbook rows 21 and 44 (L139, L162)
 match:
   states: [waiting-checks]
   pr:
-    titlePattern: '.'
+    requiredMissing: true
 action:
   name: fix-protection-context
-refuse:
-  - required-checks-green
 evidence:
   reason: the required context names a job that no longer runs, so it was dropped from the protection
