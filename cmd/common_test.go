@@ -106,16 +106,16 @@ func TestReadReposFile(t *testing.T) {
 // TestRunOptions_repoList guards the optional flag: no --repos-file means
 // no restriction (nil), a file means its entries.
 func TestRunOptions_repoList(t *testing.T) {
-	got, err := RunOptions{}.repoList()
+	got, err := RunOptions{}.repoList(t.Context(), nil)
 	if err != nil || got != nil {
-		t.Errorf("RunOptions{}.repoList() = %v, %v; want nil, nil", got, err)
+		t.Errorf("RunOptions{}.repoList(t.Context(), nil) = %v, %v; want nil, nil", got, err)
 	}
 
 	path := filepath.Join(t.TempDir(), "repos.txt")
 	if err := os.WriteFile(path, []byte("my-org/a\n"), 0o600); err != nil {
 		t.Fatalf("writing repos file: %v", err)
 	}
-	got, err = RunOptions{ReposFile: path}.repoList()
+	got, err = RunOptions{ReposFile: path}.repoList(t.Context(), nil)
 	if err != nil || !reflect.DeepEqual(got, []string{"my-org/a"}) {
 		t.Errorf("repoList() = %v, %v; want [my-org/a], nil", got, err)
 	}
@@ -153,18 +153,6 @@ func TestFilterByOrg(t *testing.T) {
 				t.Errorf("filterByOrg(%q) kept %v, want %v", tt.org, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestParseTrustedAuthors(t *testing.T) {
-	got := parseTrustedAuthors("renovate[bot], dependabot[bot] , ,custom[bot]")
-	want := map[string]bool{
-		"renovate[bot]":   true,
-		"dependabot[bot]": true,
-		"custom[bot]":     true,
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseTrustedAuthors = %v, want %v", got, want)
 	}
 }
 

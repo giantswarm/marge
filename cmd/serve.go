@@ -12,12 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/process"
 )
 
 func init() {
@@ -166,14 +168,15 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, addr string, lo
 // reads exactly these arguments; the serve tests keep the two in step.
 func sweepTool() mcp.Tool {
 	return mcp.NewTool("sweep",
-		mcp.WithDescription("Sweep dependency update PRs: find, approve, and merge Renovate/Dependabot PRs. "+
-			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable, ci_no_verdict, obsolete and skipped lists. "+
+		mcp.WithDescription("Sweep bot PRs (Renovate, Align files, Herald, Dependabot): classify every open bot PR of a team or query scope, approve and squash-merge the eligible green ones, "+
+			"label each with bot-prs-sweep/<class>, and hold majors and unreadable updates for a person. A pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. "+
+			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, waiting, obsolete, ci_unavailable, ci_no_verdict and skipped lists, and repositories_failed for repositories that could not be listed. "+
 			"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
 			"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
-			"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
+			"the refresh action updates such branches from their base so CI re-runs (they are then listed under refreshed). "+
 			"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
 			"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
-			"set retry_cancelled to rerun their workflow from its failed jobs on the same commit (they are then listed under retried). "+
+			"the retry action reruns their workflow from its failed jobs on the same commit (they are then listed under retried). "+
 			"A failing check that established nothing about the code is excluded from action_required too and listed under ci_no_verdict, with the remedy in its detail: "+
 			"a cancelled job (rerun it), or a CircleCI pipeline refused because setup workflows are disabled for the repository (a human must change the project setting). "+
 			"A security check in that shape is not a finding and is never listed under security_failures. "+
@@ -205,21 +208,14 @@ func sweepTool() mcp.Tool {
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
 		),
-		mcp.WithBoolean("refresh_stale",
-			mcp.Description("Update the branch of stale PRs from their base (same as GitHub's \"Update branch\" button) so CI re-runs, and report them under refreshed (default: false). Skipped for PRs carrying a non-stale ai-rescue marker."),
+		mcp.WithString("team",
+			mcp.Description("Sweep the repositories of this team, read from repositories/team-<name>.yaml in giantswarm/github. Mutually exclusive with query, org, repos and repos_file."),
 		),
-		mcp.WithBoolean("retry_cancelled",
-			mcp.Description("Rerun the CircleCI workflow of builds that CircleCI auto-cancelled on the PR's current head, from its failed jobs, so the same commit gets a real verdict and the jobs the cancel left blocked run too; a build with no failed job to rerun from falls back to the single-build retry. Report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
-		),
-		mcp.WithString("author",
-			mcp.Description("Filter by PR author: \"renovate\", \"dependabot\", or \"all\" (default: \"all\")"),
-			mcp.Enum("renovate", "dependabot", "all"),
-		),
-		mcp.WithString("trusted_authors",
-			mcp.Description("Comma-separated list of trusted PR author logins (default: \"renovate[bot],dependabot[bot]\")"),
+		mcp.WithString("actions",
+			mcp.Description("Comma-separated sweep steps to run, in fixed order: classify, approve, merge, refresh, retry, mark (default: all). refresh updates stale branches from their base; retry reruns the CircleCI workflow of auto-cancelled builds on the same head from its failed jobs, falling back to a single-build retry (needs CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); mark writes markers and evidence comments."),
 		),
 		mcp.WithString("security_patterns",
-			mcp.Description("Comma-separated list of case-insensitive substrings used to flag failing CI checks as security-related (defaults to a built-in list)"),
+			mcp.Description("Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related"),
 		),
 	)
 }
@@ -237,8 +233,8 @@ type sweepRequest struct {
 // repoList returns the repositories the sweep is restricted to: the repos
 // argument merged with the entries of repos_file, without duplicates. Nil
 // means no restriction, so the PRs come from the GitHub search.
-func (r sweepRequest) repoList() ([]string, error) {
-	fromFile, err := r.Opts.repoList()
+func (r sweepRequest) repoList(ctx context.Context, client *github.Client) ([]string, error) {
+	fromFile, err := r.Opts.repoList(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -270,23 +266,32 @@ func mergeRepos(lists ...[]string) []string {
 // always set: stdout is the MCP stdio transport, so no table, plain-text
 // results or progress chatter may be written; the JSON result carries the
 // same data.
-func parseSweepRequest(request mcp.CallToolRequest) sweepRequest {
-	return sweepRequest{
+func parseSweepRequest(request mcp.CallToolRequest) (sweepRequest, error) {
+	actions, err := process.ParseActions(request.GetString("actions", ""))
+	if err != nil {
+		return sweepRequest{}, err
+	}
+	req := sweepRequest{
 		Query: request.GetString("query", ""),
 		Repos: request.GetStringSlice("repos", nil),
 		Opts: RunOptions{
 			DryRun:           request.GetBool("dry_run", false),
 			MergeAuto:        request.GetBool("merge_auto", false),
-			RefreshStale:     request.GetBool("refresh_stale", false),
-			RetryCancelled:   request.GetBool("retry_cancelled", false),
 			Quiet:            true,
+			Team:             request.GetString("team", ""),
+			Actions:          actions,
 			Org:              request.GetString("org", ""),
 			ReposFile:        request.GetString("repos_file", ""),
-			Author:           request.GetString("author", "all"),
-			TrustedAuthors:   request.GetString("trusted_authors", "renovate[bot],dependabot[bot]"),
 			SecurityPatterns: request.GetString("security_patterns", ""),
 		},
 	}
+	if req.Opts.Team != "" && (req.Query != "" || len(req.Repos) > 0 || req.Opts.Org != "" || req.Opts.ReposFile != "") {
+		return sweepRequest{}, errors.New("team is mutually exclusive with query, org, repos and repos_file")
+	}
+	if req.Opts.Team == "" {
+		req.Opts.CheckTimeout = defaultQueryCheckTimeout
+	}
+	return req, nil
 }
 
 // SweepResult is the structured JSON output returned by the sweep MCP tool.
@@ -298,7 +303,7 @@ type SweepResult struct {
 	// Stale lists failing PRs whose head is behind the base branch and whose
 	// every failing check is green on the base branch head: the failure was
 	// fixed on the base branch after the PR's last build. The remedy is a
-	// branch refresh (refresh_stale), not a rescue, so they are excluded from
+	// branch refresh (the refresh action), not a rescue, so they are excluded from
 	// action_required.
 	Stale []SweepPREntry `json:"stale,omitempty"`
 	// Refreshed lists stale PRs whose branch was updated from its base in
@@ -306,7 +311,7 @@ type SweepResult struct {
 	Refreshed []SweepPREntry `json:"refreshed,omitempty"`
 	// Cancelled lists failing PRs whose every failing check is a CircleCI
 	// build that CircleCI itself auto-cancelled: there is no verdict on the
-	// code yet. The remedy is a retry (retry_cancelled), not a rescue, so
+	// code yet. The remedy is a retry (the retry action), not a rescue, so
 	// they are excluded from action_required. A build cancelled behind a
 	// newer head is listed too but never retried: the new head's own build
 	// is the verdict.
@@ -330,7 +335,20 @@ type SweepResult struct {
 	// that executes. Each entry's reason says which. The remedy is to close
 	// them, so they are excluded from action_required.
 	Obsolete []SweepPREntry `json:"obsolete,omitempty"`
-	Skipped  []SweepPREntry `json:"skipped,omitempty"`
+	// Waiting lists PRs whose required checks have not all reported: a
+	// required context is pending or was never reported. The sweep never
+	// merges past a required check; the next sweep decides.
+	Waiting []SweepPREntry `json:"waiting,omitempty"`
+	Skipped []SweepPREntry `json:"skipped,omitempty"`
+	// RepositoriesFailed lists the repositories whose PRs could not be
+	// listed, so a partial sweep is visible as such.
+	RepositoriesFailed []SweepRepoFailure `json:"repositories_failed,omitempty"`
+}
+
+// SweepRepoFailure names a repository the sweep could not list.
+type SweepRepoFailure struct {
+	Repo  string `json:"repo"`
+	Error string `json:"error"`
 }
 
 // SweepSummary contains aggregate counts from the sweep.
@@ -365,20 +383,27 @@ type SweepSummary struct {
 	// higher-version sibling replaced them or their diff changes nothing
 	// that executes. Disjoint from Failed.
 	Obsolete int `json:"obsolete"`
-	Skipped  int `json:"skipped"`
+	// Waiting counts PRs whose required checks have not all reported.
+	Waiting int `json:"waiting"`
+	Skipped int `json:"skipped"`
 }
 
 // SweepPREntry represents a single PR in the sweep results.
 type SweepPREntry struct {
-	Owner     string `json:"owner"`
-	Repo      string `json:"repo"`
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	Status    string `json:"status"`
-	Detail    string `json:"detail,omitempty"`
-	CreatedAt string `json:"created_at,omitempty"`
-	AgeDays   int    `json:"age_days,omitempty"`
+	Owner  string `json:"owner"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	// Kind is the bot that authored the PR; UpdateType the size of the
+	// update it carries; Label the bot-prs-sweep/<class> label written.
+	Kind       string `json:"kind,omitempty"`
+	UpdateType string `json:"update_type,omitempty"`
+	Label      string `json:"label,omitempty"`
+	CreatedAt  string `json:"created_at,omitempty"`
+	AgeDays    int    `json:"age_days,omitempty"`
 	// Rescue describes the most recent prior automated rescue attempt
 	// found on the PR (an ai-rescue marker comment), if any. Consumers
 	// dispatching rescue agents should skip entries with a non-stale
@@ -406,9 +431,7 @@ type SweepRescueInfo struct {
 }
 
 func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	req := parseSweepRequest(request)
-
-	repos, err := req.repoList()
+	req, err := parseSweepRequest(request)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -418,24 +441,29 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultError(fmt.Sprintf("creating GitHub client: %v", err)), nil
 	}
 
+	repos, err := req.repoList(ctx, client)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	me, _, err := client.Users.Get(ctx, "")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("getting authenticated user: %v", err)), nil
 	}
 	login := me.GetLogin()
 
-	prs, err := searchPRs(ctx, client, req.Query, login, req.Opts.Author, repos)
+	found, err := searchPRs(ctx, client, req.Query, login, repos)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("searching PRs: %v", err)), nil
 	}
-	prs = filterByOrg(prs, req.Opts.Org)
+	prs := filterByOrg(found.PRs, req.Opts.Org)
 
 	status, err := processOnceWithStatus(ctx, client, login, prs, req.Opts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("processing PRs: %v", err)), nil
 	}
 
-	result := buildSweepResult(status)
+	result := buildSweepResult(status, found.Failed)
 
 	jsonBytes, err := json.Marshal(result)
 	if err != nil {
@@ -445,7 +473,7 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	return mcp.NewToolResultText(string(jsonBytes)), nil
 }
 
-func buildSweepResult(status *pr.PRStatus) SweepResult {
+func buildSweepResult(status *pr.PRStatus, failed []repoFailure) SweepResult {
 	counts := status.Summary()
 	total := status.Len()
 	securityEntries := status.SecurityFailedEntries()
@@ -464,8 +492,12 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 			Cancelled:        counts.Cancelled,
 			Retried:          counts.Retried,
 			Obsolete:         counts.Obsolete,
+			Waiting:          counts.Waiting,
 			Skipped:          counts.Skipped,
 		},
+	}
+	for _, f := range failed {
+		result.RepositoriesFailed = append(result.RepositoriesFailed, SweepRepoFailure{Repo: f.Repo, Error: f.Err})
 	}
 
 	now := time.Now()
@@ -479,6 +511,13 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 			Status: e.State.String(),
 			Detail: e.Detail,
 			Reason: string(e.ObsoleteReason),
+			Kind:   string(e.Kind),
+		}
+		if e.UpdateType != "" {
+			entry.UpdateType = string(e.UpdateType)
+		}
+		if class := pr.LabelClass(e.State); class != "" {
+			entry.Label = pr.LabelPrefix + class
 		}
 		if !e.PR.CreatedAt.IsZero() {
 			entry.CreatedAt = e.PR.CreatedAt.UTC().Format(time.RFC3339)
@@ -533,6 +572,10 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 
 	for _, e := range status.RetriedEntries() {
 		result.Retried = append(result.Retried, toEntry(e))
+	}
+
+	for _, e := range status.WaitingEntries() {
+		result.Waiting = append(result.Waiting, toEntry(e))
 	}
 
 	for _, e := range status.ActionRequired() {

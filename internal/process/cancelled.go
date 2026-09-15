@@ -144,25 +144,25 @@ func (p *Processor) classifyCancelled(ctx context.Context, pullReq *github.PullR
 	return res, ""
 }
 
-// handleCancelled records the cancelled classification and, when retrying
-// is enabled, this is not a dry run and the cancelled builds ran on the
-// current head, asks CircleCI to run them again on the same commit so the
-// PR gets a real verdict. A cancelled build behind a newer head is never
+// handleCancelled records the cancelled classification and, when the retry
+// action is selected, this is not a dry run and the cancelled builds ran on
+// the current head, asks CircleCI to run them again on the same commit so
+// the PR gets a real verdict. A cancelled build behind a newer head is never
 // retried: the new head's own build is the verdict, and the next sweep
 // reads it.
 //
 // Each distinct workflow is rerun once, however many of its jobs were
 // cancelled: the rerun covers them all, and a second one would restart the
 // first job.
-func (p *Processor) handleCancelled(ctx context.Context, res *cancelledResult, status *pr.PRStatus, idx int) {
+func (p *Processor) handleCancelled(ctx context.Context, run *prRun, res *cancelledResult) {
 	detail := res.detail()
-	status.Update(idx, pr.StatusCancelled, detail)
+	run.set(pr.StatusCancelled, detail)
 
-	if !p.RetryCancelled || p.DryRun || !res.onHead() {
+	if !p.Actions.Has(ActionRetry) || p.DryRun || !res.onHead() {
 		return
 	}
 	if !p.CircleCI.HasToken() {
-		status.Update(idx, pr.StatusCancelled, detail+"; retry skipped: no CircleCI token configured")
+		run.set(pr.StatusCancelled, detail+"; retry skipped: no CircleCI token configured")
 		return
 	}
 
@@ -182,12 +182,13 @@ func (p *Processor) handleCancelled(ctx context.Context, res *cancelledResult, s
 			if len(reruns) > 0 {
 				detail += "; " + strings.Join(reruns, ", ")
 			}
-			status.Update(idx, pr.StatusCancelled, detail+"; "+err.Error())
+			run.set(pr.StatusCancelled, detail+"; "+err.Error())
 			return
 		}
 		reruns = append(reruns, msg)
 	}
-	status.Update(idx, pr.StatusRetried, "re-checking; "+strings.Join(reruns, ", "))
+	run.set(pr.StatusRetried, "re-checking; "+strings.Join(reruns, ", "))
+	p.postOnce(ctx, run, pr.MarkerKindEvidence, "retry", strings.Join(reruns, ", "))
 }
 
 // rerunOrRetry runs one cancelled build again and describes what happened

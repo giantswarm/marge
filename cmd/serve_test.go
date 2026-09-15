@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/process"
 )
 
 // TestBuildSweepResult_failedAndSecurityAreDisjoint guards the contract
@@ -27,7 +28,7 @@ func TestBuildSweepResult_failedAndSecurityAreDisjoint(t *testing.T) {
 	idx4 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 4})
 	status.Update(idx4, pr.StatusSkipped, "dry-run")
 
-	got := buildSweepResult(status)
+	got := buildSweepResult(status, nil)
 
 	if got.Summary.Total != 4 {
 		t.Errorf("Total = %d, want 4", got.Summary.Total)
@@ -71,7 +72,7 @@ func TestBuildSweepResult_ciUnavailableIsSeparate(t *testing.T) {
 	idx2 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 2})
 	status.Update(idx2, pr.StatusBlockedCI, "Actions budget exhausted; no jobs ran: Test, Lint")
 
-	got := buildSweepResult(status)
+	got := buildSweepResult(status, nil)
 
 	if got.Summary.Failed != 1 {
 		t.Errorf("Failed = %d, want 1 (budget block must be excluded)", got.Summary.Failed)
@@ -106,7 +107,7 @@ func TestBuildSweepResult_staleAndRefreshedAreSeparate(t *testing.T) {
 	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
 	status.Update(idx3, pr.StatusRefreshed, "re-checking; go-build green on main since 2026-09-05 10:57 UTC, 5 behind")
 
-	got := buildSweepResult(status)
+	got := buildSweepResult(status, nil)
 
 	if got.Summary.Failed != 1 {
 		t.Errorf("Failed = %d, want 1 (stale/refreshed must be excluded)", got.Summary.Failed)
@@ -139,7 +140,7 @@ func TestBuildSweepResult_cancelledAndRetriedAreSeparate(t *testing.T) {
 	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
 	status.Update(idx3, pr.StatusRetried, "re-checking; build 1263 retried as 1272")
 
-	got := buildSweepResult(status)
+	got := buildSweepResult(status, nil)
 
 	if got.Summary.Failed != 1 {
 		t.Errorf("Failed = %d, want 1 (cancelled/retried must be excluded)", got.Summary.Failed)
@@ -167,7 +168,7 @@ func TestBuildSweepResult_rescueRebased(t *testing.T) {
 	status.Update(idx, pr.StatusFailed, "checks failed: build")
 	status.SetRescue(idx, &pr.RescueMarker{Tool: "klaus", Outcome: "blocked", Reason: "peer dep", Rebased: true})
 
-	got := buildSweepResult(status)
+	got := buildSweepResult(status, nil)
 
 	if len(got.ActionRequired) != 1 || got.ActionRequired[0].Rescue == nil {
 		t.Fatalf("ActionRequired = %+v, want one entry with a rescue object", got.ActionRequired)
@@ -188,10 +189,8 @@ var sweepArguments = map[string]any{
 	"repos":             []any{"my-org/a", "my-org/b"},
 	"merge_auto":        true,
 	"dry_run":           true,
-	"refresh_stale":     true,
-	"retry_cancelled":   true,
-	"author":            "renovate",
-	"trusted_authors":   "bot[bot]",
+	"team":              "",
+	"actions":           "merge",
 	"security_patterns": "Trivy,Analyze",
 }
 
@@ -212,20 +211,21 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 		}
 	}
 
-	got := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: sweepArguments}})
+	got, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: sweepArguments}})
+	if err != nil {
+		t.Fatalf("parseSweepRequest: %v", err)
+	}
 	want := sweepRequest{
 		Query: "typescript",
 		Repos: []string{"my-org/a", "my-org/b"},
 		Opts: RunOptions{
 			DryRun:           true,
 			MergeAuto:        true,
-			RefreshStale:     true,
-			RetryCancelled:   true,
 			Quiet:            true,
+			Actions:          process.ActionSet{process.ActionClassify: true, process.ActionMerge: true},
+			CheckTimeout:     defaultQueryCheckTimeout,
 			Org:              "my-org",
 			ReposFile:        "/tmp/repos.txt",
-			Author:           "renovate",
-			TrustedAuthors:   "bot[bot]",
 			SecurityPatterns: "Trivy,Analyze",
 		},
 	}
@@ -234,16 +234,48 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 	}
 }
 
+// TestParseSweepRequest_teamScope guards the two scopes: team resolves the
+// repositories and waits zero for pending checks; team together with any
+// query-scope argument is refused.
+func TestParseSweepRequest_teamScope(t *testing.T) {
+	got, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"team": "bumblebee"}}})
+	if err != nil {
+		t.Fatalf("parseSweepRequest: %v", err)
+	}
+	if got.Opts.Team != "bumblebee" || got.Opts.CheckTimeout != 0 {
+		t.Errorf("team request = %+v, want team bumblebee with zero check timeout", got.Opts)
+	}
+
+	for _, extra := range []map[string]any{{"query": "x"}, {"org": "o"}, {"repos": []any{"o/r"}}, {"repos_file": "/tmp/f"}} {
+		args := map[string]any{"team": "bumblebee"}
+		for k, v := range extra {
+			args[k] = v
+		}
+		if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}); err == nil {
+			t.Errorf("team with %v: want an error", extra)
+		}
+	}
+
+	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "rescue"}}}); err == nil {
+		t.Error("unknown action: want an error")
+	}
+}
+
 // TestParseSweepRequest_defaultsMatchSweepCommand guards that a call with no
-// arguments behaves like a bare `marge sweep`: every PR author, the default
-// trusted authors, no query, and Quiet because stdout is the transport.
+// arguments behaves like a bare `marge sweep --query ""`: every action, the
+// query scope's check wait, no query, and Quiet because stdout is the
+// transport.
 func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
-	got := parseSweepRequest(mcp.CallToolRequest{})
+	got, err := parseSweepRequest(mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("parseSweepRequest: %v", err)
+	}
+	allActions, _ := process.ParseActions("")
 	want := sweepRequest{
 		Opts: RunOptions{
-			Quiet:          true,
-			Author:         "all",
-			TrustedAuthors: "renovate[bot],dependabot[bot]",
+			Quiet:        true,
+			Actions:      allActions,
+			CheckTimeout: defaultQueryCheckTimeout,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -308,7 +340,7 @@ func TestSweepRequest_repoList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.req.repoList()
+			got, err := tt.req.repoList(t.Context(), nil)
 			if err != nil {
 				t.Fatalf("repoList: %v", err)
 			}
@@ -320,7 +352,7 @@ func TestSweepRequest_repoList(t *testing.T) {
 
 	t.Run("unreadable repos_file is an error", func(t *testing.T) {
 		req := sweepRequest{Repos: []string{"my-org/b"}, Opts: RunOptions{ReposFile: filepath.Join(t.TempDir(), "missing.txt")}}
-		got, err := req.repoList()
+		got, err := req.repoList(t.Context(), nil)
 		if err == nil || !strings.Contains(err.Error(), "reading repos file") {
 			t.Fatalf("repoList = %v, %v; want a reading repos file error", got, err)
 		}

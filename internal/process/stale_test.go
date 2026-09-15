@@ -42,6 +42,8 @@ type staleFixture struct {
 	updateBranchCalls atomic.Int32
 	compareCalls      atomic.Int32
 	baseLookupCalls   atomic.Int32
+	labelCalls        atomic.Int32
+	commentPosts      atomic.Int32
 }
 
 const (
@@ -150,6 +152,18 @@ func (f *staleFixture) server(t *testing.T) *httptest.Server {
 		writeJSON(w, github.PullRequestBranchUpdateResponse{Message: new("Updating pull request branch.")})
 	})
 
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("POST /repos/org/repo/issues/1/labels", func(w http.ResponseWriter, r *http.Request) {
+		f.labelCalls.Add(1)
+		writeJSON(w, []*github.Label{})
+	})
+	mux.HandleFunc("POST /repos/org/repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
+		f.commentPosts.Add(1)
+		writeJSON(w, github.IssueComment{ID: new(int64(99))})
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)
@@ -165,7 +179,8 @@ func (f *staleFixture) run(t *testing.T, configure func(*Processor)) pr.StatusEn
 	server := f.server(t)
 	defer server.Close()
 
-	proc := NewProcessor(newTestClient(t, server), false, false, "me", DefaultTrustedAuthors)
+	proc := NewProcessor(newTestClient(t, server), false, false, "me")
+	proc.Actions = ActionSet{ActionClassify: true}
 	if configure != nil {
 		configure(proc)
 	}
@@ -223,15 +238,18 @@ func TestClassifyStale_behindAndGreenAsCommitStatus(t *testing.T) {
 	}
 }
 
+// TestClassifyStale_behindButRedOnBase guards the pre-existing rule: a
+// non-required check that is red on the base head too was not broken by
+// the PR, so the PR stays eligible and the check is named in the detail.
 func TestClassifyStale_behindButRedOnBase(t *testing.T) {
-	f := &staleFixture{behindBy: 5, baseConclusion: "failure"}
+	f := &staleFixture{behindBy: 5, baseConclusion: "failure", title: "chore(deps): update all non-major dependencies"}
 	got := f.run(t, nil)
 
-	if got.State != pr.StatusFailed {
-		t.Fatalf("state = %v (%s), want StatusFailed: the failure is real on main too", got.State, got.Detail)
+	if got.State != pr.StatusEligible {
+		t.Fatalf("state = %v (%s), want StatusEligible: the failure is pre-existing on main", got.State, got.Detail)
 	}
 	if !strings.Contains(got.Detail, "go-build") {
-		t.Errorf("detail %q should name the failing check", got.Detail)
+		t.Errorf("detail %q should name the pre-existing red check", got.Detail)
 	}
 }
 
@@ -255,14 +273,17 @@ func TestClassifyStale_notBehind(t *testing.T) {
 	if f.compareCalls.Load() != 1 {
 		t.Errorf("compare called %d times, want 1", f.compareCalls.Load())
 	}
-	if f.baseLookupCalls.Load() != 0 {
-		t.Errorf("base status looked up %d times for a non-behind PR, want 0", f.baseLookupCalls.Load())
+	// The stale check skips the base lookup for a non-behind PR; the
+	// pre-existing check then needs it once to see whether go-build is red
+	// on the base head too.
+	if f.baseLookupCalls.Load() != 1 {
+		t.Errorf("base status looked up %d times, want 1", f.baseLookupCalls.Load())
 	}
 }
 
 func TestClassifyStale_refreshUpdatesBranch(t *testing.T) {
 	f := &staleFixture{behindBy: 12, baseConclusion: "success"}
-	got := f.run(t, func(p *Processor) { p.RefreshStale = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true} })
 
 	if got.State != pr.StatusRefreshed {
 		t.Fatalf("state = %v (%s), want StatusRefreshed", got.State, got.Detail)
@@ -277,7 +298,7 @@ func TestClassifyStale_refreshUpdatesBranch(t *testing.T) {
 
 func TestClassifyStale_dryRunOnlyClassifies(t *testing.T) {
 	f := &staleFixture{behindBy: 12, baseConclusion: "success"}
-	got := f.run(t, func(p *Processor) { p.RefreshStale = true; p.DryRun = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true}; p.DryRun = true })
 
 	if got.State != pr.StatusStale {
 		t.Fatalf("state = %v (%s), want StatusStale in dry run", got.State, got.Detail)
@@ -289,7 +310,7 @@ func TestClassifyStale_dryRunOnlyClassifies(t *testing.T) {
 
 func TestClassifyStale_refreshSkippedForFreshMarker(t *testing.T) {
 	f := &staleFixture{behindBy: 12, baseConclusion: "success", comments: []string{markerComment(fxHead[:8])}}
-	got := f.run(t, func(p *Processor) { p.RefreshStale = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true} })
 
 	if got.State != pr.StatusStale {
 		t.Fatalf("state = %v (%s), want StatusStale (refresh skipped)", got.State, got.Detail)
@@ -307,7 +328,7 @@ func TestClassifyStale_refreshSkippedForFreshMarker(t *testing.T) {
 
 func TestClassifyStale_refreshProceedsPastStaleMarker(t *testing.T) {
 	f := &staleFixture{behindBy: 12, baseConclusion: "success", comments: []string{markerComment("0ld5ha00")}}
-	got := f.run(t, func(p *Processor) { p.RefreshStale = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true} })
 
 	if got.State != pr.StatusRefreshed {
 		t.Fatalf("state = %v (%s), want StatusRefreshed", got.State, got.Detail)
@@ -339,7 +360,7 @@ func TestBaseContextStates_cachedPerBaseCommit(t *testing.T) {
 	server := f.server(t)
 	defer server.Close()
 
-	proc := NewProcessor(newTestClient(t, server), false, false, "me", DefaultTrustedAuthors)
+	proc := NewProcessor(newTestClient(t, server), false, false, "me")
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	for i := 0; i < 3; i++ {
 		states, err := proc.baseContextStates(context.Background(), info, fxBase)

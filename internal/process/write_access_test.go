@@ -123,7 +123,7 @@ func TestApprove_RefusedWithoutWriteAccess(t *testing.T) {
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	err := p.approve(t.Context(), info, status, idx)
+	err := p.approve(t.Context(), &prRun{info: info, status: status, idx: idx})
 	if !errors.Is(err, errNoWriteAccess) {
 		t.Fatalf("approve() = %v, want %v", err, errNoWriteAccess)
 	}
@@ -176,7 +176,7 @@ func TestApprove_SettledPullRequestSkipsTheCheck(t *testing.T) {
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
 	idx := status.Add(info)
 
-	if err := p.approve(t.Context(), info, status, idx); err != nil {
+	if err := p.approve(t.Context(), &prRun{info: info, status: status, idx: idx}); err != nil {
 		t.Fatalf("approve() = %v, want nil", err)
 	}
 	if got := repoReads.Load(); got != 0 {
@@ -215,8 +215,11 @@ func TestProcessPR_DryRunReportsMissingWriteAccess(t *testing.T) {
 		_, _ = io.WriteString(w, body)
 	}
 	mux.HandleFunc("GET /repos/org/repo/pulls/1", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, `{"number":1,"mergeable_state":"clean","user":{"login":"renovate[bot]"},
+		writeJSON(w, `{"number":1,"title":"chore(deps): update all non-major dependencies","mergeable_state":"clean","user":{"login":"renovate[bot]"},
 			"head":{"sha":"aaa111","ref":"renovate/foo"},"base":{"sha":"bbb222","ref":"main"}}`)
+	})
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
 	})
 	mux.HandleFunc("GET /repos/org/repo/commits/refs/pull/1/head/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, `{"state":"success","statuses":[{"context":"go-build","state":"success"}]}`)
@@ -230,7 +233,7 @@ func TestProcessPR_DryRunReportsMissingWriteAccess(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	proc := NewProcessor(newTestClient(t, server), true, false, "me", DefaultTrustedAuthors)
+	proc := NewProcessor(newTestClient(t, server), true, false, "me")
 	status := pr.NewPRStatus()
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1, Author: "renovate[bot]"}
 	idx := status.Add(info)

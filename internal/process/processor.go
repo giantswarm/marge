@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,28 +16,22 @@ import (
 
 const (
 	checkPollInterval = 15 * time.Second
-	checkPollTimeout  = 5 * time.Minute
 
 	mergeMaxRetries    = 3
 	mergeRetryBaseWait = 10 * time.Second
 )
 
-var DefaultTrustedAuthors = map[string]bool{
-	"renovate[bot]":   true,
-	"dependabot[bot]": true,
-}
-
+// Processor sweeps one PR at a time. Only PRs authored by one of the four
+// trusted bots (see pr.KindOf) are touched; there is no way to widen that
+// set, and the caller's own PRs are not in it.
 type Processor struct {
 	Client         *github.Client
 	DryRun         bool
 	MergeAutoMerge bool
 	Login          string
-	TrustedAuthors map[string]bool
 
-	// SecurityCheckPatterns is the list of case-insensitive substrings used
-	// to flag failing CI checks as security-related (e.g. govulncheck, Trivy,
-	// CodeQL). A nil slice falls back to DefaultSecurityCheckPatterns; a
-	// non-nil empty slice disables security classification entirely.
+	// SecurityCheckPatterns are appended to DefaultSecurityCheckPatterns.
+	// The built-in list can be widened, never narrowed.
 	SecurityCheckPatterns []string
 
 	// MergeMaxRetries is the maximum number of merge attempts when the base
@@ -47,20 +41,19 @@ type Processor struct {
 	// Zero uses the default (10s). Actual wait = base * attempt number.
 	MergeRetryWait time.Duration
 
-	// RefreshStale updates the branch of every stale PR from its base
-	// (see classifyStale) so CI re-runs against current code. Without it a
-	// stale PR is only reported as such. Ignored in dry-run mode.
-	RefreshStale bool
+	// Actions selects the steps this sweep performs. Nil performs all.
+	Actions ActionSet
+
+	// CheckTimeout bounds how long the sweep waits for pending checks on
+	// one PR. Zero means no wait: a PR with pending or missing required
+	// checks is reported as waiting and the next sweep decides.
+	CheckTimeout time.Duration
 
 	// CircleCI looks behind failing "ci/circleci: <job>" commit statuses to
 	// tell an auto-cancelled build from a real failure (see
 	// classifyCancelled). Nil disables the lookup and every CircleCI
 	// failure is taken at face value.
 	CircleCI *circleci.Client
-	// RetryCancelled retries every auto-cancelled CircleCI build that ran on
-	// a PR's current head so the same commit gets a real verdict. Without it
-	// a cancelled PR is only reported as such. Ignored in dry-run mode.
-	RetryCancelled bool
 
 	// SupersededBy maps a PR to the sibling that carries a higher version of
 	// the same dependency (see pr.FindSuperseded). It is computed once from
@@ -70,23 +63,102 @@ type Processor struct {
 
 	staleCache
 	accessCache
+	protectionCache
+	labelCache
 }
 
-func NewProcessor(client *github.Client, dryRun bool, mergeAutoMerge bool, login string, trustedAuthors map[string]bool) *Processor {
-	src := trustedAuthors
-	if src == nil {
-		src = DefaultTrustedAuthors
-	}
-	merged := make(map[string]bool, len(src)+1)
-	maps.Copy(merged, src)
-	merged[login] = true
+func NewProcessor(client *github.Client, dryRun bool, mergeAutoMerge bool, login string) *Processor {
 	return &Processor{
 		Client:         client,
 		DryRun:         dryRun,
 		MergeAutoMerge: mergeAutoMerge,
 		Login:          login,
-		TrustedAuthors: merged,
 	}
+}
+
+// prRun carries one PR through a sweep: what was fetched about it, the
+// status row it reports to, and the comments read once for every consumer
+// (rescue markers, evidence).
+type prRun struct {
+	info   pr.PRInfo
+	pull   *github.PullRequest
+	status *pr.PRStatus
+	idx    int
+
+	commentsLoaded bool
+	commentMarkers []*pr.RescueMarker
+	fingerprintSet bool
+	fp             pr.Fingerprint
+	notes          []string
+	// preexisting names the red non-required checks the PR merged past
+	// because they are red on the base head too.
+	preexisting []string
+}
+
+func (r *prRun) set(state pr.StatusState, detail string) {
+	r.status.Update(r.idx, state, detail)
+}
+
+// markObsolete records the entry as obsolete together with the reason, so a
+// consumer dispatches on the reason instead of parsing the detail.
+func (r *prRun) markObsolete(reason pr.ObsoleteReason, detail string) {
+	r.status.MarkObsolete(r.idx, reason, detail)
+}
+
+// note records an operational remark shown after the detail, for instance
+// a label that could not be written.
+func (r *prRun) note(s string) {
+	r.notes = append(r.notes, s)
+}
+
+// markers returns every ai-rescue marker on the PR, oldest first, loading
+// the comments on first use. A listing error yields no markers; a
+// comment problem must never change a sweep result.
+func (r *prRun) markers(ctx context.Context, p *Processor) []*pr.RescueMarker {
+	if r.commentsLoaded {
+		return r.commentMarkers
+	}
+	r.commentsLoaded = true
+	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		comments, resp, err := p.Client.Issues.ListComments(ctx, r.info.Owner, r.info.Repo, r.info.Number, opts)
+		if err != nil {
+			return r.commentMarkers
+		}
+		for _, c := range comments {
+			if m := pr.ParseRescueMarker(c.GetBody()); m != nil {
+				r.commentMarkers = append(r.commentMarkers, m)
+			}
+		}
+		if resp.NextPage == 0 {
+			return r.commentMarkers
+		}
+		opts.Page = resp.NextPage
+	}
+}
+
+func (r *prRun) appendMarker(m *pr.RescueMarker) {
+	r.commentMarkers = append(r.commentMarkers, m)
+}
+
+// rescueMarker returns the newest rescue-attempt marker, ignoring sweep
+// evidence, or nil.
+func (r *prRun) rescueMarker(ctx context.Context, p *Processor) *pr.RescueMarker {
+	var newest *pr.RescueMarker
+	for _, m := range r.markers(ctx, p) {
+		if !m.IsEvidence() {
+			newest = m
+		}
+	}
+	return newest
+}
+
+func (r *prRun) fingerprint(ctx context.Context, p *Processor) pr.Fingerprint {
+	if !r.fingerprintSet {
+		r.fingerprintSet = true
+		r.fp = FingerprintPR(ctx, p.Client, r.info.Owner, r.info.Repo, r.pull)
+	}
+	return r.fp
 }
 
 func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) {
@@ -95,140 +167,251 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		status.Update(idx, pr.StatusFailed, ghErrorDetail("fetch error", err))
 		return
 	}
+	run := &prRun{info: info, pull: pullReq, status: status, idx: idx}
+	defer p.finish(ctx, run)
 
-	// On any failure outcome, look for a prior automated rescue attempt
-	// recorded on the PR (an ai-rescue marker comment) so the operator can
-	// tell "needs a first rescue" apart from "a rescue already failed here".
-	// Deferred so every failure path is covered with one call site.
-	defer func() {
-		p.attachRescueMarker(ctx, info, pullReq, status, idx)
-	}()
-
-	actualAuthor := pullReq.GetUser().GetLogin()
-	if !p.isAuthorTrusted(actualAuthor) {
-		status.Update(idx, pr.StatusUntrustedAuthor, fmt.Sprintf("author %q not trusted", actualAuthor))
+	author := pullReq.GetUser().GetLogin()
+	kind := pr.KindOf(author)
+	if kind == "" {
+		run.set(pr.StatusUntrustedAuthor, fmt.Sprintf("author %q is not a trusted bot", author))
 		return
 	}
+	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
+	status.SetClassification(idx, kind, updateType)
 
 	if pullReq.GetMerged() {
-		status.Update(idx, pr.StatusAlreadyMerged, "")
+		run.set(pr.StatusAlreadyMerged, "")
 		return
 	}
-
+	if pullReq.GetHead().GetRepo().GetFork() {
+		run.set(pr.StatusSkipped, "head branch lives in a fork")
+		return
+	}
 	if pullReq.GetMergeableState() == "dirty" {
-		if reason, detail := p.classifyObsolete(ctx, info, pullReq, nil); reason != "" {
-			status.MarkObsolete(idx, reason, detail)
+		if reason, detail := p.classifyObsolete(ctx, run.info, pullReq, nil); reason != "" {
+			run.markObsolete(reason, detail)
 			return
 		}
-		status.Update(idx, pr.StatusConflict, "merge conflict")
+		run.set(pr.StatusConflict, "merge conflict")
+		return
+	}
+	if pullReq.GetAutoMerge() != nil && !p.MergeAutoMerge {
+		run.set(pr.StatusAutoMerge, "auto-merge enabled; GitHub merges it")
 		return
 	}
 
-	status.Update(idx, pr.StatusChecking, "")
-	if err := p.waitForChecks(ctx, info, pullReq, status, idx); err != nil {
+	run.set(pr.StatusChecking, "")
+	if !p.evaluateChecks(ctx, run) {
 		return
 	}
 
-	selfAuthored := strings.EqualFold(info.Author, p.Login)
+	if !eligible(kind, updateType) {
+		run.set(pr.StatusHeld, heldDetail(kind, updateType))
+		return
+	}
 
 	if p.DryRun {
-		detail := "dry-run"
-		if !selfAuthored {
-			if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
+		detail := "dry-run: would " + p.plannedWrites()
+		if p.Actions.Has(ActionApprove) {
+			if err := p.ensureWriteAccess(ctx, run.info.Owner, run.info.Repo); err != nil {
 				detail = withNote(detail, writeAccessDetail(err))
 			}
 		}
-		status.Update(idx, pr.StatusSkipped, detail)
+		run.set(pr.StatusSkipped, detail)
 		return
 	}
 
-	if !selfAuthored {
-		if err := p.approve(ctx, info, status, idx); err != nil {
+	if p.Actions.Has(ActionApprove) {
+		if err := p.approve(ctx, run); err != nil {
 			return
 		}
 	}
-
-	if pullReq.GetAutoMerge() != nil && !p.MergeAutoMerge {
-		status.Update(idx, pr.StatusAutoMerge, "auto-merge enabled")
+	if !p.Actions.Has(ActionMerge) {
+		run.set(pr.StatusEligible, withNote("eligible; merge not in actions", preexistingNote(run)))
 		return
 	}
-
-	p.merge(ctx, info, status, idx)
+	p.merge(ctx, run)
 }
 
-func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, status *pr.PRStatus, idx int) error {
-	deadline := time.After(checkPollTimeout)
-	for {
-		outcome, err := p.getCombinedCheckState(ctx, info)
-		if err != nil {
-			status.Update(idx, pr.StatusFailed, ghErrorDetail("check error", err))
-			return err
-		}
+// plannedWrites names the writes a dry run would perform on a green,
+// eligible PR.
+func (p *Processor) plannedWrites() string {
+	var steps []string
+	if p.Actions.Has(ActionApprove) {
+		steps = append(steps, "approve")
+	}
+	if p.Actions.Has(ActionMerge) {
+		steps = append(steps, "merge (squash)")
+	}
+	if len(steps) == 0 {
+		return "label only"
+	}
+	return strings.Join(steps, ", ")
+}
 
+// finish runs on every exit: it attaches a prior rescue marker to failure
+// outcomes, writes the classification label and appends the notes.
+func (p *Processor) finish(ctx context.Context, run *prRun) {
+	p.attachRescueMarker(ctx, run)
+	state := run.status.StateAt(run.idx)
+	if class := pr.LabelClass(state); class != "" && !p.DryRun {
+		p.setLabel(ctx, run, class)
+	}
+	if len(run.notes) > 0 {
+		entry := run.status.Snapshot()[run.idx]
+		run.set(entry.State, withNote(entry.Detail, strings.Join(run.notes, "; ")))
+	}
+}
+
+// evaluateChecks decides whether the PR is green enough to merge. It
+// returns true only when every required context reported success, no
+// security check failed, and every remaining red check is a non-required
+// check that is red on the base head too (pre-existing, named in the
+// evidence). Every other outcome is recorded on the entry and ends the PR.
+func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
+	var deadline <-chan time.Time
+	if p.CheckTimeout > 0 {
+		deadline = time.After(p.CheckTimeout)
+	}
+	for {
+		outcome, err := p.getCombinedCheckState(ctx, run.info)
+		if err != nil {
+			run.set(pr.StatusFailed, ghErrorDetail("check error", err))
+			return false
+		}
 		switch outcome.state {
-		case stateSuccess:
-			return nil
 		case stateBlockedBudget:
 			// CI never ran because a GitHub Actions budget / spending-limit
 			// block prevented every job from starting. This is not a code
 			// failure, so surface it under a distinct status and keep it out
 			// of the rescue path.
-			status.Update(idx, pr.StatusBlockedCI, blockedDetail(outcome.blockedChecks))
-			return fmt.Errorf("ci unavailable: actions budget")
+			run.set(pr.StatusBlockedCI, blockedDetail(outcome.blockedChecks))
+			return false
 		case stateNoVerdict:
 			// Every failing check established nothing about the code, so
 			// there is nothing to rescue and a security check in this shape
 			// is not a finding. The detail names the remedy per check.
-			status.Update(idx, pr.StatusNoVerdict, noVerdictDetail(outcome.noVerdictChecks))
-			return fmt.Errorf("ci unavailable: checks produced no verdict")
-		case stateFailure, stateError:
-			// A CircleCI build that CircleCI itself cancelled carries no
-			// verdict on the code, so it is neither a failure nor stale.
-			// Decided first: it rests on positive evidence about this very
-			// build, where staleness is a heuristic.
-			cancelled, note := p.classifyCancelled(ctx, pullReq, outcome)
-			if cancelled != nil {
-				p.handleCancelled(ctx, cancelled, status, idx)
-				return fmt.Errorf("checks cancelled")
-			}
-			// The staleness heuristic and the no-op rule both read the
-			// base...head comparison, so it is fetched once for both. An
-			// error leaves it nil and neither classification fires.
-			cmp := p.compare(ctx, info, pullReq)
-			// A failure that is already fixed on the base branch is stale,
-			// not real: the branch is behind and every failing check is
-			// green on the base head. Decided before the security split so
-			// a stale govulncheck/Trivy failure is refreshed like any other.
-			if stale := p.classifyStale(ctx, info, pullReq, outcome.failedChecks, cmp); stale != nil {
-				p.handleStale(ctx, info, pullReq, stale, status, idx)
-				return fmt.Errorf("checks stale")
-			}
-			// Decided last: a superseded PR and a PR that changes nothing
-			// that executes are both failures nobody has to fix.
-			if reason, detail := p.classifyObsolete(ctx, info, pullReq, cmp); reason != "" {
-				status.MarkObsolete(idx, reason, detail)
-				return fmt.Errorf("obsolete: %s", reason)
-			}
-			if name := classifySecurityFailure(outcome.failedChecks, p.securityPatterns()); name != "" {
-				status.Update(idx, pr.StatusFailedSecurity, withNote(fmt.Sprintf("security check failed: %s", name), note))
-			} else {
-				status.Update(idx, pr.StatusFailed, withNote(failureDetail(outcome.failedChecks), note))
-			}
-			return fmt.Errorf("checks failed")
+			run.set(pr.StatusNoVerdict, noVerdictDetail(outcome.noVerdictChecks))
+			return false
 		}
 
-		status.Update(idx, pr.StatusChecking, outcome.state)
+		prot, err := p.requiredProtection(ctx, run.info, run.pull.GetBase().GetRef())
+		if err != nil {
+			run.set(pr.StatusFailed, ghErrorDetail("branch protection error", err))
+			return false
+		}
+		required := evaluateRequired(prot.Contexts, outcome.reported)
 
+		if len(required.Failed) > 0 || outcome.state == stateFailure || outcome.state == stateError {
+			return p.classifyFailure(ctx, run, outcome, prot)
+		}
+
+		waiting := !required.allGreen() || outcome.state == statePending
+		if !prot.Readable && run.pull.GetMergeableState() == "blocked" && outcome.state == stateSuccess {
+			// The protection could not be read, GitHub says the PR is
+			// blocked and nothing reported red: a required check may be
+			// missing. Wait, do not guess.
+			waiting = true
+		}
+		if !waiting {
+			return true
+		}
+
+		run.set(pr.StatusWaitingChecks, waitingDetail(required, outcome.state))
+		if deadline == nil {
+			return false
+		}
 		select {
 		case <-ctx.Done():
-			status.Update(idx, pr.StatusSkipped, "cancelled")
-			return ctx.Err()
+			run.set(pr.StatusSkipped, "cancelled")
+			return false
 		case <-deadline:
-			status.Update(idx, pr.StatusFailed, "checks timed out")
-			return fmt.Errorf("checks timed out")
+			return false
 		case <-time.After(checkPollInterval):
 		}
 	}
+}
+
+func waitingDetail(required requiredOutcome, state string) string {
+	var parts []string
+	if len(required.Missing) > 0 {
+		parts = append(parts, "required checks not reported: "+strings.Join(required.Missing, ", "))
+	}
+	if len(required.Pending) > 0 {
+		parts = append(parts, "required checks pending: "+strings.Join(required.Pending, ", "))
+	}
+	if len(parts) == 0 {
+		return "checks " + state
+	}
+	return strings.Join(parts, "; ")
+}
+
+// classifyFailure handles a head with at least one red check, in this
+// order: CircleCI auto-cancel (no verdict), stale (fixed on the base since),
+// obsolete (nobody has to fix it), security (never merge), then the
+// required/non-required split. It returns
+// true when the PR may still merge: every red check is non-required and red
+// on the base head too.
+func (p *Processor) classifyFailure(ctx context.Context, run *prRun, outcome checkOutcome, prot protection) bool {
+	if cancelled, note := p.classifyCancelled(ctx, run.pull, outcome); cancelled != nil {
+		p.handleCancelled(ctx, run, cancelled)
+		return false
+	} else if note != "" {
+		run.note(note)
+	}
+	// The staleness heuristic and the no-op rule both read the base...head
+	// comparison, so it is fetched once for both. An error leaves it nil and
+	// neither classification fires.
+	cmp := p.compare(ctx, run.info, run.pull)
+	if stale := p.classifyStale(ctx, run.info, run.pull, outcome.failedChecks, cmp); stale != nil {
+		p.handleStale(ctx, run, stale)
+		return false
+	}
+	if reason, detail := p.classifyObsolete(ctx, run.info, run.pull, cmp); reason != "" {
+		run.markObsolete(reason, detail)
+		return false
+	}
+	if name := classifySecurityFailure(outcome.failedChecks, p.securityPatterns()); name != "" {
+		run.set(pr.StatusFailedSecurity, fmt.Sprintf("security check failed: %s", name))
+		p.postOnce(ctx, run, "", "blocked", "security check failed: "+name)
+		return false
+	}
+
+	var real []string
+	for _, name := range outcome.failedChecks {
+		if isRequired(prot.Contexts, name) {
+			real = append(real, name)
+			continue
+		}
+		if p.redOnBase(ctx, run, name) {
+			run.preexisting = append(run.preexisting, name)
+			continue
+		}
+		real = append(real, name)
+	}
+	if len(real) > 0 {
+		run.set(pr.StatusFailed, failureDetail(real))
+		return false
+	}
+	sort.Strings(run.preexisting)
+	return true
+}
+
+// redOnBase reports whether the named check is red on the base head as
+// well, which makes the PR's red check pre-existing rather than caused by
+// the PR. A check that is green, pending or absent on the base is not
+// pre-existing: absent is not green, and neither is it red.
+func (p *Processor) redOnBase(ctx context.Context, run *prRun, name string) bool {
+	baseSHA := run.pull.GetBase().GetSHA()
+	if baseSHA == "" {
+		return false
+	}
+	states, err := p.baseContextStates(ctx, run.info, baseSHA)
+	if err != nil {
+		return false
+	}
+	st, ok := states[name]
+	return ok && st.failed && !st.success
 }
 
 // checkOutcome is the result of evaluating a PR's combined commit status and
@@ -248,6 +431,10 @@ type checkOutcome struct {
 	// noVerdictChecks established nothing about the code: the job was
 	// cancelled, or a project setting refused the pipeline.
 	noVerdictChecks []noVerdictCheck
+	// reported is the latest state of every context name on the head, the
+	// input of the required-check guard. A check that produced no verdict
+	// is neither green nor red there.
+	reported map[string]contextState
 	// statusTargets maps each failing commit-status context to its
 	// target_url, so the CircleCI lookup can find the build behind it.
 	// Check runs have no entry.
@@ -255,22 +442,26 @@ type checkOutcome struct {
 }
 
 func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (checkOutcome, error) {
-	combined, _, err := p.Client.Repositories.GetCombinedStatus(ctx, info.Owner, info.Repo, fmt.Sprintf("refs/pull/%d/head", info.Number), nil)
+	ref := fmt.Sprintf("refs/pull/%d/head", info.Number)
+	combined, _, err := p.Client.Repositories.GetCombinedStatus(ctx, info.Owner, info.Repo, ref, &github.ListOptions{PerPage: 100})
 	if err != nil {
 		return checkOutcome{}, err
 	}
 
 	combinedState := combined.GetState()
 
-	// Also check check-runs (GitHub Actions use check runs, not commit statuses)
-	checkRuns, _, err := p.Client.Checks.ListCheckRunsForRef(ctx, info.Owner, info.Repo, fmt.Sprintf("refs/pull/%d/head", info.Number), nil)
+	checkRuns, _, err := p.Client.Checks.ListCheckRunsForRef(ctx, info.Owner, info.Repo, ref, &github.ListCheckRunsOptions{ListOptions: github.ListOptions{PerPage: 100}})
 	if err != nil {
 		return checkOutcome{}, err
 	}
 
+	reported := make(map[string]contextState)
+	record := func(name string, success, failed bool) {
+		recordContext(reported, name, success, failed, time.Time{})
+	}
+
 	if checkRuns.GetTotal() == 0 && len(combined.Statuses) == 0 {
-		// No checks configured -- treat as success
-		return checkOutcome{state: stateSuccess}, nil
+		return checkOutcome{state: stateSuccess, sha: combined.GetSHA(), reported: reported}, nil
 	}
 
 	var failedChecks []string
@@ -279,13 +470,14 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	allComplete := true
 	hasFailure := false
 	for _, cr := range checkRuns.CheckRuns {
+		name := cr.GetName()
 		if cr.GetStatus() != statusCompleted {
 			allComplete = false
+			record(name, false, false)
 			continue
 		}
 		conclusion := cr.GetConclusion()
-		if conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == conclusionCancelled {
-			name := cr.GetName()
+		if isFailedConclusion(conclusion) {
 			// A check run that reports failure although it never produced a
 			// verdict on the code -- a budget block, a cancelled job, a
 			// pipeline a project setting refuses -- belongs in its own
@@ -295,28 +487,36 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 				if name != "" {
 					blockedChecks = append(blockedChecks, name)
 				}
+				record(name, false, false)
 				continue
 			case kindNoVerdict:
 				if name != "" {
 					noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: reason})
 				}
+				record(name, false, false)
 				continue
 			}
 			hasFailure = true
 			if name != "" {
 				failedChecks = append(failedChecks, name)
 			}
+			record(name, false, true)
+			continue
 		}
+		// Neutral and skipped conclusions count as a pass for the guard
+		// the way GitHub counts them for required checks.
+		record(name, conclusion == stateSuccess || conclusion == "neutral" || conclusion == "skipped", false)
 	}
 
 	var statusTargets map[string]string
 	hasStatusFailure := false
 	for _, s := range combined.Statuses {
 		state := s.GetState()
+		name := s.GetContext()
 		if state != stateFailure && state != stateError {
+			record(name, state == stateSuccess, false)
 			continue
 		}
-		name := s.GetContext()
 		if name == "" {
 			hasStatusFailure = true
 			continue
@@ -325,8 +525,10 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		// status description.
 		if isSetupWorkflowBlock(s.GetDescription()) {
 			noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: circleCISetupReason})
+			record(name, false, false)
 			continue
 		}
+		record(name, false, true)
 		hasStatusFailure = true
 		failedChecks = append(failedChecks, name)
 		if statusTargets == nil {
@@ -343,6 +545,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		failedChecks:    failedChecks,
 		blockedChecks:   blockedChecks,
 		noVerdictChecks: noVerdictChecks,
+		reported:        reported,
 		statusTargets:   statusTargets,
 	}
 	switch {
@@ -444,58 +647,25 @@ func dedupeByName(checks []noVerdictCheck) []noVerdictCheck {
 	return out
 }
 
-// attachRescueMarker looks for the newest ai-rescue marker in the PR's
-// comments and attaches it to the status entry. It only runs for failure
-// and stale outcomes (the marker is operator triage signal: "an automated
-// rescue was already attempted here"), skips entries that already carry a
-// marker (the stale-refresh path looks it up first), and degrades silently
-// on API errors -- a comment-listing failure must never change a sweep
-// result. Staleness is decided against the PR's current head and content
-// (see markStale).
-func (p *Processor) attachRescueMarker(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, status *pr.PRStatus, idx int) {
-	switch status.StateAt(idx) {
-	case pr.StatusFailed, pr.StatusFailedSecurity, pr.StatusConflict, pr.StatusStale, pr.StatusRefreshed:
+// attachRescueMarker attaches the newest rescue-attempt marker to failure
+// and stale outcomes, so the operator can tell "needs a first rescue" apart
+// from "a rescue already failed here". Staleness is decided against the
+// PR's current head and content (see markStale).
+func (p *Processor) attachRescueMarker(ctx context.Context, run *prRun) {
+	switch run.status.StateAt(run.idx) {
+	case pr.StatusFailed, pr.StatusFailedSecurity, pr.StatusConflict, pr.StatusStale, pr.StatusRefreshed, pr.StatusHeld:
 	default:
 		return
 	}
-	if status.RescueAt(idx) != nil {
+	if run.status.RescueAt(run.idx) != nil {
 		return
 	}
-
-	marker := p.findRescueMarker(ctx, info)
+	marker := run.rescueMarker(ctx, p)
 	if marker == nil {
 		return
 	}
-	p.markStale(ctx, info, pullReq, marker)
-	status.SetRescue(idx, marker)
-}
-
-// findRescueMarker returns the newest ai-rescue marker among the PR's
-// comments, or nil when there is none or the comments cannot be listed.
-// Staleness is left to the caller (markStale against the PR it cares
-// about).
-func (p *Processor) findRescueMarker(ctx context.Context, info pr.PRInfo) *pr.RescueMarker {
-	opts := &github.IssueListCommentsOptions{
-		ListOptions: github.ListOptions{PerPage: 100},
-	}
-	var marker *pr.RescueMarker
-	for {
-		comments, resp, err := p.Client.Issues.ListComments(ctx, info.Owner, info.Repo, info.Number, opts)
-		if err != nil {
-			return nil
-		}
-		// Comments are returned oldest-first; the last marker found wins.
-		for _, c := range comments {
-			if m := pr.ParseRescueMarker(c.GetBody()); m != nil {
-				marker = m
-			}
-		}
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
-	}
-	return marker
+	p.markStale(ctx, run.info, run.pull, marker)
+	run.status.SetRescue(run.idx, marker)
 }
 
 // noOpDetail explains a no-op classification. The shape is always the same
@@ -548,11 +718,12 @@ func (p *Processor) compare(ctx context.Context, info pr.PRInfo, pullReq *github
 // securityPatterns returns the normalized security-check pattern list to
 // use for classification: nil SecurityCheckPatterns falls back to the
 // built-in defaults; a non-nil empty slice disables classification.
+// securityPatterns returns the normalized security-check pattern list: the
+// built-in defaults plus whatever the caller added.
 func (p *Processor) securityPatterns() []string {
-	if p.SecurityCheckPatterns == nil {
-		return normalizePatterns(defaultSecurityCheckPatterns)
-	}
-	return normalizePatterns(p.SecurityCheckPatterns)
+	patterns := append([]string{}, defaultSecurityCheckPatterns...)
+	patterns = append(patterns, p.SecurityCheckPatterns...)
+	return normalizePatterns(patterns)
 }
 
 // failureDetail builds a human-readable detail string for a non-security
@@ -581,13 +752,16 @@ func withNote(detail, note string) string {
 	if note == "" {
 		return detail
 	}
+	if detail == "" {
+		return note
+	}
 	return detail + "; " + note
 }
 
-func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) error {
-	reviews, _, err := p.Client.PullRequests.ListReviews(ctx, info.Owner, info.Repo, info.Number, nil)
+func (p *Processor) approve(ctx context.Context, run *prRun) error {
+	reviews, _, err := p.Client.PullRequests.ListReviews(ctx, run.info.Owner, run.info.Repo, run.info.Number, nil)
 	if err != nil {
-		status.Update(idx, pr.StatusFailed, ghErrorDetail("review list error", err))
+		run.set(pr.StatusFailed, ghErrorDetail("review list error", err))
 		return err
 	}
 
@@ -597,19 +771,18 @@ func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRSt
 		}
 	}
 
-	if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
-		status.Update(idx, pr.StatusFailed, writeAccessDetail(err))
+	if err := p.ensureWriteAccess(ctx, run.info.Owner, run.info.Repo); err != nil {
+		run.set(pr.StatusFailed, writeAccessDetail(err))
 		return err
 	}
 
-	status.Update(idx, pr.StatusApproving, "")
+	run.set(pr.StatusApproving, "")
 
-	event := "APPROVE"
-	_, _, err = p.Client.PullRequests.CreateReview(ctx, info.Owner, info.Repo, info.Number, &github.PullRequestReviewRequest{
-		Event: &event,
+	_, _, err = p.Client.PullRequests.CreateReview(ctx, run.info.Owner, run.info.Repo, run.info.Number, &github.PullRequestReviewRequest{
+		Event: new("APPROVE"),
 	})
 	if err != nil {
-		status.Update(idx, pr.StatusFailed, ghErrorDetail("approve error", err))
+		run.set(pr.StatusFailed, ghErrorDetail("approve error", err))
 		return err
 	}
 
@@ -627,6 +800,20 @@ func isBaseBranchModified(err error) bool {
 	return strings.Contains(msg, "base branch was modified")
 }
 
+// isReviewRefusal reports whether GitHub refused the merge because a review
+// requirement is unmet.
+func isReviewRefusal(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "approving review") || strings.Contains(msg, "review is required") || strings.Contains(msg, "code owner")
+}
+
+// isChecksRefusal reports whether GitHub refused the merge because a
+// required status check is not satisfied.
+func isChecksRefusal(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "required status check") || strings.Contains(msg, "status checks")
+}
+
 func (p *Processor) mergeRetries() int {
 	if p.MergeMaxRetries > 0 {
 		return p.MergeMaxRetries
@@ -641,82 +828,129 @@ func (p *Processor) mergeWait() time.Duration {
 	return mergeRetryBaseWait
 }
 
-func (p *Processor) merge(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) {
+// merge lands the PR with a squash. A PR behind its base is brought up to
+// date instead and merges on a later sweep once its checks ran on the new
+// head: that is the strict-protection chain, one round per sweep.
+func (p *Processor) merge(ctx context.Context, run *prRun) {
+	if run.pull.GetMergeableState() == "behind" {
+		p.updateBranch(ctx, run, "behind base")
+		return
+	}
+
 	maxRetries := p.mergeRetries()
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt == 1 {
-			status.Update(idx, pr.StatusMerging, "")
+			run.set(pr.StatusMerging, "")
 		} else {
-			status.Update(idx, pr.StatusRetrying, fmt.Sprintf("attempt %d/%d", attempt, maxRetries))
+			run.set(pr.StatusRetrying, fmt.Sprintf("attempt %d/%d", attempt, maxRetries))
 		}
 
-		_, _, err := p.Client.PullRequests.Merge(ctx, info.Owner, info.Repo, info.Number, "", &github.PullRequestOptions{
+		_, _, err := p.Client.PullRequests.Merge(ctx, run.info.Owner, run.info.Repo, run.info.Number, "", &github.PullRequestOptions{
 			MergeMethod: "squash",
 		})
 		if err == nil {
-			status.Update(idx, pr.StatusMerged, "squash")
+			run.set(pr.StatusMerged, mergedDetail(run))
+			if len(run.preexisting) > 0 {
+				p.postOnce(ctx, run, pr.MarkerKindEvidence, "merged-past-red-check", preexistingNote(run)+" (red on the base head too)")
+			}
 			return
 		}
 
 		if !isBaseBranchModified(err) {
-			// Permanent error -- do not retry.
 			errMsg := err.Error()
-			if strings.Contains(errMsg, "409") || strings.Contains(errMsg, "conflict") {
-				status.Update(idx, pr.StatusConflict, "merge conflict")
-			} else {
-				status.Update(idx, pr.StatusFailed, ghErrorDetail("merge error", err))
+			switch {
+			case isReviewRefusal(err):
+				run.set(pr.StatusAwaitingApproval, ghErrorDetail("merge refused", err))
+				p.postOnce(ctx, run, pr.MarkerKindEvidence, "awaiting-approval", "the sweep's approval did not satisfy the review rule")
+			case isChecksRefusal(err):
+				run.set(pr.StatusWaitingChecks, ghErrorDetail("merge refused", err))
+			case strings.Contains(errMsg, "409") || strings.Contains(errMsg, "conflict"):
+				run.set(pr.StatusConflict, "merge conflict")
+			default:
+				run.set(pr.StatusFailed, ghErrorDetail("merge error", err))
 			}
 			return
 		}
 
 		if attempt == maxRetries {
-			status.Update(idx, pr.StatusFailed, fmt.Sprintf("base branch modified after %d attempts", maxRetries))
+			run.set(pr.StatusFailed, fmt.Sprintf("base branch modified after %d attempts", maxRetries))
 			return
 		}
 
-		// Wait with linear backoff before retrying.
 		wait := p.mergeWait() * time.Duration(attempt)
 		select {
 		case <-ctx.Done():
-			status.Update(idx, pr.StatusSkipped, "cancelled")
+			run.set(pr.StatusSkipped, "cancelled")
 			return
 		case <-time.After(wait):
 		}
 
-		// Re-fetch the PR to confirm it is still open and mergeable.
-		refreshed, _, fetchErr := p.Client.PullRequests.Get(ctx, info.Owner, info.Repo, info.Number)
+		refreshed, _, fetchErr := p.Client.PullRequests.Get(ctx, run.info.Owner, run.info.Repo, run.info.Number)
 		if fetchErr != nil {
-			status.Update(idx, pr.StatusFailed, ghErrorDetail("retry fetch error", fetchErr))
+			run.set(pr.StatusFailed, ghErrorDetail("retry fetch error", fetchErr))
 			return
 		}
 		if refreshed.GetMerged() {
-			status.Update(idx, pr.StatusAlreadyMerged, "merged between retries")
+			run.set(pr.StatusAlreadyMerged, "merged between retries")
 			return
 		}
 		if refreshed.GetMergeableState() == "dirty" {
-			status.Update(idx, pr.StatusConflict, "merge conflict on retry")
+			run.set(pr.StatusConflict, "merge conflict on retry")
+			return
+		}
+		if refreshed.GetMergeableState() == "behind" {
+			run.pull = refreshed
+			p.updateBranch(ctx, run, "fell behind while merging")
 			return
 		}
 	}
 }
 
-func (p *Processor) isAuthorTrusted(login string) bool {
-	if strings.EqualFold(login, p.Login) {
-		return true
+func mergedDetail(run *prRun) string {
+	return withNote("squash", preexistingNote(run))
+}
+
+// preexistingNote names the red non-required checks that are red on the
+// base head too, or "" when there are none.
+func preexistingNote(run *prRun) string {
+	if len(run.preexisting) == 0 {
+		return ""
 	}
-	return p.TrustedAuthors[login]
+	return "pre-existing red checks: " + strings.Join(run.preexisting, ", ")
+}
+
+// updateBranch brings the PR up to date with its base (the "Update branch"
+// button). GitHub schedules the update and answers 202, which go-github
+// surfaces as an AcceptedError: that is the success path.
+func (p *Processor) updateBranch(ctx context.Context, run *prRun, why string) {
+	_, _, err := p.Client.PullRequests.UpdateBranch(ctx, run.info.Owner, run.info.Repo, run.info.Number, nil)
+	var accepted *github.AcceptedError
+	if err != nil && !errors.As(err, &accepted) {
+		run.set(pr.StatusFailed, ghErrorDetail("update-branch failed", err))
+		return
+	}
+	run.set(pr.StatusRefreshed, "re-checking; "+why)
+	p.postOnce(ctx, run, pr.MarkerKindEvidence, "update-branch", why)
 }
 
 func ghErrorDetail(prefix string, err error) string {
+	msg := ""
 	if ghErr, ok := errors.AsType[*github.ErrorResponse](err); ok {
 		for _, e := range ghErr.Errors {
 			if e.Message != "" {
-				return fmt.Sprintf("%s: %s", prefix, e.Message)
+				msg = e.Message
+				break
 			}
 		}
-		if ghErr.Message != "" {
-			return fmt.Sprintf("%s: %s", prefix, ghErr.Message)
+		if msg == "" && ghErr.Message != "" {
+			msg = ghErr.Message
 		}
 	}
-	return fmt.Sprintf("%s: %v", prefix, err)
+	if msg == "" {
+		msg = err.Error()
+	}
+	if prefix == "" {
+		return msg
+	}
+	return fmt.Sprintf("%s: %s", prefix, msg)
 }

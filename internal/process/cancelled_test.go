@@ -159,6 +159,12 @@ func (f *cancelledFixture) github(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []*github.IssueComment{})
 	})
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("POST /repos/org/repo/issues/1/labels", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, []*github.Label{})
+	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
@@ -256,8 +262,9 @@ func (f *cancelledFixture) run(t *testing.T, configure func(*Processor)) pr.Stat
 	cc := f.circle(t)
 	defer cc.Close()
 
-	proc := NewProcessor(newTestClient(t, gh), false, false, "me", DefaultTrustedAuthors)
+	proc := NewProcessor(newTestClient(t, gh), false, false, "me")
 	proc.CircleCI = &circleci.Client{HTTPClient: cc.Client(), BaseURL: cc.URL, Token: f.token}
+	proc.Actions = ActionSet{ActionClassify: true}
 	if configure != nil {
 		configure(proc)
 	}
@@ -288,7 +295,10 @@ func goBuildStatus(num int, fixture string) []circleStatus {
 
 func TestClassifyCancelled_realFailureStaysFailed(t *testing.T) {
 	f := &cancelledFixture{head: "d698f9ca512a0abdceceb441f582c0faa8fc6722", statuses: goBuildStatus(883, fixtureFailed)}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true; p.CircleCI.Token = "tok" })
+	got := f.run(t, func(p *Processor) {
+		p.Actions = ActionSet{ActionClassify: true, ActionRetry: true}
+		p.CircleCI.Token = "tok"
+	})
 
 	if got.State != pr.StatusFailed {
 		t.Fatalf("state = %v (%s), want StatusFailed: govulncheck really failed", got.State, got.Detail)
@@ -304,7 +314,7 @@ func TestClassifyCancelled_realFailureStaysFailed(t *testing.T) {
 func TestClassifyCancelled_behindNewerHead(t *testing.T) {
 	// Build 1244 was cancelled on 2c0ce64c; the PR head is 605a2d69 now.
 	f := &cancelledFixture{head: cxHeadMoved, statuses: goBuildStatus(1244, fixtureCancelledBehind), token: "tok"}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusCancelled {
 		t.Fatalf("state = %v (%s), want StatusCancelled", got.State, got.Detail)
@@ -338,7 +348,7 @@ func TestClassifyCancelled_onHead(t *testing.T) {
 
 func TestClassifyCancelled_retryOnHead(t *testing.T) {
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok"}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
@@ -371,7 +381,7 @@ func TestClassifyCancelled_retryOneRerunPerWorkflow(t *testing.T) {
 		{context: "ci/circleci: go-test", num: 1265, fixture: fixtureCancelledHead},
 		{context: "ci/circleci: go-build", num: 1263, fixture: fixtureCancelledHead},
 	}}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
@@ -390,7 +400,7 @@ func TestClassifyCancelled_retryRerunsEachWorkflow(t *testing.T) {
 		{context: "ci/circleci: go-test", num: 1265, fixture: fixtureCancelledHead, workflowID: otherWorkflow},
 		{context: "ci/circleci: go-build", num: 1263, fixture: fixtureCancelledHead},
 	}}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
@@ -406,7 +416,7 @@ func TestClassifyCancelled_retryFallsBackWithoutWorkflow(t *testing.T) {
 	f := &cancelledFixture{head: cxHeadCancelled, token: "tok", statuses: []circleStatus{
 		{context: "ci/circleci: go-build", num: 1263, fixture: fixtureCancelledHead, noWorkflow: true},
 	}}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
@@ -423,7 +433,7 @@ func TestClassifyCancelled_rerunDeniedKeepsCancelled(t *testing.T) {
 	// A token that may not rerun the workflow may not retry the build
 	// either, so there is nothing to fall back to.
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok", rerunStatus: http.StatusForbidden}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusCancelled {
 		t.Fatalf("state = %v (%s), want StatusCancelled when the rerun is refused", got.State, got.Detail)
@@ -443,7 +453,7 @@ func TestClassifyCancelled_rerunWithoutFailedJobFallsBack(t *testing.T) {
 	// job, so the PR gets a verdict instead of staying stuck.
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok",
 		rerunStatus: http.StatusBadRequest, rerunMessage: "Workflow has no failed jobs to rerun from"}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusRetried {
 		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
@@ -458,7 +468,7 @@ func TestClassifyCancelled_rerunWithoutFailedJobFallsBack(t *testing.T) {
 
 func TestClassifyCancelled_dryRunOnlyClassifies(t *testing.T) {
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok"}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true; p.DryRun = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true}; p.DryRun = true })
 
 	if got.State != pr.StatusCancelled {
 		t.Fatalf("state = %v (%s), want StatusCancelled in dry run", got.State, got.Detail)
@@ -470,7 +480,7 @@ func TestClassifyCancelled_dryRunOnlyClassifies(t *testing.T) {
 
 func TestClassifyCancelled_retryNeedsToken(t *testing.T) {
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead)}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusCancelled {
 		t.Fatalf("state = %v (%s), want StatusCancelled", got.State, got.Detail)
@@ -485,7 +495,7 @@ func TestClassifyCancelled_retryNeedsToken(t *testing.T) {
 
 func TestClassifyCancelled_privateWithoutTokenDegradesToFailed(t *testing.T) {
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), private: true}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusFailed {
 		t.Fatalf("state = %v (%s), want StatusFailed: the build could not be inspected", got.State, got.Detail)
@@ -510,7 +520,7 @@ func TestClassifyCancelled_privateWithTokenIsInspected(t *testing.T) {
 
 func TestClassifyCancelled_mixedWithRealCheckRunStaysFailed(t *testing.T) {
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), checkRunFailure: true, token: "tok"}
-	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRetry: true} })
 
 	if got.State != pr.StatusFailed {
 		t.Fatalf("state = %v (%s), want StatusFailed: lint really failed", got.State, got.Detail)
@@ -551,7 +561,7 @@ func TestClassifyCancelled_decidedBeforeStale(t *testing.T) {
 	// cancellation is the cause, staleness only a heuristic, so the PR is
 	// Cancelled and the base branch is never consulted.
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), behindBy: 12}
-	got := f.run(t, func(p *Processor) { p.RefreshStale = true })
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true} })
 
 	if got.State != pr.StatusCancelled {
 		t.Fatalf("state = %v (%s), want StatusCancelled", got.State, got.Detail)

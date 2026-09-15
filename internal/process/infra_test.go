@@ -205,6 +205,17 @@ func (f *noVerdictFixture) run(t *testing.T) pr.StatusEntry {
 	mux.HandleFunc("GET /repos/org/repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []*github.IssueComment{})
 	})
+	// No required checks, and nothing reported on the base head: a red
+	// check on the PR is never pre-existing here.
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("GET /repos/org/repo/commits/"+fxBase+"/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, github.CombinedStatus{State: new("success"), SHA: new(fxBase)})
+	})
+	mux.HandleFunc("GET /repos/org/repo/commits/"+fxBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, github.ListCheckRunsResults{Total: new(0)})
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)
@@ -213,7 +224,7 @@ func (f *noVerdictFixture) run(t *testing.T) pr.StatusEntry {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	proc := NewProcessor(newTestClient(t, srv), true, false, "me", DefaultTrustedAuthors)
+	proc := NewProcessor(newTestClient(t, srv), true, false, "me")
 	status := pr.NewPRStatus()
 	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1, Author: "renovate[bot]"}
 	idx := status.Add(info)
