@@ -62,6 +62,7 @@ type Processor struct {
 	RetryCancelled bool
 
 	staleCache
+	accessCache
 }
 
 func NewProcessor(client *github.Client, dryRun bool, mergeAutoMerge bool, login string, trustedAuthors map[string]bool) *Processor {
@@ -423,6 +424,11 @@ func withNote(detail, note string) string {
 }
 
 func (p *Processor) approve(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) error {
+	if err := p.ensureWriteAccess(ctx, info.Owner, info.Repo); err != nil {
+		status.Update(idx, pr.StatusFailed, "approve refused: "+err.Error())
+		return err
+	}
+
 	reviews, _, err := p.Client.PullRequests.ListReviews(ctx, info.Owner, info.Repo, info.Number, nil)
 	if err != nil {
 		status.Update(idx, pr.StatusFailed, ghErrorDetail("review list error", err))
