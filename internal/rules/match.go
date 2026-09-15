@@ -26,9 +26,9 @@ type Subject struct {
 	// BaseState says what the base head reported for each failing check.
 	// A name absent from the map is CheckAbsent, and absent is not green.
 	BaseState map[string]CheckState
-	// RequiredMissing reports whether the base branch requires a context the
-	// head never reported.
-	RequiredMissing bool
+	// MissingContexts names the required contexts of the base branch that
+	// the head never reported.
+	MissingContexts []string
 	// Files returns the paths of the PR diff. It is called only for a rule
 	// that carries a file signal, so a catalogue without one costs no
 	// comparison. Nil returns no files, and such a rule does not match.
@@ -51,6 +51,10 @@ type Hit struct {
 	// LogMatched reports whether a log excerpt decided the match. An action
 	// that writes is guarded on it.
 	LogMatched bool
+	// MissingContexts are the required contexts the protection signal
+	// selected. An action that rewrites a protection touches these and no
+	// other.
+	MissingContexts []string
 }
 
 // Match returns the first rule of the catalogue that matches the subject, or
@@ -78,6 +82,10 @@ func (r *Rule) match(subject *Subject) *Hit {
 	if !r.matchPRMetadata(subject) {
 		return nil
 	}
+	missing, ok := r.matchProtection(subject)
+	if !ok {
+		return nil
+	}
 
 	candidates := r.candidates(subject)
 	if r.Match.Check != nil && len(candidates) == 0 {
@@ -90,9 +98,35 @@ func (r *Rule) match(subject *Subject) *Hit {
 	}
 
 	if r.Match.Log == nil {
-		return &Hit{Rule: r, Check: first(candidates)}
+		return &Hit{Rule: r, Check: first(candidates), MissingContexts: missing}
 	}
-	return r.matchLog(subject, candidates)
+	hit := r.matchLog(subject, candidates)
+	if hit != nil {
+		hit.MissingContexts = missing
+	}
+	return hit
+}
+
+// matchProtection selects the required contexts the head never reported that
+// any glob names. The globs are alternatives, because one migration renames
+// job names of several shapes, and the selection is what the action
+// rewrites: a context no glob named is left required. A rule whose globs
+// select nothing does not match.
+func (r *Rule) matchProtection(subject *Subject) ([]string, bool) {
+	patterns := r.MissingContextPatterns()
+	if len(patterns) == 0 {
+		return nil, true
+	}
+	var selected []string
+	for _, name := range subject.MissingContexts {
+		for _, re := range patterns {
+			if re.MatchString(name) {
+				selected = append(selected, name)
+				break
+			}
+		}
+	}
+	return selected, len(selected) > 0
 }
 
 // candidates are the failing checks the check signal selects. A rule without
@@ -135,9 +169,6 @@ func (r *Rule) matchPRMetadata(subject *Subject) bool {
 	p := r.Match.PR
 	if p == nil {
 		return true
-	}
-	if p.RequiredMissing && !subject.RequiredMissing {
-		return false
 	}
 	if re := r.TitlePattern(); re != nil && !re.MatchString(subject.Title) {
 		return false

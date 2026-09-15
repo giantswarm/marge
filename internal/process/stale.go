@@ -69,6 +69,18 @@ func recordContext(states map[string]contextState, name string, success, failed 
 	states[name] = st
 }
 
+// newestReport is the newest time any context of the head reported. A
+// context with no time of its own does not move it.
+func newestReport(states map[string]contextState) time.Time {
+	var newest time.Time
+	for _, st := range states {
+		if st.at.After(newest) {
+			newest = st.at
+		}
+	}
+	return newest
+}
+
 // isFailedConclusion reports whether a completed check run's conclusion
 // counts as red.
 func isFailedConclusion(conclusion string) bool {

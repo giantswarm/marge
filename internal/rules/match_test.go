@@ -149,7 +149,7 @@ source: runbook row 1
 match:
   states: [failed]
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 evidence:
@@ -162,7 +162,7 @@ source: runbook row 1
 match:
   states: [failed]
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: update-branch
 evidence:
@@ -247,17 +247,17 @@ func TestMatchBaseHeadHoldsForEveryCandidate(t *testing.T) {
 	require.NotNil(t, cat.Match(subject))
 }
 
-// A PR waiting on a context nobody reported carries no failing check, so
-// requiredMissing is the only signal that reaches it.
-func TestMatchRequiredMissing(t *testing.T) {
+// A PR waiting on a context nobody reported carries no failing check, so a
+// protection signal is the only one that reaches it.
+func TestMatchMissingContexts(t *testing.T) {
 	cat := catalogue(t, `
 name: context-drift
 summary: A required context no job posts any more.
 source: runbook rows 21 and 44
 match:
   states: [waiting-checks]
-  pr:
-    requiredMissing: true
+  protection:
+    missingContexts: ["ci/circleci: *"]
 action:
   name: update-branch
 evidence:
@@ -265,9 +265,18 @@ evidence:
 `)
 
 	require.Nil(t, cat.Match(&Subject{State: pr.StatusWaitingChecks}))
+	require.Nil(t, cat.Match(&Subject{
+		State:           pr.StatusWaitingChecks,
+		MissingContexts: []string{"build / unit"},
+	}))
 
-	hit := cat.Match(&Subject{State: pr.StatusWaitingChecks, RequiredMissing: true})
+	hit := cat.Match(&Subject{
+		State:           pr.StatusWaitingChecks,
+		MissingContexts: []string{"build / unit", "ci/circleci: go-build"},
+	})
 	require.NotNil(t, hit)
 	require.Equal(t, "context-drift", hit.Rule.Name)
 	require.Empty(t, hit.Check)
+	require.Equal(t, []string{"ci/circleci: go-build"}, hit.MissingContexts,
+		"the action rewrites only the contexts the rule named")
 }

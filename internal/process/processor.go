@@ -127,6 +127,13 @@ type prRun struct {
 	// required is what the head reported for the base branch's required
 	// contexts.
 	required remedy.Required
+	// reported counts the contexts the head reported in any state, and
+	// settledAt is the newest completion among them. checksPending reports
+	// whether one of them has not finished. Together they say whether a
+	// context nobody reported may still report.
+	reported      int
+	checksPending bool
+	settledAt     time.Time
 	// files are the paths of the PR diff, fetched once and only for a rule
 	// that carries a file signal.
 	files       []string
@@ -377,6 +384,9 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 		run.required = remedy.Required(required)
 		run.statusTargets = outcome.statusTargets
 		run.detailsURLs = outcome.detailsURLs
+		run.reported = len(outcome.reported)
+		run.checksPending = outcome.state == statePending
+		run.settledAt = outcome.settledAt
 
 		if len(required.Failed) > 0 || outcome.state == stateFailure || outcome.state == stateError {
 			if !p.classifyFailure(ctx, run, outcome, prot) {
@@ -513,6 +523,8 @@ type checkOutcome struct {
 	// detailsURLs maps each failing check run to its details URL, which
 	// carries the Actions job id the log excerpt is read from.
 	detailsURLs map[string]string
+	// settledAt is the newest completion time among the head's contexts.
+	settledAt time.Time
 }
 
 func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (checkOutcome, error) {
@@ -530,8 +542,8 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	}
 
 	reported := make(map[string]contextState)
-	record := func(name string, success, failed bool) {
-		recordContext(reported, name, success, failed, time.Time{})
+	record := func(name string, success, failed bool, at time.Time) {
+		recordContext(reported, name, success, failed, at)
 	}
 
 	if checkRuns.GetTotal() == 0 && len(combined.Statuses) == 0 {
@@ -548,9 +560,10 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		name := cr.GetName()
 		if cr.GetStatus() != statusCompleted {
 			allComplete = false
-			record(name, false, false)
+			record(name, false, false, time.Time{})
 			continue
 		}
+		completed := cr.GetCompletedAt().Time
 		conclusion := cr.GetConclusion()
 		if isFailedConclusion(conclusion) {
 			// A check run that reports failure although it never produced a
@@ -562,13 +575,13 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 				if name != "" {
 					blockedChecks = append(blockedChecks, name)
 				}
-				record(name, false, false)
+				record(name, false, false, completed)
 				continue
 			case kindNoVerdict:
 				if name != "" {
 					noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: reason})
 				}
-				record(name, false, false)
+				record(name, false, false, completed)
 				continue
 			}
 			hasFailure = true
@@ -581,12 +594,12 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 					detailsURLs[name] = url
 				}
 			}
-			record(name, false, true)
+			record(name, false, true, completed)
 			continue
 		}
 		// Neutral and skipped conclusions count as a pass for the guard
 		// the way GitHub counts them for required checks.
-		record(name, conclusion == stateSuccess || conclusion == "neutral" || conclusion == "skipped", false)
+		record(name, conclusion == stateSuccess || conclusion == "neutral" || conclusion == "skipped", false, completed)
 	}
 
 	var statusTargets map[string]string
@@ -594,8 +607,9 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	for _, s := range combined.Statuses {
 		state := s.GetState()
 		name := s.GetContext()
+		updated := s.GetUpdatedAt().Time
 		if state != stateFailure && state != stateError {
-			record(name, state == stateSuccess, false)
+			record(name, state == stateSuccess, false, updated)
 			continue
 		}
 		if name == "" {
@@ -606,10 +620,10 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		// status description.
 		if isSetupWorkflowBlock(s.GetDescription()) {
 			noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: circleCISetupReason})
-			record(name, false, false)
+			record(name, false, false, updated)
 			continue
 		}
-		record(name, false, true)
+		record(name, false, true, updated)
 		hasStatusFailure = true
 		failedChecks = append(failedChecks, name)
 		if statusTargets == nil {
@@ -629,6 +643,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		reported:        reported,
 		statusTargets:   statusTargets,
 		detailsURLs:     detailsURLs,
+		settledAt:       newestReport(reported),
 	}
 	switch {
 	case hasFailure || hasStatusFailure:

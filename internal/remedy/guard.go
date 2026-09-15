@@ -4,9 +4,16 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
+
+// protectionSettleDelay is how long the head's checks must have been quiet
+// before a required context nobody reported counts as one no job posts any
+// more. A workflow that has not created its check run yet reports nothing,
+// which is the same observation.
+const protectionSettleDelay = 30 * time.Minute
 
 // Guard reports why an action must not run, or "" when it may. Guards are
 // pure: they read the Request and nothing else, so every one of them is
@@ -65,6 +72,28 @@ func OncePerChange(name Name) Guard {
 		}
 		return ""
 	}
+}
+
+// ChecksSettled refuses while the head may still report a context for the
+// first time. A context nobody reported is drift only once the head has
+// reported something, nothing is running, and the newest report is older
+// than protectionSettleDelay.
+func ChecksSettled(req *Request) string {
+	switch {
+	case req.Reported == 0:
+		return "the head has reported no check yet"
+	case len(req.Required.Pending) > 0:
+		return "required checks pending: " + strings.Join(req.Required.Pending, ", ")
+	case req.ChecksPending:
+		return "a check on the head has not finished"
+	case req.ChecksSettledAt.IsZero():
+		return "the head's checks carry no completion time"
+	}
+	if quiet := req.Now.Sub(req.ChecksSettledAt); quiet < protectionSettleDelay {
+		return fmt.Sprintf("the head's checks settled %s ago, less than %s: a context may still report for the first time",
+			quiet.Round(time.Minute), protectionSettleDelay)
+	}
+	return ""
 }
 
 // NoGeneratedEdit refuses an action that would write a file rendered by a

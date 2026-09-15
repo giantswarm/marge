@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
@@ -67,7 +68,7 @@ func (p *Processor) subject(ctx context.Context, run *prRun, state pr.StatusStat
 		Title:           run.pull.GetTitle(),
 		Failing:         run.failing,
 		BaseState:       p.baseStates(ctx, run),
-		RequiredMissing: len(run.required.Missing) > 0,
+		MissingContexts: run.required.Missing,
 		Files:           func() []string { return p.diffFiles(ctx, run) },
 		Log:             p.logExcerpt(ctx, run),
 	}
@@ -117,9 +118,14 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 		SecurityFailure:   classifySecurityFailure(run.failing, p.securityPatterns()),
 		Required:          run.required,
 		Base:              baseSplit(p.baseStates(ctx, run)),
+		Now:               time.Now(),
+		Reported:          run.reported,
+		ChecksPending:     run.checksPending,
+		ChecksSettledAt:   run.settledAt,
 		Check:             hit.Check,
 		CheckURL:          run.checkURL(hit.Check),
 		LogMatched:        hit.LogMatched,
+		MissingContexts:   hit.MissingContexts,
 		AppliedThisChange: p.appliedThisChange(ctx, run),
 		Deps: remedy.Deps{
 			GitHub:   p.Client,

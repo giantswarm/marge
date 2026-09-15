@@ -46,9 +46,20 @@ type Match struct {
 	// Kinds names the bot PR kinds. Empty applies to every trusted kind.
 	Kinds []string `yaml:"kinds"`
 
-	Check *CheckMatch `yaml:"check"`
-	Log   *LogMatch   `yaml:"log"`
-	PR    *PRMatch    `yaml:"pr"`
+	Check      *CheckMatch      `yaml:"check"`
+	Log        *LogMatch        `yaml:"log"`
+	PR         *PRMatch         `yaml:"pr"`
+	Protection *ProtectionMatch `yaml:"protection"`
+}
+
+// ProtectionMatch reads the base branch's protection rather than the pull
+// request. A PR waiting on a context nobody reported carries no failing
+// check, so no signal of the PR itself reaches it.
+type ProtectionMatch struct {
+	// MissingContexts are globs over the required contexts the head never
+	// reported. They are alternatives: the rule matches when any of them
+	// selects a context, and the action drops only what they selected.
+	MissingContexts []string `yaml:"missingContexts"`
 }
 
 // CheckMatch matches the name of a failing check. A check name alone never
@@ -85,10 +96,6 @@ type PRMatch struct {
 	TitlePattern string `yaml:"titlePattern"`
 	// Files are globs; every one of them must match a file of the diff.
 	Files []string `yaml:"files"`
-	// RequiredMissing asks for a base branch that requires a context the
-	// head never reported. Such a PR has no failing check to read, so this
-	// is the only signal that reaches it.
-	RequiredMissing bool `yaml:"requiredMissing"`
 }
 
 // BaseHead is what the base branch head reported for the checks failing on
@@ -121,13 +128,14 @@ type Evidence struct {
 // compiled holds what validation derived from the document, so matching
 // compiles no expression and resolves no name.
 type compiled struct {
-	states  map[pr.StatusState]bool
-	kinds   map[pr.Kind]bool
-	checkRE *regexp.Regexp
-	fileREs []*regexp.Regexp
-	logRE   *regexp.Regexp
-	titleRE *regexp.Regexp
-	guards  []remedy.Guard
+	states     map[pr.StatusState]bool
+	kinds      map[pr.Kind]bool
+	checkRE    *regexp.Regexp
+	fileREs    []*regexp.Regexp
+	missingREs []*regexp.Regexp
+	logRE      *regexp.Regexp
+	titleRE    *regexp.Regexp
+	guards     []remedy.Guard
 }
 
 // States reports the classifications the rule applies to. An empty set in
@@ -145,6 +153,11 @@ func (r *Rule) CheckPattern() *regexp.Regexp { return r.compiled.checkRE }
 // FilePatterns returns the compiled file globs. Every one of them must match
 // a file of the diff.
 func (r *Rule) FilePatterns() []*regexp.Regexp { return r.compiled.fileREs }
+
+// MissingContextPatterns returns the compiled globs over the required
+// contexts the head never reported, or nil when the rule reads no
+// protection.
+func (r *Rule) MissingContextPatterns() []*regexp.Regexp { return r.compiled.missingREs }
 
 // LogPattern returns the compiled log expression, or nil when the rule has
 // no log signal.

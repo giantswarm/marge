@@ -397,6 +397,7 @@ func loadRules(ctx context.Context, client *github.Client, src RulesSource) (*ru
 
 	report := &SweepRules{
 		Source: catalogue.Source,
+		Ref:    catalogue.Ref,
 		Digest: catalogue.Digest,
 		Loaded: len(catalogue.Rules),
 	}

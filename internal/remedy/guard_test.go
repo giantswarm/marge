@@ -2,6 +2,7 @@ package remedy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
@@ -126,4 +127,71 @@ func TestTrustedAuthorCoversEveryKind(t *testing.T) {
 	for _, login := range pr.TrustedLogins() {
 		require.Empty(t, TrustedAuthor(&Request{Pull: botPull(login)}), login)
 	}
+}
+
+// A context nobody reported is drift only once the head has finished
+// reporting. A workflow that has not created its check run yet is the same
+// observation, and rewriting a branch protection over it is a write nobody
+// asked for.
+func TestChecksSettled(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	settled := func(quiet time.Duration) *Request {
+		return &Request{Now: now, Reported: 3, ChecksSettledAt: now.Add(-quiet)}
+	}
+
+	tests := []struct {
+		name    string
+		request *Request
+		want    string
+	}{
+		{
+			name:    "the head has reported nothing",
+			request: &Request{Now: now},
+			want:    "reported no check yet",
+		},
+		{
+			name:    "a required context is pending",
+			request: &Request{Now: now, Reported: 3, Required: Required{Pending: []string{"build"}}},
+			want:    "required checks pending: build",
+		},
+		{
+			name:    "a check is still running",
+			request: &Request{Now: now, Reported: 3, ChecksPending: true},
+			want:    "has not finished",
+		},
+		{
+			name:    "nothing carries a completion time",
+			request: &Request{Now: now, Reported: 3},
+			want:    "no completion time",
+		},
+		{
+			name:    "the newest report is recent",
+			request: settled(5 * time.Minute),
+			want:    "may still report for the first time",
+		},
+		{
+			name:    "the head has been quiet",
+			request: settled(protectionSettleDelay + time.Minute),
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := ChecksSettled(tt.request)
+			if tt.want == "" {
+				require.Empty(t, reason)
+				return
+			}
+			require.Contains(t, reason, tt.want)
+		})
+	}
+}
+
+// A zero Now is a request the engine did not fill, and the guard fails
+// closed on it rather than reading every past report as settled.
+func TestChecksSettledRefusesWithoutATime(t *testing.T) {
+	req := &Request{Reported: 3, ChecksSettledAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+	require.Contains(t, ChecksSettled(req), "may still report for the first time")
 }

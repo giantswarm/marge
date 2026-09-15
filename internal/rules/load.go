@@ -52,6 +52,9 @@ type Catalogue struct {
 	Digest string
 	// Source says where the catalogue came from.
 	Source string
+	// Ref is the branch the catalogue was read from, empty for a local
+	// directory.
+	Ref string
 	// Skipped names the documents that failed to parse, with the reason.
 	// They are left out; the rest of the catalogue still runs.
 	Skipped []Skipped
@@ -76,7 +79,7 @@ func (l Loader) Load(ctx context.Context, reg *remedy.Registry) (*Catalogue, err
 		return nil, err
 	}
 
-	cat := &Catalogue{Source: source, Digest: digest(files)}
+	cat := &Catalogue{Source: source, Ref: l.effectiveRef(), Digest: digest(files)}
 	for _, f := range files {
 		rule, err := Parse(f.path, f.content, reg)
 		if err != nil {
@@ -109,6 +112,18 @@ type file struct {
 	path    string
 	sha     string
 	content []byte
+}
+
+// effectiveRef is the branch a repository catalogue is read from. A local
+// directory has none.
+func (l Loader) effectiveRef() string {
+	if l.LocalPath != "" {
+		return ""
+	}
+	if l.Ref == "" {
+		return DefaultRef
+	}
+	return l.Ref
 }
 
 func (l Loader) files(ctx context.Context) ([]file, string, error) {

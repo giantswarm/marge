@@ -95,7 +95,7 @@ summary: s
 source: runbook row 1
 match:
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: merge-everything
 evidence:
@@ -116,7 +116,7 @@ action:
 evidence:
   reason: y
 `,
-			wantErr: "match needs a check, log or pr signal",
+			wantErr: "match needs a check, log, pr or protection signal",
 		},
 		{
 			name: "an unknown state",
@@ -127,7 +127,7 @@ source: runbook row 1
 match:
   states: [merged]
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 evidence:
@@ -144,7 +144,7 @@ source: runbook row 1
 match:
   kinds: [quentin]
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 evidence:
@@ -160,7 +160,7 @@ summary: s
 source: runbook row 1
 match:
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 refuse: [skip-guards]
@@ -228,7 +228,7 @@ name: no-source
 summary: s
 match:
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 evidence:
@@ -244,7 +244,7 @@ summary: s
 source: runbook row 1
 match:
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 `,
@@ -286,7 +286,7 @@ summary: s
 source: runbook row 1
 match:
   check:
-    name: "*"
+    name: "go-*"
 action:
   name: close
 refuse: [log-matched, log-matched]
@@ -314,4 +314,72 @@ evidence:
 	require.NoError(t, err)
 	require.Empty(t, rule.States())
 	require.Empty(t, rule.Kinds())
+}
+
+// A glob of stars names nothing in particular, so it is a classification
+// restated. Refusing it is what keeps validateSignalStrength honest: a rule
+// could otherwise reach close through match.pr.files, which the title
+// pattern is already refused for.
+func TestParseRefusesAGlobThatMatchesEverything(t *testing.T) {
+	tests := []struct {
+		name  string
+		match string
+	}{
+		{"every file", "  pr:\n    files: [\"**\"]"},
+		{"every file of the root", "  pr:\n    files: [\"*\"]"},
+		{"every file, spelled long", "  pr:\n    files: [\"**/*\"]"},
+		{"every check", "  check:\n    name: \"*\""},
+		{"every missing context", "  protection:\n    missingContexts: [\"*\"]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := "name: close-everything\nsummary: s\nsource: runbook row 1\nmatch:\n  states: [failed]\n" +
+				tt.match + "\naction:\n  name: close\nevidence:\n  reason: y\n"
+
+			_, err := Parse("close-everything.yaml", []byte(doc), testRegistry())
+
+			require.ErrorContains(t, err, "matches everything")
+		})
+	}
+}
+
+func TestParseProtectionSignal(t *testing.T) {
+	doc := `
+name: context-drift
+summary: A required context no job posts any more.
+source: runbook rows 21 and 44
+match:
+  states: [waiting-checks]
+  protection:
+    missingContexts: ["ci/circleci: *"]
+action:
+  name: close
+evidence:
+  reason: y
+`
+	rule, err := Parse("context-drift.yaml", []byte(doc), testRegistry())
+
+	require.NoError(t, err)
+	require.Len(t, rule.MissingContextPatterns(), 1)
+	require.True(t, rule.MissingContextPatterns()[0].MatchString("ci/circleci: go-build"))
+	require.False(t, rule.MissingContextPatterns()[0].MatchString("build / unit"))
+}
+
+func TestParseProtectionNeedsContexts(t *testing.T) {
+	doc := `
+name: context-drift
+summary: s
+source: runbook row 1
+match:
+  states: [waiting-checks]
+  protection: {}
+action:
+  name: close
+evidence:
+  reason: y
+`
+	_, err := Parse("context-drift.yaml", []byte(doc), testRegistry())
+
+	require.ErrorContains(t, err, "match.protection.missingContexts is required")
 }

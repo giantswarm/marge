@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 
@@ -89,6 +90,10 @@ type Request struct {
 	Head   string
 	DryRun bool
 
+	// Now is the time the sweep read this PR. Guards read it rather than the
+	// clock, so every one of them stays pure.
+	Now time.Time
+
 	// Failing names every red check on the head that produced a verdict.
 	Failing []string
 	// SecurityFailure names the failing check matching the security pattern
@@ -96,6 +101,18 @@ type Request struct {
 	SecurityFailure string
 	Required        Required
 	Base            BaseStates
+
+	// Reported counts the contexts the head reported in any state.
+	Reported int
+	// ChecksPending reports whether a check on the head has not finished.
+	ChecksPending bool
+	// ChecksSettledAt is the newest completion time among the head's
+	// checks. Zero means none of them carries one.
+	ChecksSettledAt time.Time
+	// MissingContexts are the required contexts a rule's protection signal
+	// selected. An action that rewrites a protection touches these and no
+	// other.
+	MissingContexts []string
 
 	// Check is the failing check the rule matched, and CheckURL is where its
 	// build or job lives: a CircleCI build behind a commit status, an

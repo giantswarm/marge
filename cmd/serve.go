@@ -365,7 +365,11 @@ type SweepRepoFailure struct {
 type SweepRules struct {
 	// Source names the repository, ref and directory, or the local path.
 	Source string `json:"source"`
-	// Digest identifies the exact documents this sweep ran.
+	// Ref is the branch the catalogue was read from, absent for a local
+	// directory.
+	Ref string `json:"ref,omitempty"`
+	// Digest identifies the exact documents this sweep ran, whether they
+	// came from a repository or a local directory.
 	Digest string `json:"digest,omitempty"`
 	// Loaded counts the rules the sweep could use.
 	Loaded int `json:"loaded"`

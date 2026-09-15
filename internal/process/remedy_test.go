@@ -30,18 +30,18 @@ func (a recordingAction) Apply(_ context.Context, req *remedy.Request) (remedy.O
 	return remedy.Outcome{Applied: true, Detail: "applied"}, nil
 }
 
-// ruleFor writes a one-rule catalogue that matches any failing check of the
+// ruleFor writes a one-rule catalogue that matches every go check of the
 // given state.
 func ruleFor(t *testing.T, state string) *rules.Catalogue {
 	t.Helper()
 	dir := t.TempDir()
 	doc := `name: catch-all
-summary: Matches any failing check, for the stage test.
+summary: Matches every go check, for the stage test.
 source: test
 match:
   states: [` + state + `]
   check:
-    name: "*"
+    name: "go*"
 action:
   name: update-branch
 evidence:

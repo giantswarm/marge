@@ -69,8 +69,8 @@ func (r *Rule) validate(fileName string, reg *remedy.Registry) error {
 // narrow a signal; they are not one, so a rule carrying only them would act
 // on every PR of a classification.
 func (r *Rule) validateMatch() error {
-	if r.Match.Check == nil && r.Match.Log == nil && r.Match.PR == nil {
-		return errors.New("match needs a check, log or pr signal: states and kinds alone match every PR of a classification")
+	if r.Match.Check == nil && r.Match.Log == nil && r.Match.PR == nil && r.Match.Protection == nil {
+		return errors.New("match needs a check, log, pr or protection signal: states and kinds alone match every PR of a classification")
 	}
 
 	r.compiled.states = make(map[pr.StatusState]bool, len(r.Match.States))
@@ -92,8 +92,8 @@ func (r *Rule) validateMatch() error {
 	}
 
 	if c := r.Match.Check; c != nil {
-		if strings.TrimSpace(c.Name) == "" {
-			return errors.New("match.check.name is required when a check signal is given")
+		if err := checkGlob("match.check.name", c.Name); err != nil {
+			return err
 		}
 		r.compiled.checkRE = compileCheckGlob(c.Name)
 	}
@@ -126,15 +126,41 @@ func (r *Rule) validateMatch() error {
 			}
 			r.compiled.titleRE = compiled
 		}
-		if p.BaseHead == BaseAny && p.TitlePattern == "" && len(p.Files) == 0 && !p.RequiredMissing {
-			return errors.New("match.pr needs baseHead, titlePattern, files or requiredMissing")
+		if p.BaseHead == BaseAny && p.TitlePattern == "" && len(p.Files) == 0 {
+			return errors.New("match.pr needs baseHead, titlePattern or files")
 		}
 		for _, glob := range p.Files {
-			if strings.TrimSpace(glob) == "" {
-				return errors.New("match.pr.files holds an empty glob")
+			if err := checkGlob("match.pr.files", glob); err != nil {
+				return err
 			}
 			r.compiled.fileREs = append(r.compiled.fileREs, compilePathGlob(glob))
 		}
+	}
+	if prot := r.Match.Protection; prot != nil {
+		if len(prot.MissingContexts) == 0 {
+			return errors.New("match.protection.missingContexts is required when a protection signal is given")
+		}
+		for _, glob := range prot.MissingContexts {
+			if err := checkGlob("match.protection.missingContexts", glob); err != nil {
+				return err
+			}
+			r.compiled.missingREs = append(r.compiled.missingREs, compileCheckGlob(glob))
+		}
+	}
+	return nil
+}
+
+// checkGlob refuses an empty glob and one that matches everything. A glob of
+// stars names no file and no context in particular, so it is a
+// classification restated, not a signal, and validateSignalStrength would
+// accept it as one.
+func checkGlob(field, glob string) error {
+	trimmed := strings.TrimSpace(glob)
+	if trimmed == "" {
+		return fmt.Errorf("%s holds an empty glob", field)
+	}
+	if strings.Trim(trimmed, "*/") == "" {
+		return fmt.Errorf("%s: glob %q matches everything: name at least one literal segment", field, glob)
 	}
 	return nil
 }
