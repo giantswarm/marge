@@ -104,23 +104,25 @@ func (r BuildRef) path() string {
 
 // Build is the subset of a v1.1 build that marge inspects.
 type Build struct {
-	BuildNum    int    `json:"build_num"`
-	BuildURL    string `json:"build_url"`
-	Branch      string `json:"branch"`
-	Status      string `json:"status"`
-	Outcome     string `json:"outcome"`
-	Lifecycle   string `json:"lifecycle"`
-	VCSRevision string `json:"vcs_revision"`
-	Canceled    bool   `json:"canceled"`
-	Steps       []Step `json:"steps"`
-	Workflows   struct {
-		JobName string `json:"job_name"`
-		// WorkflowID identifies the workflow run the build belongs to. It
-		// is the handle the v2 rerun endpoint takes; a build outside a
-		// workflow carries none.
-		WorkflowID   string `json:"workflow_id"`
-		WorkflowName string `json:"workflow_name"`
-	} `json:"workflows"`
+	BuildNum    int      `json:"build_num"`
+	BuildURL    string   `json:"build_url"`
+	Branch      string   `json:"branch"`
+	Status      string   `json:"status"`
+	Outcome     string   `json:"outcome"`
+	Lifecycle   string   `json:"lifecycle"`
+	VCSRevision string   `json:"vcs_revision"`
+	Canceled    bool     `json:"canceled"`
+	Steps       []Step   `json:"steps"`
+	Workflows   Workflow `json:"workflows"`
+}
+
+// Workflow is the workflow run a build belongs to. A build outside a
+// workflow carries an empty one.
+type Workflow struct {
+	JobName string `json:"job_name"`
+	// WorkflowID is the handle the v2 rerun endpoint takes.
+	WorkflowID   string `json:"workflow_id"`
+	WorkflowName string `json:"workflow_name"`
 }
 
 // Step is one named step of a build; a step has one action per parallel
@@ -251,7 +253,7 @@ func tokenFromCLIConfig(path string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "token:") {
 			continue
@@ -281,27 +283,22 @@ func (c *Client) Retry(ctx context.Context, ref BuildRef) (*Build, error) {
 }
 
 // RerunWorkflowFromFailed asks CircleCI to run the workflow again from its
-// failed jobs and returns the id of the new workflow run. Unlike Retry it
-// also releases the jobs that depend on the failed one, so a repository
-// whose branch protection requires those downstream contexts gets them.
-// The endpoint requires a token.
-func (c *Client) RerunWorkflowFromFailed(ctx context.Context, workflowID string) (string, error) {
+// failed jobs. Unlike Retry it also releases the jobs that depend on the
+// failed one, so a repository whose branch protection requires those
+// downstream contexts gets them.
+//
+// CircleCI reruns from a failed job, so it needs one: a workflow cancelled
+// before any job failed has none and the endpoint answers 400. The id of
+// the new workflow run is not read; the caller identifies the rerun by the
+// workflow it asked for. The endpoint requires a token.
+func (c *Client) RerunWorkflowFromFailed(ctx context.Context, workflowID string) error {
 	payload, err := json.Marshal(map[string]bool{"from_failed": true})
 	if err != nil {
-		return "", err
+		return err
 	}
 	path := "/api/v2/workflow/" + url.PathEscape(workflowID) + "/rerun"
-	body, err := c.request(ctx, http.MethodPost, path, payload)
-	if err != nil {
-		return "", err
-	}
-	var out struct {
-		WorkflowID string `json:"workflow_id"`
-	}
-	if err := json.Unmarshal(escapeControlChars(body), &out); err != nil {
-		return "", fmt.Errorf("decoding rerun response: %w", err)
-	}
-	return out.WorkflowID, nil
+	_, err = c.request(ctx, http.MethodPost, path, payload)
+	return err
 }
 
 func (c *Client) do(ctx context.Context, method, path string) (*Build, error) {

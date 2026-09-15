@@ -49,7 +49,8 @@ itself auto-cancelled (a newer pipeline on the branch, a redundant workflow)
 is reported as "Cancelled" instead of "Failed": there is no verdict on the
 code yet. With --retry-cancelled, marge reruns the workflow those builds
 belong to from its failed jobs, so the jobs the cancel left blocked run too,
-and reports the PR as "Retried". Private CircleCI projects need a token
+and reports the PR as "Retried". A build with no failed job to rerun from
+falls back to the single-build retry. Private CircleCI projects need a token
 (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); without one the build cannot be
 inspected and the PR stays "Failed", annotated.`,
 	Args: cobra.NoArgs,

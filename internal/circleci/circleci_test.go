@@ -163,15 +163,15 @@ func TestBuild_AutoCancelled_shapes(t *testing.T) {
 // fakeAPI serves the recorded fixtures on the v1.1 paths and records how
 // each request authenticated.
 type fakeAPI struct {
-	t          *testing.T
-	fixtures   map[string]string // path -> fixture file
-	private    bool              // 404 unless a Circle-Token header is present
-	retryCalls []string
-	rerunCalls []string
-	rerunBody  string
-	rerunTypes []string
-	tokens     []string
-	rawQueries []string
+	t           *testing.T
+	fixtures    map[string]string // path -> fixture file
+	private     bool              // 404 unless a Circle-Token header is present
+	retryCalls  []string
+	rerunCalls  []string
+	rerunBodies []string
+	rerunTypes  []string
+	tokens      []string
+	rawQueries  []string
 }
 
 func (f *fakeAPI) server() *httptest.Server {
@@ -190,7 +190,7 @@ func (f *fakeAPI) server() *httptest.Server {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/rerun") {
 			body, _ := io.ReadAll(r.Body)
 			f.rerunCalls = append(f.rerunCalls, r.URL.Path)
-			f.rerunBody = string(body)
+			f.rerunBodies = append(f.rerunBodies, string(body))
 			f.rerunTypes = append(f.rerunTypes, r.Header.Get("Content-Type"))
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"workflow_id":"9b9c4a0e-0000-4000-8000-000000000001"}`))
@@ -307,19 +307,15 @@ func TestClient_RerunWorkflowFromFailed(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL, Token: "s3cret"}
-	id, err := c.RerunWorkflowFromFailed(context.Background(), "ea42abad-ba5a-4169-854b-001d55b79c1a")
-	if err != nil {
+	if err := c.RerunWorkflowFromFailed(context.Background(), "ea42abad-ba5a-4169-854b-001d55b79c1a"); err != nil {
 		t.Fatalf("RerunWorkflowFromFailed: %v", err)
-	}
-	if id != "9b9c4a0e-0000-4000-8000-000000000001" {
-		t.Errorf("new workflow = %q", id)
 	}
 	want := "/api/v2/workflow/ea42abad-ba5a-4169-854b-001d55b79c1a/rerun"
 	if len(api.rerunCalls) != 1 || api.rerunCalls[0] != want {
-		t.Errorf("rerun calls = %q, want %q", api.rerunCalls, want)
+		t.Fatalf("rerun calls = %q, want %q", api.rerunCalls, want)
 	}
-	if api.rerunBody != `{"from_failed":true}` {
-		t.Errorf("rerun body = %q, want from_failed so the blocked downstream jobs also run", api.rerunBody)
+	if api.rerunBodies[0] != `{"from_failed":true}` {
+		t.Errorf("rerun body = %q, want from_failed so the blocked downstream jobs also run", api.rerunBodies[0])
 	}
 	if api.rerunTypes[0] != "application/json" {
 		t.Errorf("rerun Content-Type = %q", api.rerunTypes[0])
@@ -340,7 +336,7 @@ func TestClient_RerunWorkflowFromFailed_needsToken(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL}
-	if _, err := c.RerunWorkflowFromFailed(context.Background(), "ea42abad-ba5a-4169-854b-001d55b79c1a"); err == nil {
+	if err := c.RerunWorkflowFromFailed(context.Background(), "ea42abad-ba5a-4169-854b-001d55b79c1a"); err == nil {
 		t.Fatal("rerun without a token should fail")
 	}
 	if len(api.rerunCalls) != 0 {

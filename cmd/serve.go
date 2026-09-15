@@ -203,7 +203,7 @@ func sweepTool() mcp.Tool {
 			mcp.Description("Update the branch of stale PRs from their base (same as GitHub's \"Update branch\" button) so CI re-runs, and report them under refreshed (default: false). Skipped for PRs carrying a non-stale ai-rescue marker."),
 		),
 		mcp.WithBoolean("retry_cancelled",
-			mcp.Description("Rerun the CircleCI workflow of builds that CircleCI auto-cancelled on the PR's current head, from its failed jobs, so the same commit gets a real verdict and the jobs the cancel left blocked run too; report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
+			mcp.Description("Rerun the CircleCI workflow of builds that CircleCI auto-cancelled on the PR's current head, from its failed jobs, so the same commit gets a real verdict and the jobs the cancel left blocked run too; a build with no failed job to rerun from falls back to the single-build retry. Report them under retried (default: false). Needs a CircleCI token (CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml)."),
 		),
 		mcp.WithString("author",
 			mcp.Description("Filter by PR author: \"renovate\", \"dependabot\", or \"all\" (default: \"all\")"),

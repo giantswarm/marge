@@ -67,8 +67,10 @@ type cancelledFixture struct {
 	token           string
 	behindBy        int
 	// rerunStatus overrides the HTTP status the fake v2 rerun endpoint
-	// answers with. Zero means 202 Accepted.
-	rerunStatus int
+	// answers with. Zero means 202 Accepted. rerunMessage is the message
+	// CircleCI puts in the error body, "Permission denied" by default.
+	rerunStatus  int
+	rerunMessage string
 
 	buildCalls      atomic.Int32
 	retryCalls      atomic.Int32
@@ -197,8 +199,12 @@ func (f *cancelledFixture) circle(t *testing.T) *httptest.Server {
 			f.rerunBodies = append(f.rerunBodies, string(body))
 			f.mu.Unlock()
 			if f.rerunStatus != 0 {
+				message := f.rerunMessage
+				if message == "" {
+					message = "Permission denied"
+				}
 				w.WriteHeader(f.rerunStatus)
-				_, _ = w.Write([]byte(`{"message":"Permission denied"}`))
+				_, _ = w.Write([]byte(`{"message":"` + message + `"}`))
 				return
 			}
 			w.WriteHeader(http.StatusAccepted)
@@ -263,8 +269,8 @@ func (f *cancelledFixture) run(t *testing.T, configure func(*Processor)) pr.Stat
 	return status.Snapshot()[idx]
 }
 
-// retargetWorkflow rewrites the workflow id of a recorded build so one
-// fixture can stand in for several workflows, or for a build that runs
+// retargetWorkflow rewrites the workflows.workflow_id of a recorded build so
+// one fixture can stand in for several workflows, or for a build that runs
 // outside a workflow at all.
 func retargetWorkflow(data []byte, s circleStatus) []byte {
 	switch {
@@ -343,7 +349,7 @@ func TestClassifyCancelled_retryOnHead(t *testing.T) {
 	// The workflow rerun, not the single-build retry: only the former
 	// releases the downstream jobs the cancel left blocked.
 	if f.rerunCalls.Load() != 1 || f.rerunPaths[0] != "/api/v2/workflow/"+fxWorkflowID+"/rerun" {
-		t.Errorf("rerun calls = %d %q, want one POST to the v2 workflow rerun endpoint", f.rerunCalls.Load(), f.rerunPaths)
+		t.Fatalf("rerun calls = %d %q, want one POST to the v2 workflow rerun endpoint", f.rerunCalls.Load(), f.rerunPaths)
 	}
 	if f.retryCalls.Load() != 0 {
 		t.Errorf("v1.1 build retry called %d times for a build inside a workflow, want 0", f.retryCalls.Load())
@@ -413,7 +419,9 @@ func TestClassifyCancelled_retryFallsBackWithoutWorkflow(t *testing.T) {
 	}
 }
 
-func TestClassifyCancelled_rerunErrorKeepsCancelled(t *testing.T) {
+func TestClassifyCancelled_rerunDeniedKeepsCancelled(t *testing.T) {
+	// A token that may not rerun the workflow may not retry the build
+	// either, so there is nothing to fall back to.
 	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok", rerunStatus: http.StatusForbidden}
 	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
 
@@ -423,6 +431,28 @@ func TestClassifyCancelled_rerunErrorKeepsCancelled(t *testing.T) {
 	want := "build 1263 auto-cancelled; retry needed; rerun of workflow build failed: HTTP 403: Permission denied"
 	if got.Detail != want {
 		t.Errorf("detail = %q\nwant     %q", got.Detail, want)
+	}
+	if f.retryCalls.Load() != 0 {
+		t.Errorf("v1.1 retry called %d times after a denied rerun, want 0", f.retryCalls.Load())
+	}
+}
+
+func TestClassifyCancelled_rerunWithoutFailedJobFallsBack(t *testing.T) {
+	// A workflow cancelled before any job failed has nothing to rerun from
+	// and CircleCI answers 400. The v1.1 single-build retry still runs the
+	// job, so the PR gets a verdict instead of staying stuck.
+	f := &cancelledFixture{head: cxHeadCancelled, statuses: goBuildStatus(1263, fixtureCancelledHead), token: "tok",
+		rerunStatus: http.StatusBadRequest, rerunMessage: "Workflow has no failed jobs to rerun from"}
+	got := f.run(t, func(p *Processor) { p.RetryCancelled = true })
+
+	if got.State != pr.StatusRetried {
+		t.Fatalf("state = %v (%s), want StatusRetried", got.State, got.Detail)
+	}
+	if got.Detail != "re-checking; build 1263 retried as 1272" {
+		t.Errorf("detail = %q", got.Detail)
+	}
+	if f.rerunCalls.Load() != 1 || f.retryCalls.Load() != 1 {
+		t.Errorf("reruns = %d, retries = %d; want 1 and 1", f.rerunCalls.Load(), f.retryCalls.Load())
 	}
 }
 

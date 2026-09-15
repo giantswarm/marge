@@ -2,7 +2,9 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -149,10 +151,9 @@ func (p *Processor) classifyCancelled(ctx context.Context, pullReq *github.PullR
 // retried: the new head's own build is the verdict, and the next sweep
 // reads it.
 //
-// Each distinct workflow is rerun once, from its failed jobs, so the jobs
-// the cancel left blocked also run. Without them a repository whose branch
-// protection requires those downstream contexts never becomes mergeable.
-// A build that carries no workflow id falls back to the single-build retry.
+// Each distinct workflow is rerun once, however many of its jobs were
+// cancelled: the rerun covers them all, and a second one would restart the
+// first job.
 func (p *Processor) handleCancelled(ctx context.Context, res *cancelledResult, status *pr.PRStatus, idx int) {
 	detail := res.detail()
 	status.Update(idx, pr.StatusCancelled, detail)
@@ -165,30 +166,67 @@ func (p *Processor) handleCancelled(ctx context.Context, res *cancelledResult, s
 		return
 	}
 
-	done := make([]string, 0, len(res.Builds))
-	rerunWorkflows := make(map[string]bool, len(res.Builds))
+	reruns := make([]string, 0, len(res.Builds))
+	rerun := make(map[string]bool, len(res.Builds))
 	for _, b := range res.Builds {
-		if b.WorkflowID == "" {
-			nb, err := p.CircleCI.Retry(ctx, b.Ref)
-			if err != nil {
-				reportRetryError(status, idx, detail, done, fmt.Sprintf("retry of build %d failed: %v", b.Ref.Num, err))
-				return
+		if b.WorkflowID != "" {
+			if rerun[b.WorkflowID] {
+				continue
 			}
-			done = append(done, fmt.Sprintf("build %d retried as %d", b.Ref.Num, nb.BuildNum))
-			continue
+			rerun[b.WorkflowID] = true
 		}
-		if rerunWorkflows[b.WorkflowID] {
-			continue
-		}
-		rerunWorkflows[b.WorkflowID] = true
-		if _, err := p.CircleCI.RerunWorkflowFromFailed(ctx, b.WorkflowID); err != nil {
-			reportRetryError(status, idx, detail, done,
-				fmt.Sprintf("rerun of workflow %s failed: %v", workflowLabel(b), err))
+		msg, err := p.rerunOrRetry(ctx, b)
+		if err != nil {
+			// Keep the reruns that already succeeded visible so the
+			// operator knows what is running.
+			if len(reruns) > 0 {
+				detail += "; " + strings.Join(reruns, ", ")
+			}
+			status.Update(idx, pr.StatusCancelled, detail+"; "+err.Error())
 			return
 		}
-		done = append(done, fmt.Sprintf("workflow %s rerun from failed", workflowLabel(b)))
+		reruns = append(reruns, msg)
 	}
-	status.Update(idx, pr.StatusRetried, "re-checking; "+strings.Join(done, ", "))
+	status.Update(idx, pr.StatusRetried, "re-checking; "+strings.Join(reruns, ", "))
+}
+
+// rerunOrRetry runs one cancelled build again and describes what happened
+// in the words the status output uses.
+//
+// A build inside a workflow goes through the v2 workflow rerun, which also
+// releases the jobs the cancel left blocked or not run. Without them a
+// repository whose branch protection requires those downstream contexts
+// never becomes mergeable. Two cases have no failed job for CircleCI to
+// rerun from -- a build outside a workflow, and a workflow cancelled before
+// any job failed -- and both fall back to the v1.1 single-build retry.
+func (p *Processor) rerunOrRetry(ctx context.Context, b cancelledBuild) (string, error) {
+	if b.WorkflowID != "" {
+		err := p.CircleCI.RerunWorkflowFromFailed(ctx, b.WorkflowID)
+		if err == nil {
+			return fmt.Sprintf("workflow %s rerun from failed", workflowLabel(b)), nil
+		}
+		if !rerunRefused(err) {
+			return "", fmt.Errorf("rerun of workflow %s failed: %w", workflowLabel(b), err)
+		}
+	}
+	nb, err := p.CircleCI.Retry(ctx, b.Ref)
+	if err != nil {
+		return "", fmt.Errorf("retry of build %d failed: %w", b.Ref.Num, err)
+	}
+	return fmt.Sprintf("build %d retried as %d", b.Ref.Num, nb.BuildNum), nil
+}
+
+// rerunRefused reports whether CircleCI turned the workflow rerun down for
+// a reason the single-build retry can still get past: no failed job to
+// rerun from (400), or no such workflow (404). An authentication failure or
+// a server error is not one of those, and the retry would meet the same
+// wall.
+func rerunRefused(err error) bool {
+	var apiErr *circleci.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.StatusCode == http.StatusBadRequest || apiErr.StatusCode == http.StatusNotFound
 }
 
 // workflowLabel names a workflow for status output: its name when CircleCI
@@ -198,13 +236,4 @@ func workflowLabel(b cancelledBuild) string {
 		return b.WorkflowName
 	}
 	return b.WorkflowID
-}
-
-// reportRetryError records a failed retry, keeping the reruns that already
-// succeeded visible so the operator knows what is running.
-func reportRetryError(status *pr.PRStatus, idx int, detail string, done []string, msg string) {
-	if len(done) > 0 {
-		msg = strings.Join(done, ", ") + "; " + msg
-	}
-	status.Update(idx, pr.StatusCancelled, detail+"; "+msg)
 }
