@@ -153,15 +153,15 @@ func loadCatalogueForCLI(ctx context.Context) (*rules.Catalogue, error) {
 }
 
 var draftFlags struct {
-	from   string
-	name   string
-	dryRun bool
+	from string
+	name string
+	noPR bool
 }
 
 func init() {
 	rulesDraftCmd.Flags().StringVar(&draftFlags.from, "from", "-", "Sweep report to read the signature from; - reads standard input")
 	rulesDraftCmd.Flags().StringVar(&draftFlags.name, "name", "", "Name of the rule to draft (default: derived from the failing checks)")
-	rulesDraftCmd.Flags().BoolVar(&draftFlags.dryRun, "dry-run", false, "Write the files only; print no commands to open a pull request")
+	rulesDraftCmd.Flags().BoolVar(&draftFlags.noPR, "no-pr", false, "Write the files only; print no commands to open a pull request")
 	rulesCmd.AddCommand(rulesDraftCmd)
 }
 
@@ -170,7 +170,8 @@ var rulesDraftCmd = &cobra.Command{
 	Short: "Draft a rule and its scenarios from an unrecognised failure",
 	Long: `Read one unhandled signature out of a sweep report (marge sweep --output json)
 and write a rule skeleton with a pair of scenarios built from the PRs that
-carry it, then print the commands that open the draft pull request.
+carry it, then print the commands that open the draft pull request. The
+command always writes the files; --no-pr only drops the commands it prints.
 
 The skeleton leaves the action blank on purpose: it does not validate until a
 person names one, so promoting a pattern is editing a draft rather than
@@ -198,7 +199,7 @@ writing one from nothing.`,
 			fmt.Println("wrote", path)
 		}
 		fmt.Printf("\nName the action in %s, then run: marge rules validate && marge rules test\n", files[0])
-		if draftFlags.dryRun {
+		if draftFlags.noPR {
 			return nil
 		}
 		fmt.Println("\nOpen the draft pull request with:")
