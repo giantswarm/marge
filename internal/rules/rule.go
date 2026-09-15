@@ -116,6 +116,8 @@ type Evidence struct {
 type compiled struct {
 	states  map[pr.StatusState]bool
 	kinds   map[pr.Kind]bool
+	checkRE *regexp.Regexp
+	fileREs []*regexp.Regexp
 	logRE   *regexp.Regexp
 	titleRE *regexp.Regexp
 	guards  []remedy.Guard
@@ -128,6 +130,14 @@ func (r *Rule) States() map[pr.StatusState]bool { return r.compiled.states }
 // Kinds reports the bot PR kinds the rule applies to. An empty set in the
 // document means every trusted kind.
 func (r *Rule) Kinds() map[pr.Kind]bool { return r.compiled.kinds }
+
+// CheckPattern returns the compiled check-name glob, or nil when the rule
+// has no check signal.
+func (r *Rule) CheckPattern() *regexp.Regexp { return r.compiled.checkRE }
+
+// FilePatterns returns the compiled file globs. Every one of them must match
+// a file of the diff.
+func (r *Rule) FilePatterns() []*regexp.Regexp { return r.compiled.fileREs }
 
 // LogPattern returns the compiled log expression, or nil when the rule has
 // no log signal.

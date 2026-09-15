@@ -91,8 +91,11 @@ func (r *Rule) validateMatch() error {
 		r.compiled.kinds[kind] = true
 	}
 
-	if c := r.Match.Check; c != nil && strings.TrimSpace(c.Name) == "" {
-		return errors.New("match.check.name is required when a check signal is given")
+	if c := r.Match.Check; c != nil {
+		if strings.TrimSpace(c.Name) == "" {
+			return errors.New("match.check.name is required when a check signal is given")
+		}
+		r.compiled.checkRE = compileCheckGlob(c.Name)
 	}
 	if l := r.Match.Log; l != nil {
 		if l.Source != LogActions && l.Source != LogCircleCI {
@@ -125,6 +128,12 @@ func (r *Rule) validateMatch() error {
 		}
 		if p.BaseHead == BaseAny && p.TitlePattern == "" && len(p.Files) == 0 {
 			return errors.New("match.pr needs baseHead, titlePattern or files")
+		}
+		for _, glob := range p.Files {
+			if strings.TrimSpace(glob) == "" {
+				return errors.New("match.pr.files holds an empty glob")
+			}
+			r.compiled.fileREs = append(r.compiled.fileREs, compilePathGlob(glob))
 		}
 	}
 	return nil
@@ -187,4 +196,35 @@ func joinKeys[V any](m map[string]V) string {
 	}
 	slices.Sort(out)
 	return strings.Join(out, ", ")
+}
+
+// compileCheckGlob turns a check-name glob into an expression. A check name
+// is not a path, so "*" stands for any run of characters. Matching ignores
+// case, because the same job is named differently across repositories.
+func compileCheckGlob(glob string) *regexp.Regexp {
+	parts := strings.Split(glob, "*")
+	for i, part := range parts {
+		parts[i] = regexp.QuoteMeta(part)
+	}
+	return regexp.MustCompile("(?i)^" + strings.Join(parts, ".*") + "$")
+}
+
+// compilePathGlob turns a file glob into an expression, where "*" stays
+// inside one path segment and "**" crosses segments.
+func compilePathGlob(glob string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(glob); i++ {
+		switch {
+		case glob[i] != '*':
+			b.WriteString(regexp.QuoteMeta(string(glob[i])))
+		case i+1 < len(glob) && glob[i+1] == '*':
+			b.WriteString(".*")
+			i++
+		default:
+			b.WriteString("[^/]*")
+		}
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
 }
