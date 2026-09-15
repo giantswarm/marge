@@ -37,7 +37,16 @@ func botRequest(client *github.Client) *Request {
 }
 
 func TestDefaultRegistryNames(t *testing.T) {
-	require.Equal(t, []Name{CircleCIRetry, RerunFailed, UpdateBranch}, Default().Names())
+	require.Equal(t, []Name{
+		CircleCIRetry,
+		Close,
+		DispatchAlignWorkflow,
+		FixProtectionContext,
+		MarkWait,
+		RerunFailed,
+		StrictChain,
+		UpdateBranch,
+	}, Default().Names())
 }
 
 func TestUpdateBranchAppliesOn202(t *testing.T) {
@@ -170,4 +179,37 @@ func TestActionRunsOncePerChange(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, out.Applied)
 	require.Equal(t, "rerun-failed already applied to this change", out.Refused)
+}
+
+// A refresh neither merges nor rescues, so a failing security check does not
+// stop it. The stale case depends on this: a scan the base branch has
+// already fixed is exactly what a refresh is for.
+func TestUpdateBranchRunsWithAFailingSecurityCheck(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	req := botRequest(apiClient(t, server))
+	req.SecurityFailure = "govulncheck"
+
+	out, err := Default().Apply(t.Context(), UpdateBranch, req, nil)
+
+	require.NoError(t, err)
+	require.True(t, out.Applied)
+}
+
+// Every other action stops there: twice red on the same code is real, and a
+// rerun of a failing scan only hides it.
+func TestRerunFailedRefusesWithAFailingSecurityCheck(t *testing.T) {
+	req := botRequest(nil)
+	req.SecurityFailure = "govulncheck"
+	req.CheckURL = "https://github.com/giantswarm/marge/actions/runs/77/job/88"
+
+	out, err := Default().Apply(t.Context(), RerunFailed, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Equal(t, "security check failed: govulncheck", out.Refused)
 }

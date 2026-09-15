@@ -13,13 +13,23 @@ import (
 	"github.com/giantswarm/marge/internal/circleci"
 )
 
-// Default returns the vocabulary this build implements.
+// Default returns the vocabulary this build implements. strict-chain is
+// registered and held: it is the one action that merges, and #4353's
+// measured run recorded no PR that needs it. A rule naming it validates and
+// refuses, so turning it on is a Go change rather than a merged rule.
 func Default() *Registry {
-	return NewRegistry(
+	reg := NewRegistry(
 		updateBranch{},
 		rerunFailed{},
 		circleCIRetry{},
+		closePR{},
+		markWait{},
+		dispatchAlignWorkflow{},
+		fixProtectionContext{},
+		strictChain{},
 	)
+	reg.hold(StrictChain, "no measured sweep has reported a PR blocked by the plain review rule")
+	return reg
 }
 
 // commonGuards are enforced by every action: the sweep touches a trusted
@@ -36,10 +46,12 @@ type updateBranch struct{}
 
 func (updateBranch) Name() Name { return UpdateBranch }
 
-// The update is a write on the PR branch, and a branch behind its base says
-// nothing about the log, so this action does not ask for a log excerpt.
+// A branch behind its base says nothing about the log, so this action asks
+// for no excerpt. It also runs with a failing security check: it neither
+// merges nor rescues, and a scan the base branch has already fixed is
+// exactly what a refresh is for.
 func (updateBranch) Guards() []Guard {
-	return []Guard{TrustedAuthor, NoSecurityFailure, OncePerChange(UpdateBranch)}
+	return []Guard{TrustedAuthor, OncePerChange(UpdateBranch)}
 }
 
 func (updateBranch) Apply(ctx context.Context, req *Request) (Outcome, error) {

@@ -195,8 +195,12 @@ var remediableStates = map[string]pr.StatusState{
 
 // refusals are the conditions a rule may add by name. Each resolves to a
 // guard the action runs before it writes anything.
+// refusalLogMatched names the refusal that makes an action wait for an
+// excerpt of the failing step's log.
+const refusalLogMatched = "log-matched"
+
 var refusals = map[string]func(remedy.Name) remedy.Guard{
-	"log-matched":           func(remedy.Name) remedy.Guard { return remedy.LogMatched },
+	refusalLogMatched:       func(remedy.Name) remedy.Guard { return remedy.LogMatched },
 	"required-checks-green": func(remedy.Name) remedy.Guard { return remedy.RequiredChecksGreen },
 	"no-security-failure":   func(remedy.Name) remedy.Guard { return remedy.NoSecurityFailure },
 	"no-generated-edit":     func(remedy.Name) remedy.Guard { return remedy.NoGeneratedEdit },

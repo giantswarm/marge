@@ -96,6 +96,8 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: merge-everything
 evidence:
@@ -128,6 +130,8 @@ match:
   states: [merged]
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: close
 evidence:
@@ -145,6 +149,8 @@ match:
   kinds: [quentin]
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: close
 evidence:
@@ -161,6 +167,8 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: close
 refuse: [skip-guards]
@@ -229,6 +237,8 @@ summary: s
 match:
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: close
 evidence:
@@ -245,6 +255,8 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: close
 `,
@@ -287,6 +299,8 @@ source: runbook row 1
 match:
   check:
     name: "go-*"
+  pr:
+    baseHead: absent
 action:
   name: close
 refuse: [log-matched, log-matched]
@@ -305,6 +319,8 @@ source: runbook row 1
 match:
   check:
     name: "go-build"
+  pr:
+    baseHead: absent
 action:
   name: update-branch
 evidence:
@@ -314,6 +330,88 @@ evidence:
 	require.NoError(t, err)
 	require.Empty(t, rule.States())
 	require.Empty(t, rule.Kinds())
+}
+
+// A check name says which job went red, never why. A rule whose only signal
+// is a check name must ask for the log, or it could act on a name alone.
+func TestParseRefusesACheckNameAsTheOnlySignal(t *testing.T) {
+	doc := `
+name: name-only
+summary: s
+source: runbook row 1
+match:
+  states: [failed]
+  check:
+    name: "go-build"
+action:
+  name: close
+evidence:
+  reason: y
+`
+	_, err := Parse("name-only.yaml", []byte(doc), testRegistry())
+	require.ErrorContains(t, err, "not a diagnosis")
+
+	withLog := `
+name: name-only
+summary: s
+source: runbook row 1
+match:
+  states: [failed]
+  check:
+    name: "go-build"
+  log:
+    source: actions
+    pattern: 'boom'
+action:
+  name: close
+refuse: [log-matched]
+evidence:
+  reason: y
+`
+	rule, err := Parse("name-only.yaml", []byte(withLog), testRegistry())
+	require.NoError(t, err)
+	require.Len(t, rule.Guards(), 1)
+}
+
+// A title is not evidence either. "." reads every PR of a classification,
+// so a rule that names only a title must say what it read of the PR.
+func TestParseRefusesATitleAsTheOnlySignal(t *testing.T) {
+	doc := `
+name: close-everything
+summary: s
+source: runbook row 1
+match:
+  states: [failed]
+  pr:
+    titlePattern: "."
+action:
+  name: close
+evidence:
+  reason: y
+`
+	_, err := Parse("close-everything.yaml", []byte(doc), testRegistry())
+	require.ErrorContains(t, err, "not a diagnosis")
+}
+
+// A rule that reads no log never satisfies the log-matched refusal, so
+// declaring it there would refuse the action on every PR for ever.
+func TestParseRefusesLogMatchedWithoutALogSignal(t *testing.T) {
+	doc := `
+name: never-applies
+summary: s
+source: runbook row 1
+match:
+  states: [failed]
+  pr:
+    baseHead: green
+action:
+  name: close
+refuse: [log-matched]
+evidence:
+  reason: y
+`
+	_, err := Parse("never-applies.yaml", []byte(doc), testRegistry())
+	require.ErrorContains(t, err, "needs a log signal")
 }
 
 // A glob of stars names nothing in particular, so it is a classification

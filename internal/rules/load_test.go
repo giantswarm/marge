@@ -24,6 +24,8 @@ source: runbook row 1
 match:
   check:
     name: "go-build"
+  pr:
+    baseHead: absent
 action:
   name: ` + action + `
 evidence:

@@ -31,17 +31,20 @@ func (a recordingAction) Apply(_ context.Context, req *remedy.Request) (remedy.O
 }
 
 // ruleFor writes a one-rule catalogue that matches every go check of the
-// given state.
+// given state whose base head reported nothing, which is what the fixtures
+// here describe.
 func ruleFor(t *testing.T, state string) *rules.Catalogue {
 	t.Helper()
 	dir := t.TempDir()
 	doc := `name: catch-all
-summary: Matches every go check, for the stage test.
+summary: Matches every go check the base head did not report, for the stage test.
 source: test
 match:
   states: [` + state + `]
   check:
     name: "go*"
+  pr:
+    baseHead: absent
 action:
   name: update-branch
 evidence:
