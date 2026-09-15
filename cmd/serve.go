@@ -300,10 +300,13 @@ type SweepResult struct {
 	Summary SweepSummary `json:"summary"`
 	// Rules says which rule catalogue the sweep ran, and what it could not
 	// use. An absent catalogue leaves every remedy refused.
-	Rules            *SweepRules    `json:"rules,omitempty"`
-	Merged           []SweepPREntry `json:"merged,omitempty"`
-	SecurityFailures []SweepPREntry `json:"security_failures,omitempty"`
-	ActionRequired   []SweepPREntry `json:"action_required,omitempty"`
+	Rules *SweepRules `json:"rules,omitempty"`
+	// Unhandled groups the failures no rule recognised, most frequent
+	// first. A signature here is what `marge rules draft` takes.
+	Unhandled        []SweepUnhandled `json:"unhandled,omitempty"`
+	Merged           []SweepPREntry   `json:"merged,omitempty"`
+	SecurityFailures []SweepPREntry   `json:"security_failures,omitempty"`
+	ActionRequired   []SweepPREntry   `json:"action_required,omitempty"`
 	// Stale lists failing PRs whose head is behind the base branch and whose
 	// every failing check is green on the base branch head: the failure was
 	// fixed on the base branch after the PR's last build. The remedy is a
@@ -361,6 +364,18 @@ type SweepRepoFailure struct {
 // non-security failure entries, so consumers can use
 // Failed + SecurityFailures to get the total number of action-required
 // PRs without double-counting.
+// SweepUnhandled is one shape of failure the catalogue does not recognise,
+// with the PRs that carry it.
+type SweepUnhandled struct {
+	Signature string   `json:"signature"`
+	Checks    []string `json:"checks"`
+	Count     int      `json:"count"`
+	PRs       []string `json:"prs"`
+	// Excerpt is the log a rule would match against, from the first PR of
+	// the group. Empty when no rule asked for a log.
+	Excerpt string `json:"excerpt,omitempty"`
+}
+
 // SweepRules reports the rule catalogue of one sweep.
 type SweepRules struct {
 	// Source names the repository, ref and directory, or the local path.
@@ -616,6 +631,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 	for _, f := range failed {
 		result.RepositoriesFailed = append(result.RepositoriesFailed, SweepRepoFailure{Repo: f.Repo, Error: f.Err})
 	}
+	result.Unhandled = groupUnhandled(status.UnhandledEntries())
 
 	now := time.Now()
 	toEntry := func(e pr.StatusEntry) SweepPREntry {
@@ -744,4 +760,32 @@ func handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("marshaling result: %v", err)), nil
 	}
 	return mcp.NewToolResultText(string(jsonBytes)), nil
+}
+
+// groupUnhandled collects the unrecognised failures by signature, most
+// frequent first, so a pattern worth a rule reads as a count.
+func groupUnhandled(entries []pr.StatusEntry) []SweepUnhandled {
+	bySignature := make(map[string]*SweepUnhandled)
+	var order []string
+	for _, e := range entries {
+		group, seen := bySignature[e.Unhandled.Signature]
+		if !seen {
+			group = &SweepUnhandled{
+				Signature: e.Unhandled.Signature,
+				Checks:    e.Unhandled.Checks,
+				Excerpt:   e.Unhandled.Excerpt,
+			}
+			bySignature[e.Unhandled.Signature] = group
+			order = append(order, e.Unhandled.Signature)
+		}
+		group.Count++
+		group.PRs = append(group.PRs, fmt.Sprintf("%s/%s#%d", e.PR.Owner, e.PR.Repo, e.PR.Number))
+	}
+
+	out := make([]SweepUnhandled, 0, len(order))
+	for _, signature := range order {
+		out = append(out, *bySignature[signature])
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
 }

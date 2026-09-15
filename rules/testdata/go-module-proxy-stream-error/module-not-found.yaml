@@ -1,0 +1,12 @@
+name: a module that does not exist is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "fix(deps): update module github.com/giantswarm/mcp-oauth to v1.4.1"
+  failing: ["bootstrap"]
+  logs:
+    "actions:bootstrap": |
+      go: github.com/giantswarm/mcp-oauth@v1.4.1: reading https://proxy.golang.org/github.com/giantswarm/mcp-oauth/@v/v1.4.1.mod: 404 Not Found
+      ##[error]Process completed with exit code 1.
+expect:
+  rule: ""

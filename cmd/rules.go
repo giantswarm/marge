@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,7 +24,7 @@ var rulesFlags struct {
 }
 
 func init() {
-	for _, cmd := range []*cobra.Command{rulesValidateCmd, rulesTestCmd} {
+	for _, cmd := range []*cobra.Command{rulesValidateCmd, rulesTestCmd, rulesDraftCmd} {
 		cmd.Flags().StringVar(&rulesFlags.path, "path", "rules", "Directory holding the catalogue")
 	}
 	rulesValidateCmd.Flags().StringVar(&rulesFlags.repo, "repo", "", "Read the catalogue from this repository instead, as owner/name")
@@ -146,4 +149,199 @@ func loadCatalogueForCLI(ctx context.Context) (*rules.Catalogue, error) {
 		loader.Client, loader.Owner, loader.Repo, loader.LocalPath = client, owner, name, ""
 	}
 	return loader.Load(ctx, remedy.Default())
+}
+
+var draftFlags struct {
+	from   string
+	name   string
+	dryRun bool
+}
+
+func init() {
+	rulesDraftCmd.Flags().StringVar(&draftFlags.from, "from", "-", "Sweep report to read the signature from; - reads standard input")
+	rulesDraftCmd.Flags().StringVar(&draftFlags.name, "name", "", "Name of the rule to draft (default: derived from the failing checks)")
+	rulesDraftCmd.Flags().BoolVar(&draftFlags.dryRun, "dry-run", false, "Write the files and print them; open no pull request")
+	rulesCmd.AddCommand(rulesDraftCmd)
+}
+
+var rulesDraftCmd = &cobra.Command{
+	Use:   "draft <signature>",
+	Short: "Draft a rule and its scenarios from an unrecognised failure",
+	Long: `Read one unhandled signature out of a sweep report (marge sweep --output json)
+and write a rule skeleton with a pair of scenarios built from the PRs that
+carry it, then open a draft pull request.
+
+The skeleton leaves the action blank on purpose: it does not validate until a
+person names one, so promoting a pattern is editing a draft rather than
+writing one from nothing.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		report, err := readSweepReport(draftFlags.from)
+		if err != nil {
+			return err
+		}
+		group, err := findSignature(report, args[0])
+		if err != nil {
+			return err
+		}
+
+		name := draftFlags.name
+		if name == "" {
+			name = ruleNameFor(group)
+		}
+		files, err := writeDraft(name, group)
+		if err != nil {
+			return err
+		}
+		for _, path := range files {
+			fmt.Println("wrote", path)
+		}
+		fmt.Printf("\nName the action in %s, then run: marge rules validate && marge rules test\n", files[0])
+		if draftFlags.dryRun {
+			return nil
+		}
+		fmt.Println("\nOpen the draft pull request with:")
+		fmt.Printf("  git checkout -b rule/%s && git add %s && git commit && gh pr create --draft\n", name, rulesFlags.path)
+		return nil
+	},
+}
+
+func readSweepReport(from string) (*SweepResult, error) {
+	var raw []byte
+	var err error
+	if from == "-" {
+		raw, err = io.ReadAll(os.Stdin)
+	} else {
+		raw, err = os.ReadFile(from)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the sweep report: %w", err)
+	}
+	var report SweepResult
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, fmt.Errorf("the sweep report is not the JSON of `marge sweep --output json`: %w", err)
+	}
+	return &report, nil
+}
+
+func findSignature(report *SweepResult, signature string) (*SweepUnhandled, error) {
+	for i := range report.Unhandled {
+		if report.Unhandled[i].Signature == signature {
+			return &report.Unhandled[i], nil
+		}
+	}
+	known := make([]string, 0, len(report.Unhandled))
+	for _, group := range report.Unhandled {
+		known = append(known, fmt.Sprintf("%s (%d PRs, %s)", group.Signature, group.Count, strings.Join(group.Checks, ", ")))
+	}
+	if len(known) == 0 {
+		return nil, fmt.Errorf("the report holds no unhandled failure")
+	}
+	return nil, fmt.Errorf("signature %q is not in the report; it holds:\n  %s", signature, strings.Join(known, "\n  "))
+}
+
+// ruleNameFor derives a rule name from the failing checks, which a person
+// then replaces with one that says what the failure is.
+func ruleNameFor(group *SweepUnhandled) string {
+	name := "unnamed-pattern"
+	if len(group.Checks) > 0 {
+		name = nameRE.ReplaceAllString(strings.ToLower(group.Checks[0]), "-")
+		name = strings.Trim(name, "-")
+	}
+	return name + "-" + group.Signature[:6]
+}
+
+var nameRE = regexp.MustCompile(`[^a-z0-9]+`)
+
+// writeDraft writes the rule skeleton and its two scenarios. The action is
+// left blank, so the draft fails validation until a person names one.
+func writeDraft(name string, group *SweepUnhandled) ([]string, error) {
+	rulePath := filepath.Join(rulesFlags.path, name+".yaml")
+	scenarioDir := filepath.Join(rulesFlags.path, rules.ScenarioDir, name)
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	rule := fmt.Sprintf(`name: %s
+summary: TODO say in one line what this failure is.
+source: TODO cite the runbook row or the PRs this came from.
+match:
+  states: [failed]
+  check:
+    name: %q
+  log:
+    source: actions
+    pattern: 'TODO an expression that matches the excerpt below and nothing else'
+action:
+  # TODO name one action: update-branch, rerun-failed, circleci-retry, close,
+  # mark-wait, dispatch-align-workflow, fix-protection-context, strict-chain.
+  name: ""
+evidence:
+  reason: TODO what the PR should say once this ran.
+`, name, firstCheck(group))
+
+	matches := fmt.Sprintf(`name: TODO what this case shows
+# Recorded from %s
+subject:
+  state: failed
+  kind: renovate
+  title: "TODO the PR title"
+  failing: [%s]
+  logs:
+    "actions:%s": |
+%s
+expect:
+  rule: %s
+`, strings.Join(group.PRs, ", "), quoteList(group.Checks), firstCheck(group), indent(group.Excerpt, 6), name)
+
+	refuses := fmt.Sprintf(`name: TODO a neighbouring failure this rule must leave alone
+subject:
+  state: failed
+  kind: renovate
+  title: "TODO the PR title"
+  failing: [%s]
+  logs:
+    "actions:%s": |
+      TODO a real excerpt of a different failure on the same check
+expect:
+  rule: ""
+`, quoteList(group.Checks), firstCheck(group))
+
+	files := []struct{ path, body string }{
+		{rulePath, rule},
+		{filepath.Join(scenarioDir, "matches.yaml"), matches},
+		{filepath.Join(scenarioDir, "refuses.yaml"), refuses},
+	}
+	written := make([]string, 0, len(files))
+	for _, f := range files {
+		if err := os.WriteFile(f.path, []byte(f.body), 0o600); err != nil {
+			return nil, err
+		}
+		written = append(written, f.path)
+	}
+	return written, nil
+}
+
+func firstCheck(group *SweepUnhandled) string {
+	if len(group.Checks) == 0 {
+		return "TODO the failing check"
+	}
+	return group.Checks[0]
+}
+
+func quoteList(names []string) string {
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = fmt.Sprintf("%q", name)
+	}
+	return strings.Join(out, ", ")
+}
+
+func indent(body string, by int) string {
+	pad := strings.Repeat(" ", by)
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = pad + line
+	}
+	return strings.Join(lines, "\n")
 }
