@@ -37,6 +37,10 @@ func (c *chainServer) recorded() []string {
 	return append([]string(nil), c.calls...)
 }
 
+// chainRegistry runs the chain, which Default holds. The hold is the gate,
+// and TestDefaultHoldsTheStrictChain is what pins it.
+func chainRegistry() *Registry { return NewRegistry(strictChain{}) }
+
 func chainRequest(t *testing.T, cs *chainServer, mergeableState string) *Request {
 	t.Helper()
 	req := botRequest(apiClient(t, cs.Server))
@@ -59,7 +63,7 @@ func TestStrictChainApprovesAndMerges(t *testing.T) {
 		}
 	})
 
-	out, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
 
 	require.NoError(t, err)
 	require.True(t, out.Applied)
@@ -81,7 +85,7 @@ func TestStrictChainWritesNoProtection(t *testing.T) {
 		}
 	})
 
-	_, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
+	_, err := chainRegistry().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
 
 	require.NoError(t, err)
 	for _, call := range cs.recorded() {
@@ -100,7 +104,7 @@ func TestStrictChainSkipsAnExistingApproval(t *testing.T) {
 		}
 	})
 
-	out, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
 
 	require.NoError(t, err)
 	require.True(t, out.Applied)
@@ -115,7 +119,7 @@ func TestStrictChainUpdatesABehindPR(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 
-	out, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, cs, "behind"), nil)
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, chainRequest(t, cs, "behind"), nil)
 
 	require.NoError(t, err)
 	require.True(t, out.Applied)
@@ -127,7 +131,7 @@ func TestStrictChainUpdatesABehindPR(t *testing.T) {
 func TestStrictChainRefusesAConflict(t *testing.T) {
 	cs := newChainServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 
-	out, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, cs, "dirty"), nil)
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, chainRequest(t, cs, "dirty"), nil)
 
 	require.NoError(t, err)
 	require.Contains(t, out.Refused, "merge conflict")
@@ -142,7 +146,7 @@ func TestStrictChainWaitsForRequiredChecks(t *testing.T) {
 	req := chainRequest(t, cs, "clean")
 	req.Required.Missing = []string{"pre-commit"}
 
-	out, err := Default().Apply(t.Context(), StrictChain, req, nil)
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, req, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "required checks not reported: pre-commit", out.Refused)
@@ -163,9 +167,59 @@ func TestStrictChainReportsAReviewRefusal(t *testing.T) {
 		}
 	})
 
-	out, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, chainRequest(t, cs, "clean"), nil)
 
 	require.NoError(t, err)
 	require.False(t, out.Applied)
 	require.Contains(t, out.Refused, "approving review is required")
+}
+
+// The chain is the one action that merges, and no measured sweep has asked
+// for it. Default registers it, so a rule naming it validates, and refuses
+// it, so turning it on is a Go change rather than a merged rule.
+func TestDefaultHoldsTheStrictChain(t *testing.T) {
+	_, known := Default().Lookup(StrictChain)
+	require.True(t, known, "a rule naming the chain must validate")
+	require.NotEmpty(t, Default().HeldReason(StrictChain))
+
+	out, err := Default().Apply(t.Context(), StrictChain, chainRequest(t, newChainServer(t, func(http.ResponseWriter, *http.Request) {}), "clean"), nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "strict-chain is held")
+}
+
+// One attempt per change binds the chain like every other action. A merge
+// GitHub refuses is reported, and the next sweep does not retry it.
+func TestStrictChainRunsOncePerChange(t *testing.T) {
+	cs := newChainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"merged": true}`))
+	})
+	req := chainRequest(t, cs, "clean")
+	req.AppliedThisChange = map[Name]bool{StrictChain: true}
+
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "strict-chain already applied to this change")
+	require.Empty(t, cs.recorded(), "a refused chain calls nothing")
+}
+
+// The behind-base step runs update-branch, and it answers to update-branch's
+// own guards rather than skipping them.
+func TestStrictChainBehindBaseKeepsUpdateBranchGuards(t *testing.T) {
+	cs := newChainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{}`))
+	})
+	req := chainRequest(t, cs, "behind")
+	req.AppliedThisChange = map[Name]bool{UpdateBranch: true}
+
+	out, err := chainRegistry().Apply(t.Context(), StrictChain, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "update-branch already applied to this change")
+	require.Empty(t, cs.recorded(), "the branch is not updated a second time")
 }

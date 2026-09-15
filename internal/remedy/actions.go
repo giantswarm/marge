@@ -13,9 +13,12 @@ import (
 	"github.com/giantswarm/marge/internal/circleci"
 )
 
-// Default returns the vocabulary this build implements.
+// Default returns the vocabulary this build implements. strict-chain is
+// registered and held: it is the one action that merges, and #4353's
+// measured run recorded no PR that needs it. A rule naming it validates and
+// refuses, so turning it on is a Go change rather than a merged rule.
 func Default() *Registry {
-	return NewRegistry(
+	reg := NewRegistry(
 		updateBranch{},
 		rerunFailed{},
 		circleCIRetry{},
@@ -25,6 +28,8 @@ func Default() *Registry {
 		fixProtectionContext{},
 		strictChain{},
 	)
+	reg.hold(StrictChain, "no measured sweep has reported a PR blocked by the plain review rule")
+	return reg
 }
 
 // commonGuards are enforced by every action: the sweep touches a trusted

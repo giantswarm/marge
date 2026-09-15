@@ -21,7 +21,7 @@ type strictChain struct{}
 func (strictChain) Name() Name { return StrictChain }
 
 func (strictChain) Guards() []Guard {
-	return []Guard{TrustedAuthor, NoSecurityFailure, RequiredChecksGreen}
+	return []Guard{TrustedAuthor, NoSecurityFailure, RequiredChecksGreen, OncePerChange(StrictChain)}
 }
 
 func (strictChain) Apply(ctx context.Context, req *Request) (Outcome, error) {
@@ -36,6 +36,9 @@ func (strictChain) Apply(ctx context.Context, req *Request) (Outcome, error) {
 	case "dirty":
 		return Outcome{Refused: "merge conflict: the bot rebases it"}, nil
 	case "behind":
+		if reason := refuse(updateBranch{}.Guards(), req); reason != "" {
+			return Outcome{Refused: reason}, nil
+		}
 		out, err := (updateBranch{}).Apply(ctx, req)
 		if err != nil {
 			return out, err

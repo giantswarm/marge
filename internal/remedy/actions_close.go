@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/google/go-github/v92/github"
 
@@ -34,12 +35,11 @@ type closePR struct{}
 
 func (closePR) Name() Name { return Close }
 
-// A close is decided from PR metadata -- a downgrade, a mangled pin, a
-// sibling that supersedes it -- so it asks for no log excerpt. A rule whose
-// own signal is a check name must add the log-matched refusal; validation
-// enforces that.
+// A close is the one action nothing undoes, so it asks for the failing
+// step's log like every other action that writes. A close decided from PR
+// metadata alone is a Go change to this guard set, reviewed as code.
 func (closePR) Guards() []Guard {
-	return []Guard{TrustedAuthor, NoSecurityFailure, NotAlignFiles, OncePerChange(Close)}
+	return []Guard{TrustedAuthor, NoSecurityFailure, NotAlignFiles, LogMatched, OncePerChange(Close)}
 }
 
 func (closePR) Apply(ctx context.Context, req *Request) (Outcome, error) {
@@ -59,8 +59,12 @@ func (closePR) Apply(ctx context.Context, req *Request) (Outcome, error) {
 // marker the next sweep re-reads the same failure and burns the same CI.
 type markWait struct{}
 
-func (markWait) Name() Name      { return MarkWait }
-func (markWait) Guards() []Guard { return []Guard{TrustedAuthor} }
+func (markWait) Name() Name { return MarkWait }
+
+// The classifier keeps a failing security check out of every remediable
+// state by the check's name, which a security scan behind an ordinary job
+// name escapes. The refusal is stated here rather than borrowed from it.
+func (markWait) Guards() []Guard { return []Guard{TrustedAuthor, NoSecurityFailure} }
 
 func (markWait) Apply(context.Context, *Request) (Outcome, error) {
 	return Outcome{Applied: true, KeepClassification: true, Detail: "waiting on an external change"}, nil
@@ -103,12 +107,21 @@ type fixProtectionContext struct{}
 func (fixProtectionContext) Name() Name { return FixProtectionContext }
 
 func (fixProtectionContext) Guards() []Guard {
-	return []Guard{TrustedAuthor, NoSecurityFailure, OncePerChange(FixProtectionContext)}
+	return []Guard{TrustedAuthor, NoSecurityFailure, ChecksSettled, OncePerChange(FixProtectionContext)}
 }
 
 func (fixProtectionContext) Apply(ctx context.Context, req *Request) (Outcome, error) {
 	if len(req.Required.Missing) == 0 {
 		return Outcome{Refused: "every required context reported"}, nil
+	}
+	// The rule names the contexts it diagnosed. A context missing for
+	// another reason stays required.
+	stale := req.MissingContexts
+	if len(stale) == 0 {
+		return Outcome{Refused: "the rule named no missing context to drop"}, nil
+	}
+	if extra := outside(stale, req.Required.Missing); len(extra) > 0 {
+		return Outcome{Refused: "the rule named a context the head reported: " + strings.Join(extra, ", ")}, nil
 	}
 	base := req.Pull.GetBase().GetRef()
 	current, _, err := req.Deps.GitHub.Repositories.GetRequiredStatusChecks(ctx, req.Info.Owner, req.Info.Repo, base)
@@ -119,7 +132,7 @@ func (fixProtectionContext) Apply(ctx context.Context, req *Request) (Outcome, e
 	kept := make([]string, 0, len(currentContexts(current)))
 	var dropped []string
 	for _, name := range currentContexts(current) {
-		if slices.Contains(req.Required.Missing, name) {
+		if slices.Contains(stale, name) {
 			dropped = append(dropped, name)
 			continue
 		}
@@ -160,6 +173,17 @@ func currentContexts(checks *github.RequiredStatusChecks) []string {
 	}
 	if len(out) == 0 {
 		out = append(out, checks.GetContexts()...)
+	}
+	return out
+}
+
+// outside names the entries of have that want does not carry.
+func outside(have, want []string) []string {
+	var out []string
+	for _, name := range have {
+		if !slices.Contains(want, name) {
+			out = append(out, name)
+		}
 	}
 	return out
 }

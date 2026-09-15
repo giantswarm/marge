@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,18 @@ func TestDispatchAlignWorkflowNamesTheRepository(t *testing.T) {
 
 const protection = `{"strict": true, "contexts": ["go-build", "go-test", "package and push alfred-app chart"]}`
 
+// driftRequest is a PR whose head has finished reporting, which is what
+// tells a context nobody posts from a job that has not started yet.
+func driftRequest(client *github.Client, stale ...string) *Request {
+	req := botRequest(client)
+	req.Now = time.Now()
+	req.Reported = 2
+	req.ChecksSettledAt = req.Now.Add(-2 * protectionSettleDelay)
+	req.Required.Missing = stale
+	req.MissingContexts = stale
+	return req
+}
+
 func protectionServer(t *testing.T, after string) (*httptest.Server, *[]byte) {
 	t.Helper()
 	var written []byte
@@ -106,8 +119,7 @@ func TestFixProtectionContextDropsTheStaleContexts(t *testing.T) {
 	server, written := protectionServer(t, after)
 	defer server.Close()
 
-	req := botRequest(apiClient(t, server))
-	req.Required.Missing = []string{"package and push alfred-app chart"}
+	req := driftRequest(apiClient(t, server), "package and push alfred-app chart")
 
 	out, err := Default().Apply(t.Context(), FixProtectionContext, req, nil)
 
@@ -127,8 +139,7 @@ func TestFixProtectionContextRefusesToEmptyTheProtection(t *testing.T) {
 	server, _ := protectionServer(t, protection)
 	defer server.Close()
 
-	req := botRequest(apiClient(t, server))
-	req.Required.Missing = []string{"go-build", "go-test", "package and push alfred-app chart"}
+	req := driftRequest(apiClient(t, server), "go-build", "go-test", "package and push alfred-app chart")
 
 	out, err := Default().Apply(t.Context(), FixProtectionContext, req, nil)
 
@@ -138,10 +149,65 @@ func TestFixProtectionContextRefusesToEmptyTheProtection(t *testing.T) {
 }
 
 func TestFixProtectionContextRefusesWithNothingMissing(t *testing.T) {
-	out, err := Default().Apply(t.Context(), FixProtectionContext, botRequest(nil), nil)
+	out, err := Default().Apply(t.Context(), FixProtectionContext, driftRequest(nil), nil)
 
 	require.NoError(t, err)
 	require.Equal(t, "every required context reported", out.Refused)
+}
+
+// A context the head has not reported yet is not one no job posts any more.
+// Without the settle guard a queued workflow reads as drift, and the remedy
+// for that is a branch-protection write nobody asked for.
+func TestFixProtectionContextWaitsForTheHeadToSettle(t *testing.T) {
+	server, written := protectionServer(t, protection)
+	defer server.Close()
+
+	req := driftRequest(apiClient(t, server), "package and push alfred-app chart")
+	req.ChecksSettledAt = req.Now.Add(-time.Minute)
+
+	out, err := Default().Apply(t.Context(), FixProtectionContext, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "may still report for the first time")
+	require.Empty(t, *written, "no protection is written while the head may still report")
+}
+
+// The rule names the contexts it diagnosed, and the action drops those. A
+// context missing for another reason stays required.
+func TestFixProtectionContextDropsOnlyWhatTheRuleNamed(t *testing.T) {
+	const after = `{"strict": true, "contexts": ["go-build", "go-test"]}`
+	server, written := protectionServer(t, after)
+	defer server.Close()
+
+	req := driftRequest(apiClient(t, server), "package and push alfred-app chart")
+	req.Required.Missing = []string{"package and push alfred-app chart", "go-test"}
+
+	out, err := Default().Apply(t.Context(), FixProtectionContext, req, nil)
+
+	require.NoError(t, err)
+	require.True(t, out.Applied)
+
+	var sent map[string]any
+	require.NoError(t, json.Unmarshal(*written, &sent))
+	require.Contains(t, sent["contexts"], "go-test", "a context the rule did not name stays required")
+}
+
+// A rule that named no context leaves the action nothing to diagnose, so it
+// never falls back to dropping whatever is missing.
+func TestFixProtectionContextRefusesWithoutARuleSelection(t *testing.T) {
+	server, written := protectionServer(t, protection)
+	defer server.Close()
+
+	req := driftRequest(apiClient(t, server))
+	req.Required.Missing = []string{"package and push alfred-app chart"}
+
+	out, err := Default().Apply(t.Context(), FixProtectionContext, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "named no missing context")
+	require.Empty(t, *written)
 }
 
 // The write is read back. A context still required afterwards stops the
@@ -150,8 +216,7 @@ func TestFixProtectionContextReadsTheWriteBack(t *testing.T) {
 	server, _ := protectionServer(t, protection)
 	defer server.Close()
 
-	req := botRequest(apiClient(t, server))
-	req.Required.Missing = []string{"package and push alfred-app chart"}
+	req := driftRequest(apiClient(t, server), "package and push alfred-app chart")
 
 	out, err := Default().Apply(t.Context(), FixProtectionContext, req, nil)
 

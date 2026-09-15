@@ -162,12 +162,17 @@ type Action interface {
 // Registry is the set of actions this build implements.
 type Registry struct {
 	byName map[Name]Action
+	// held names the actions this build implements but does not run. A rule
+	// may name one and validation accepts it, so the catalogue documents
+	// it; Apply refuses it. Enabling one is a Go change, reviewed as code,
+	// not a rule merged into a branch the sweep reads at run time.
+	held map[Name]string
 }
 
 // NewRegistry indexes the actions by name. A duplicate name panics: the
 // vocabulary is built once at start-up.
 func NewRegistry(actions ...Action) *Registry {
-	reg := &Registry{byName: make(map[Name]Action, len(actions))}
+	reg := &Registry{byName: make(map[Name]Action, len(actions)), held: make(map[Name]string)}
 	for _, a := range actions {
 		if _, dup := reg.byName[a.Name()]; dup {
 			panic(fmt.Sprintf("remedy: action %q registered twice", a.Name()))
@@ -182,6 +187,18 @@ func (r *Registry) Lookup(name Name) (Action, bool) {
 	a, ok := r.byName[name]
 	return a, ok
 }
+
+// hold marks an action Apply refuses, with the reason a report prints.
+func (r *Registry) hold(name Name, reason string) {
+	if _, known := r.byName[name]; !known {
+		panic(fmt.Sprintf("remedy: cannot hold unregistered action %q", name))
+	}
+	r.held[name] = reason
+}
+
+// HeldReason says why an action is implemented but not run, or "" when the
+// action runs.
+func (r *Registry) HeldReason(name Name) string { return r.held[name] }
 
 // Names lists every implemented action, sorted, for validation errors and
 // help text.
@@ -202,12 +219,25 @@ func (r *Registry) Apply(ctx context.Context, name Name, req *Request, extra []G
 	if !ok {
 		return Outcome{}, fmt.Errorf("remedy: unknown action %q: known actions are %s", name, joinNames(r.Names()))
 	}
-	for _, guard := range slices.Concat(action.Guards(), extra) {
-		if reason := guard(req); reason != "" {
-			return Outcome{Refused: reason}, nil
-		}
+	if reason := r.held[name]; reason != "" {
+		return Outcome{Refused: string(name) + " is held: " + reason}, nil
+	}
+	if reason := refuse(slices.Concat(action.Guards(), extra), req); reason != "" {
+		return Outcome{Refused: reason}, nil
 	}
 	return action.Apply(ctx, req)
+}
+
+// refuse returns the first guard's reason, or "" when every one of them
+// passed. An action that runs another action's Apply calls it with that
+// action's guards, so no path reaches a write past them.
+func refuse(guards []Guard, req *Request) string {
+	for _, guard := range guards {
+		if reason := guard(req); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 func joinNames(names []Name) string {
