@@ -78,7 +78,7 @@ export GITHUB_TOKEN="ghp_..."
 | Contents | Read & write | Compare a PR with its base (stale classification, marker fingerprints); update a PR branch from its base |
 | Administration | Read | Read the base branch's required status checks. Without it marge approves and tries the merge, GitHub enforces the checks, and a refusal for a check reason is reported as `Waiting for checks` |
 
-With `--team`, the token also needs read access to the team-file repository: `giantswarm/github`, or the `owner/repo` that `MARGE_TEAM_FILE_REPO` names.
+The token needs read access to the repository that holds the team files and the policy files: `giantswarm/github`, or the `owner/repo` that `MARGE_TEAM_FILE_REPO` names.
 
 Optionally, a CircleCI API token lets marge inspect builds of **private** CircleCI projects and retry auto-cancelled builds (see [Cancelled builds](#cancelled-builds-circleci-auto-cancel)). marge reads `CIRCLECI_CLI_TOKEN` or the CircleCI CLI's own config, `~/.circleci/cli.yml`, and sends it as the `Circle-Token` header. Public projects need no token.
 
@@ -106,7 +106,63 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 
 marge touches PRs authored by four bots and nothing else: `renovate[bot]` (Renovate), `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, nancy-fixer's security remediation PRs) and `dependabot[bot]`. A PR by a person, the caller's own included, is reported as `Untrusted author` and never approved or merged. There is no flag to widen that set.
 
-A green PR merges when the company default policy says it is eligible: Align files and Herald PRs always; Renovate and Dependabot patch, minor, digest, pin and lockfile updates. A major update, or one whose size marge cannot read, is `Held` for a person. The update size comes from the versions Dependabot writes in the title (or, for a group, per dependency in the body) and Renovate writes in the body's *Change* column.
+A green PR merges when the resolved [sweep policy](#sweep-policy) says its kind and update size are eligible. The company defaults are: Align files and Herald PRs always; Renovate and Dependabot patch, minor, digest, pin and lockfile updates. A major update, or one whose size marge cannot read, is `Held` for a person. The update size comes from the versions Dependabot writes in the title (or, for a group, per dependency in the body) and Renovate writes in the body's *Change* column.
+
+#### Sweep policy
+
+A team declares its own appetite for sweeps in `giantswarm/github`, in files the team owns. marge reads them from the default branch at the start of every sweep, so a change takes effect on the next run.
+
+| File | Holds | Owned by |
+|------|-------|----------|
+| `bot-prs-sweep/default.yaml` | the company defaults | Planeteers |
+| `bot-prs-sweep/team-<name>.yaml` | one team's deviations | that team, in CODEOWNERS |
+| `botPRsSweep` on a repository entry of `repositories/team-<name>.yaml` | one repository's exception | that team |
+
+A team file that exists is the team's opt-in to the scheduled sweep. There is no separate switch: `schedule: disabled` only pauses the schedule again without deleting the file. A team without a policy file is swept by hand from the CLI and never by the schedule.
+
+```yaml
+# bot-prs-sweep/team-bumblebee.yaml
+slackChannel: team-bumblebee
+updateTypes:
+  renovate: [patch, minor]
+rescue:
+  enabled: false
+  timeout: 20m       # per rescue
+  weekly: 5          # rescues per week
+  budget:
+    perRescue: 3.00  # US dollars, declared
+    weekly: 15.00    # US dollars, declared
+  confirm: per-pr
+concurrency:
+  perTeam: 5
+  perRepo: 1
+modelConfig: default-model-config
+```
+
+Every key is optional and an absent key keeps what the file before it said. `updateTypes` replaces the list of the kinds it names; the known update types are `major`, `minor`, `patch`, `digest`, `pin`, `lockfile` and `none`, and an update whose size marge could not read can never be declared eligible.
+
+`timeout` and `weekly` are enforced. The two `budget` figures are part of the team contract and are not enforced yet: a per-rescue budget needs the platform to accept a budget on a run, and a weekly budget needs the cost of a finished run to be readable. Every outcome records `budget_enforced: false`, and a sweep whose policy declares a budget with the rescues switched on says so on stderr. Enforcement moves under the same file later without a team editing anything.
+
+A repository entry deviates under `botPRsSweep`, with three keys that only narrow:
+
+```yaml
+# repositories/team-bumblebee.yaml
+- name: marge
+  componentType: cli
+  botPRsSweep:
+    enabled: false        # no PR of this repository is touched, not even labelled
+- name: muster
+  componentType: service
+  botPRsSweep:
+    updateTypes: [patch]  # intersected with the team's lists, never added to
+    rescue: false
+```
+
+An exception that tries to switch the sweep or the rescues back on where the team switched them off is an error, not a silent narrowing.
+
+A file marge cannot read stops the sweep and names the file and the key: a misspelled key, an unknown bot PR kind or update type, a timeout that is not a duration, a negative cap, a confirmation that is neither `per-pr` nor `per-sweep`. Falling back to the defaults would sweep a team's repositories under a policy the team never wrote. A file that is simply absent is not an error: the company defaults apply and the outcome names the files that were read.
+
+The policy each PR was decided under is on its outcome entry, with the list of files that produced it, so every decision can be explained after the fact. `--output json` and the MCP `sweep` tool carry it as the `policy` object.
 
 #### Guards
 
@@ -247,8 +303,8 @@ Use [`marge mark`](#marge-mark-pr-url-flags) to write markers without knowing th
 
 Sweeps one scope without interactive grouping. Exactly one scope is given:
 
-- `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in the team-file repository (`giantswarm/github` unless `MARGE_TEAM_FILE_REPO` names another `owner/repo`; only each entry's `name` is read) and sweeps their open bot PRs.
-- `--query <text>` runs marge's GitHub search the way `marge [query]` does, for personal repositories and organisations without a team file; `--org` and `--repos-file` belong to this scope.
+- `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in the team-file repository (`giantswarm/github` unless `MARGE_TEAM_FILE_REPO` names another `owner/repo`; each entry's `name` is read, and its `botPRsSweep` key when it has one) and sweeps their open bot PRs under the team's [policy](#sweep-policy).
+- `--query <text>` runs marge's GitHub search the way `marge [query]` does, for personal repositories and organisations without a team file; `--org` and `--repos-file` belong to this scope. The query scope has no team, so the company defaults apply on their own.
 
 A sweep does not wait for pending checks: a `Waiting for checks` PR is reported and the next sweep decides. `--check-timeout` opts into a wait.
 
@@ -290,7 +346,7 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 Starts an MCP server exposing two tools:
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `policy` (the resolved policy the PR was decided under, with the `sources` that produced it), `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
 
 | Flag | Default | Description |
@@ -365,11 +421,11 @@ marge sweep --team bumblebee --output json
 
 ## How it works
 
-1. Resolves the scope: with `--team`, the repositories of the team file in the team-file repository; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`. A repository whose PRs cannot be listed is reported, never silently dropped.
+1. Resolves the scope and the [policy](#sweep-policy): with `--team`, the repositories of the team file in the team-file repository, the company default file and the team's own; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`, under the company defaults. A repository whose PRs cannot be listed is reported, never silently dropped.
 2. In interactive mode, groups results by repository (or dependency) and presents a selector.
-3. For each PR, in parallel (up to 5 concurrent, one repository at a time):
+3. For each PR, in parallel (the policy's `concurrency`, by default 5 repositories at a time and one PR per repository):
    - Reads the PR, its kind and update size, its checks, the base branch's required status checks and its markers.
-   - Applies the [guards](#guards) in order: trusted author, auto-merge, security check, required checks, red non-required checks, eligibility.
+   - Applies the [guards](#guards) in order: trusted author, repository swept at all, auto-merge, security check, required checks, red non-required checks, eligibility.
    - Approves the PR if not already approved, then squash-merges it; a PR behind its base is brought up to date instead.
    - On a failure, looks behind failing CircleCI statuses (auto-cancelled builds are `Cancelled` and retried by the `retry` action) and compares the failing checks with the base head (fixed there already is `Stale` and refreshed by the `refresh` action).
    - Writes the classification label and, where it acted, an evidence comment.

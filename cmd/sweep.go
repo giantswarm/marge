@@ -31,7 +31,7 @@ var sweepFlags struct {
 const interactiveCheckTimeout = 5 * time.Minute
 
 func init() {
-	sweepCmd.Flags().StringVar(&sweepOpts.Team, "team", "", "Sweep the repositories of this team, read from repositories/team-<name>.yaml in "+defaultTeamFileRepo+" (or $"+teamFileRepoEnv+")")
+	sweepCmd.Flags().StringVar(&sweepOpts.Team, "team", "", "Sweep the repositories of this team under its own policy, both read from "+defaultTeamFileRepo+" (or $"+teamFileRepoEnv+")")
 	sweepCmd.Flags().StringVar(&sweepOpts.Query, "query", "", "Sweep the bot PRs matching this GitHub search text, the way `marge [query]` does")
 	sweepCmd.Flags().StringVar(&sweepFlags.actions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
 	sweepCmd.Flags().BoolVar(&sweepOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
@@ -81,15 +81,25 @@ var sweepCmd = &cobra.Command{
 	Long: `Sweep the open bot PRs of one scope and report every outcome.
 
 Two scopes exist and exactly one is given: --team <name> reads the team's
-repositories from giantswarm/github; --query <text> runs marge's GitHub
-search the way "marge [query]" does, for personal repositories and
-organisations without a team file. Only PRs authored by Renovate, Align
-files, Herald or Dependabot are touched, never a person's.
+repositories and the team's policy from giantswarm/github; --query <text>
+runs marge's GitHub search the way "marge [query]" does, for personal
+repositories and organisations without a team file, under the company
+default policy. Only PRs authored by Renovate, Align files, Herald or
+Dependabot are touched, never a person's.
+
+The policy is read from the default branch at the start of every sweep:
+bot-prs-sweep/default.yaml holds the company defaults, bot-prs-sweep/team-
+<name>.yaml one team's deviations, and the botPRsSweep key of a repository
+entry that repository's exception. A file that does not parse, or that
+names a key or a value the sweep does not know, stops the sweep instead of
+applying defaults the team never wrote. Every outcome records the policy it
+was decided under.
 
 Each PR gets one bot-prs-sweep/<class> label with its classification.
-Green eligible PRs (patch and minor updates, Align files, Herald) are
-approved and squash-merged; majors and unreadable updates are held for a
-person. A required check that is pending or never reported is a wait,
+Green eligible PRs (by company default: patch and minor updates, Align
+files, Herald) are approved and squash-merged; majors and unreadable
+updates are held for a person. A repository whose exception switches the
+sweep off receives no write at all, the label included. A required check that is pending or never reported is a wait,
 never a bypass. A failing security check is never merged past. A red
 non-required check blocks the merge when it is green on the base head and
 is merged past, named in the evidence, when it is red there too.
@@ -149,18 +159,20 @@ marge never closes a PR itself.`,
 		login := me.GetLogin()
 
 		return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
-			repos, err := sweepOpts.repoList(ctx, client)
+			scope, err := sweepOpts.resolveScope(ctx, client)
 			if err != nil {
 				return err
 			}
+			opts := sweepOpts
+			opts.Policies = scope.Policies
 
-			found, err := searchPRs(ctx, client, sweepOpts.Query, login, repos)
+			found, err := searchPRs(ctx, client, opts.Query, login, scope.Repos)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
-			prs := filterByOrg(found.PRs, sweepOpts.Org)
+			prs := filterByOrg(found.PRs, opts.Org)
 
-			status, err := processOnceWithStatus(ctx, client, login, prs, sweepOpts)
+			status, err := processOnceWithStatus(ctx, client, login, prs, opts)
 			if err != nil {
 				return err
 			}

@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 )
 
@@ -43,6 +44,11 @@ type Processor struct {
 
 	// Actions selects the steps this sweep performs. Nil performs all.
 	Actions ActionSet
+
+	// Policies is the resolved bot PR sweep policy of the scope, read from
+	// the policy files before the sweep starts. Nil applies the company
+	// defaults of pr.CompanyDefaults.
+	Policies *policy.Set
 
 	// CheckTimeout bounds how long the sweep waits for pending checks on
 	// one PR. Zero means no wait: a PR with pending or missing required
@@ -93,6 +99,10 @@ type prRun struct {
 	// preexisting names the red non-required checks the PR merged past
 	// because they are red on the base head too.
 	preexisting []string
+	// untouched holds a PR of a repository whose policy switched the sweep
+	// off. Such a repository receives no write at all, the classification
+	// label included.
+	untouched bool
 }
 
 func (r *prRun) set(state pr.StatusState, detail string) {
@@ -179,6 +189,14 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
 	status.SetClassification(idx, kind, updateType)
 
+	resolved := p.Policies.For(info.Repo)
+	status.SetPolicy(idx, resolved)
+	if !resolved.Sweep {
+		run.untouched = true
+		run.set(pr.StatusSkipped, "sweep switched off for this repository by policy")
+		return
+	}
+
 	if pullReq.GetMerged() {
 		run.set(pr.StatusAlreadyMerged, "")
 		return
@@ -205,7 +223,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 
-	if !eligible(kind, updateType) {
+	if !resolved.Eligible(kind, updateType) {
 		run.set(pr.StatusHeld, heldDetail(kind, updateType))
 		return
 	}
@@ -250,8 +268,12 @@ func (p *Processor) plannedWrites() string {
 }
 
 // finish runs on every exit: it attaches a prior rescue marker to failure
-// outcomes, writes the classification label and appends the notes.
+// outcomes, writes the classification label and appends the notes. A PR of
+// a repository the policy excluded gets none of it.
 func (p *Processor) finish(ctx context.Context, run *prRun) {
+	if run.untouched {
+		return
+	}
 	p.attachRescueMarker(ctx, run)
 	state := run.status.StateAt(run.idx)
 	if class := pr.LabelClass(state); class != "" && !p.DryRun {

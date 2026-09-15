@@ -103,21 +103,25 @@ func TestReadReposFile(t *testing.T) {
 	}
 }
 
-// TestRunOptions_repoList guards the optional flag: no --repos-file means
-// no restriction (nil), a file means its entries.
-func TestRunOptions_repoList(t *testing.T) {
-	got, err := RunOptions{}.repoList(t.Context(), nil)
-	if err != nil || got != nil {
-		t.Errorf("RunOptions{}.repoList(t.Context(), nil) = %v, %v; want nil, nil", got, err)
+// TestRunOptions_resolveScope guards the optional flag: no --repos-file
+// means no restriction (nil), a file means its entries. Neither case reads
+// a team file, and a company default file that is not there leaves the
+// built-in defaults in place.
+func TestRunOptions_resolveScope(t *testing.T) {
+	client := contentsMux(t, "giantswarm", "github", nil)
+
+	scope, err := RunOptions{}.resolveScope(t.Context(), client)
+	if err != nil || scope.Repos != nil {
+		t.Errorf("RunOptions{}.resolveScope() = %v, %v; want no repositories and no error", scope.Repos, err)
 	}
 
 	path := filepath.Join(t.TempDir(), "repos.txt")
 	if err := os.WriteFile(path, []byte("my-org/a\n"), 0o600); err != nil {
 		t.Fatalf("writing repos file: %v", err)
 	}
-	got, err = RunOptions{ReposFile: path}.repoList(t.Context(), nil)
-	if err != nil || !reflect.DeepEqual(got, []string{"my-org/a"}) {
-		t.Errorf("repoList() = %v, %v; want [my-org/a], nil", got, err)
+	scope, err = RunOptions{ReposFile: path}.resolveScope(t.Context(), client)
+	if err != nil || !reflect.DeepEqual(scope.Repos, []string{"my-org/a"}) {
+		t.Errorf("resolveScope() = %v, %v; want [my-org/a], nil", scope.Repos, err)
 	}
 }
 

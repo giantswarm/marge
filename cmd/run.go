@@ -76,12 +76,12 @@ and merge the eligible green ones.`,
 		}
 
 		return watchLoop(ctx, runOpts.Watch, func(ctx context.Context) error {
-			repos, err := runOpts.repoList(ctx, client)
+			scope, err := runOpts.resolveScope(ctx, client)
 			if err != nil {
 				return err
 			}
 
-			found, err := searchPRs(ctx, client, query, login, repos)
+			found, err := searchPRs(ctx, client, query, login, scope.Repos)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
@@ -91,6 +91,7 @@ and merge the eligible green ones.`,
 			prs := filterByOrg(found.PRs, runOpts.Org)
 
 			opts := runOpts
+			opts.Policies = scope.Policies
 			opts.Cols = pr.FullColumns()
 
 			if query == "" && len(prs) > 0 {

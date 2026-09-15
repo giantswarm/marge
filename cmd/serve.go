@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	gh "github.com/giantswarm/marge/internal/github"
+	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
 )
@@ -230,15 +232,17 @@ type sweepRequest struct {
 	Opts  RunOptions
 }
 
-// repoList returns the repositories the sweep is restricted to: the repos
-// argument merged with the entries of repos_file, without duplicates. Nil
-// means no restriction, so the PRs come from the GitHub search.
-func (r sweepRequest) repoList(ctx context.Context, client *github.Client) ([]string, error) {
-	fromFile, err := r.Opts.repoList(ctx, client)
+// resolveScope returns what the sweep covers: the repositories of the
+// request merged with those of the scope, without duplicates, and the
+// policy the scope resolves to. No repository at all means no restriction,
+// so the PRs come from the GitHub search.
+func (r sweepRequest) resolveScope(ctx context.Context, client *github.Client) (policy.Scope, error) {
+	scope, err := r.Opts.resolveScope(ctx, client)
 	if err != nil {
-		return nil, err
+		return policy.Scope{}, err
 	}
-	return mergeRepos(r.Repos, fromFile), nil
+	scope.Repos = mergeRepos(r.Repos, scope.Repos)
+	return scope, nil
 }
 
 // mergeRepos joins repository lists into one, trimmed and without
@@ -410,6 +414,83 @@ type SweepPREntry struct {
 	// Reason says why an obsolete PR is obsolete: "superseded" or "no_op".
 	// Only set on entries in the obsolete list.
 	Reason string `json:"reason,omitempty"`
+	// Policy is the sweep policy this PR was decided under, so an outcome
+	// explains itself without the reader resolving the files again.
+	Policy *SweepPolicyInfo `json:"policy,omitempty"`
+}
+
+// SweepPolicyInfo is the JSON projection of a pr.Policy.
+type SweepPolicyInfo struct {
+	Sweep bool `json:"sweep"`
+	// UpdateTypes lists the update types that merge when green, per bot PR
+	// kind.
+	UpdateTypes  map[string][]string `json:"update_types"`
+	Schedule     bool                `json:"schedule"`
+	Rescue       SweepRescuePolicy   `json:"rescue"`
+	Concurrency  SweepConcurrency    `json:"concurrency"`
+	ModelConfig  string              `json:"model_config,omitempty"`
+	SlackChannel string              `json:"slack_channel,omitempty"`
+	// Sources names the files that produced the policy, in the order they
+	// were applied.
+	Sources []string `json:"sources,omitempty"`
+}
+
+// SweepRescuePolicy is the rescue section of a resolved policy.
+type SweepRescuePolicy struct {
+	Enabled bool   `json:"enabled"`
+	Timeout string `json:"timeout,omitempty"`
+	Weekly  int    `json:"weekly"`
+	// BudgetPerRescueUSD and BudgetWeeklyUSD are what the team declared.
+	// BudgetEnforced says whether this build applies them; it is false
+	// until the platform accepts a budget on a run and reports the cost of
+	// a finished one.
+	BudgetPerRescueUSD float64 `json:"budget_per_rescue_usd,omitempty"`
+	BudgetWeeklyUSD    float64 `json:"budget_weekly_usd,omitempty"`
+	BudgetEnforced     bool    `json:"budget_enforced"`
+	Confirm            string  `json:"confirm,omitempty"`
+}
+
+// SweepConcurrency is the concurrency section of a resolved policy.
+type SweepConcurrency struct {
+	PerTeam int `json:"per_team"`
+	PerRepo int `json:"per_repo"`
+}
+
+// policyInfo projects a resolved policy into its JSON shape.
+func policyInfo(resolved *pr.Policy) *SweepPolicyInfo {
+	if resolved == nil {
+		return nil
+	}
+	types := make(map[string][]string, len(resolved.UpdateTypes))
+	for kind, updateTypes := range resolved.UpdateTypes {
+		names := make([]string, 0, len(updateTypes))
+		for _, updateType := range updateTypes {
+			names = append(names, string(updateType))
+		}
+		sort.Strings(names)
+		types[string(kind)] = names
+	}
+	info := &SweepPolicyInfo{
+		Sweep:       resolved.Sweep,
+		UpdateTypes: types,
+		Schedule:    resolved.Schedule,
+		Rescue: SweepRescuePolicy{
+			Enabled:            resolved.Rescue.Enabled,
+			Weekly:             resolved.Rescue.Weekly,
+			BudgetPerRescueUSD: resolved.Rescue.Budget.PerRescueUSD,
+			BudgetWeeklyUSD:    resolved.Rescue.Budget.WeeklyUSD,
+			BudgetEnforced:     pr.BudgetEnforced,
+			Confirm:            string(resolved.Rescue.Confirm),
+		},
+		Concurrency:  SweepConcurrency{PerTeam: resolved.Concurrency.PerTeam, PerRepo: resolved.Concurrency.PerRepo},
+		ModelConfig:  resolved.ModelConfig,
+		SlackChannel: resolved.SlackChannel,
+		Sources:      resolved.Sources,
+	}
+	if resolved.Rescue.Timeout > 0 {
+		info.Rescue.Timeout = resolved.Rescue.Timeout.String()
+	}
+	return info
 }
 
 // SweepRescueInfo is the JSON projection of a pr.RescueMarker.
@@ -439,10 +520,11 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultError(fmt.Sprintf("creating GitHub client: %v", err)), nil
 	}
 
-	repos, err := req.repoList(ctx, client)
+	scope, err := req.resolveScope(ctx, client)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	req.Opts.Policies = scope.Policies
 
 	me, _, err := client.Users.Get(ctx, "")
 	if err != nil {
@@ -450,7 +532,7 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	}
 	login := me.GetLogin()
 
-	found, err := searchPRs(ctx, client, req.Query, login, repos)
+	found, err := searchPRs(ctx, client, req.Query, login, scope.Repos)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("searching PRs: %v", err)), nil
 	}
@@ -515,6 +597,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure) SweepResult {
 			entry.UpdateType = string(e.UpdateType)
 		}
 		entry.Label = e.Label
+		entry.Policy = policyInfo(e.Policy)
 		if !e.PR.CreatedAt.IsZero() {
 			entry.CreatedAt = e.PR.CreatedAt.UTC().Format(time.RFC3339)
 			entry.AgeDays = pr.AgeDays(e.PR.CreatedAt, now)
