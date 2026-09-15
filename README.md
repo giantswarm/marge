@@ -146,6 +146,8 @@ Every key is optional and an absent key keeps what the file before it said. `upd
 
 `timeout` and `weekly` are enforced. The two `budget` figures are part of the team contract and are not enforced yet: a per-rescue budget needs the platform to accept a budget on a run, and a weekly budget needs the cost of a finished run to be readable. Every outcome records `budget_enforced: false`, and a sweep whose policy declares a budget with the rescues switched on says so on stderr. Enforcement moves under the same file later without a team editing anything.
 
+`concurrency` has a ceiling marge owns: `perTeam` reaches 20 and `perRepo` reaches 5. GitHub answers a burst of writes with a secondary rate limit, which a sweep cannot tell apart from a repository it may not touch, so a file that declares more is an error rather than a sweep that fails halfway.
+
 A repository entry deviates under `botPRsSweep`, with three keys that only narrow:
 
 ```yaml

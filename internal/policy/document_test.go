@@ -79,7 +79,17 @@ func TestParseDocument_failsLoudly(t *testing.T) {
 		{
 			name:    "concurrency below one",
 			content: "concurrency:\n  perTeam: 0\n",
-			want:    "concurrency.perTeam: 0 is below 1",
+			want:    "concurrency.perTeam: 0 is outside 1 to 20",
+		},
+		{
+			name:    "concurrency above the ceiling",
+			content: "concurrency:\n  perTeam: 100\n",
+			want:    "concurrency.perTeam: 100 is outside 1 to 20",
+		},
+		{
+			name:    "PRs of one repository above the ceiling",
+			content: "concurrency:\n  perRepo: 10\n",
+			want:    "concurrency.perRepo: 10 is outside 1 to 5",
 		},
 		{
 			name:    "a list where a mapping belongs",

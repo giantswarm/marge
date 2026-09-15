@@ -88,6 +88,15 @@ type Exception struct {
 	Rescue      *bool    `yaml:"rescue"`
 }
 
+// The ceilings on the concurrency a policy file may declare. GitHub answers
+// a burst of writes with a secondary rate limit, which a sweep cannot tell
+// apart from a repository it may not touch, so the ceiling is the sweep's
+// and not the team's to raise.
+const (
+	maxPerTeam = 20
+	maxPerRepo = 5
+)
+
 // The two values the schedule key takes. A team switches its scheduled
 // sweep on in its own policy file, and off again without deleting the file.
 const (
@@ -156,11 +165,11 @@ func (d *Document) resolve() error {
 		return err
 	}
 	if c := d.Concurrency; c != nil {
-		if c.PerTeam != nil && *c.PerTeam < 1 {
-			return fmt.Errorf("concurrency.perTeam: %d is below 1", *c.PerTeam)
+		if c.PerTeam != nil && (*c.PerTeam < 1 || *c.PerTeam > maxPerTeam) {
+			return fmt.Errorf("concurrency.perTeam: %d is outside 1 to %d", *c.PerTeam, maxPerTeam)
 		}
-		if c.PerRepo != nil && *c.PerRepo < 1 {
-			return fmt.Errorf("concurrency.perRepo: %d is below 1", *c.PerRepo)
+		if c.PerRepo != nil && (*c.PerRepo < 1 || *c.PerRepo > maxPerRepo) {
+			return fmt.Errorf("concurrency.perRepo: %d is outside 1 to %d", *c.PerRepo, maxPerRepo)
 		}
 	}
 	return nil
