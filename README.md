@@ -101,6 +101,9 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
 | `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are observed only) |
 | `--security-patterns` | | _(built-in)_ | Add to the built-in security check pattern list (see below) |
+| `--rules-repo` | | `giantswarm/marge` | Repository the rule catalogue is read from, as `owner/name` |
+| `--rules-ref` | | `main` | Branch the rule catalogue is read from |
+| `--rules-path` | | | Read the catalogue from this directory instead of the repository |
 
 #### Bot PR kinds and eligibility
 
