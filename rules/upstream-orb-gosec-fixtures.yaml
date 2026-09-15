@@ -1,0 +1,13 @@
+name: upstream-orb-gosec-fixtures
+summary: architect-orb runs gosec with --no-config, so repository exclusions do not apply.
+source: runbook row 63 (L181)
+match:
+  states: [failed]
+  kinds: [align-files]
+  log:
+    source: circleci
+    pattern: 'golangci-lint run --no-config --default=none --enable=gosec'
+action:
+  name: mark-wait
+evidence:
+  reason: the finding comes from the orb ignoring the repository configuration, so the PR waits on architect-orb#907

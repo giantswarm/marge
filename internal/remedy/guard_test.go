@@ -15,14 +15,14 @@ func botPull(login string) *github.PullRequest {
 }
 
 func TestTrustedAuthor(t *testing.T) {
-	require.Empty(t, TrustedAuthor(&Request{Pull: botPull("renovate[bot]")}))
-	require.Empty(t, TrustedAuthor(&Request{Pull: botPull("heraldbot[bot]")}))
-	require.Contains(t, TrustedAuthor(&Request{Pull: botPull("QuentinBisson")}), "not a trusted bot")
+	require.Empty(t, TrustedAuthor.Refuse(&Request{Pull: botPull("renovate[bot]")}))
+	require.Empty(t, TrustedAuthor.Refuse(&Request{Pull: botPull("heraldbot[bot]")}))
+	require.Contains(t, TrustedAuthor.Refuse(&Request{Pull: botPull("QuentinBisson")}), "not a trusted bot")
 }
 
 func TestNoSecurityFailure(t *testing.T) {
-	require.Empty(t, NoSecurityFailure(&Request{}))
-	require.Equal(t, "security check failed: govulncheck", NoSecurityFailure(&Request{SecurityFailure: "govulncheck"}))
+	require.Empty(t, NoSecurityFailure.Refuse(&Request{}))
+	require.Equal(t, "security check failed: govulncheck", NoSecurityFailure.Refuse(&Request{SecurityFailure: "govulncheck"}))
 }
 
 func TestRequiredChecksGreen(t *testing.T) {
@@ -53,22 +53,22 @@ func TestRequiredChecksGreen(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, RequiredChecksGreen(&Request{Required: tt.required}))
+			require.Equal(t, tt.want, RequiredChecksGreen.Refuse(&Request{Required: tt.required}))
 		})
 	}
 }
 
 func TestLogMatched(t *testing.T) {
-	require.Empty(t, LogMatched(&Request{LogMatched: true}))
-	require.Contains(t, LogMatched(&Request{}), "check name alone")
+	require.Empty(t, LogMatched.Refuse(&Request{LogMatched: true}))
+	require.Contains(t, LogMatched.Refuse(&Request{}), "check name alone")
 }
 
 func TestOncePerChange(t *testing.T) {
 	guard := OncePerChange(CircleCIRetry)
-	require.Empty(t, guard(&Request{}))
-	require.Empty(t, guard(&Request{AppliedThisChange: map[Name]bool{RerunFailed: true}}))
+	require.Empty(t, guard.Refuse(&Request{}))
+	require.Empty(t, guard.Refuse(&Request{AppliedThisChange: map[Name]bool{RerunFailed: true}}))
 	require.Equal(t, "circleci-retry already applied to this change",
-		guard(&Request{AppliedThisChange: map[Name]bool{CircleCIRetry: true}}))
+		guard.Refuse(&Request{AppliedThisChange: map[Name]bool{CircleCIRetry: true}}))
 }
 
 func TestNoGeneratedEdit(t *testing.T) {
@@ -113,7 +113,7 @@ func TestNoGeneratedEdit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NoGeneratedEdit(&Request{Writes: tt.writes})
+			got := NoGeneratedEdit.Refuse(&Request{Writes: tt.writes})
 			if tt.want == "" {
 				require.Empty(t, got)
 				return
@@ -125,7 +125,7 @@ func TestNoGeneratedEdit(t *testing.T) {
 
 func TestTrustedAuthorCoversEveryKind(t *testing.T) {
 	for _, login := range pr.TrustedLogins() {
-		require.Empty(t, TrustedAuthor(&Request{Pull: botPull(login)}), login)
+		require.Empty(t, TrustedAuthor.Refuse(&Request{Pull: botPull(login)}), login)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestChecksSettled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason := ChecksSettled(tt.request)
+			reason := ChecksSettled.Refuse(tt.request)
 			if tt.want == "" {
 				require.Empty(t, reason)
 				return
@@ -193,5 +193,23 @@ func TestChecksSettled(t *testing.T) {
 func TestChecksSettledRefusesWithoutATime(t *testing.T) {
 	req := &Request{Reported: 3, ChecksSettledAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
 
-	require.Contains(t, ChecksSettled(req), "may still report for the first time")
+	require.Contains(t, ChecksSettled.Refuse(req), "may still report for the first time")
+}
+
+// Every guard of every action carries a name. The name is what a report
+// prints, so an action whose guard set is invisible is one nobody reviews.
+func TestEveryGuardIsNamed(t *testing.T) {
+	registry := Default()
+
+	for _, name := range registry.Names() {
+		t.Run(string(name), func(t *testing.T) {
+			action, ok := registry.Lookup(name)
+			require.True(t, ok)
+			require.NotEmpty(t, action.Guards(), "an action with no guard refuses nothing")
+			for _, guard := range action.Guards() {
+				require.NotEmpty(t, guard.Name)
+			}
+			require.Equal(t, len(action.Guards()), len(registry.GuardNames(name)))
+		})
+	}
 }

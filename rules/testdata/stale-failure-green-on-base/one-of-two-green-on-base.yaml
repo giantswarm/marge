@@ -1,0 +1,11 @@
+name: one check green on the base head does not carry a second that is red
+subject:
+  state: stale
+  kind: renovate
+  title: "chore(deps): update module golang.org/x/net to v0.46.0"
+  failing: ["go-build", "go-test"]
+  baseState:
+    go-build: green
+    go-test: red
+expect:
+  rule: ""

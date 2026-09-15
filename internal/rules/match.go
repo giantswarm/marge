@@ -58,8 +58,8 @@ type Hit struct {
 }
 
 // Match returns the first rule of the catalogue that matches the subject, or
-// nil. Rules are tried in name order, so the outcome of a catalogue does not
-// depend on how it was read.
+// nil. The catalogue is ordered before it is used, so the outcome does not
+// depend on how it was read; Catalogue.Rules states the order.
 func (c *Catalogue) Match(subject *Subject) *Hit {
 	if c == nil {
 		return nil

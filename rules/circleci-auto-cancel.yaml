@@ -1,0 +1,14 @@
+name: circleci-auto-cancel
+summary: A CircleCI build the platform itself cancelled established nothing about the code.
+source: runbook row 74 (L192)
+match:
+  states: [failed, cancelled]
+  check:
+    name: "ci/circleci: *"
+  log:
+    source: circleci
+    pattern: '(?im)^(canceled|cancelled)\b'
+action:
+  name: circleci-retry
+evidence:
+  reason: the build was cancelled before it finished, so it was rerun on the same commit

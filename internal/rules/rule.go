@@ -177,6 +177,29 @@ func (r *Rule) LogBytes() int {
 	return r.Match.Log.MaxBytes
 }
 
+// specificity counts what a rule asks of a PR. A rule that reads the log
+// and the check name asks more than one that reads a classification alone,
+// so it is tried first and a broad rule never shadows a narrow one.
+func (r *Rule) specificity() int {
+	score := len(r.Match.States) + len(r.Match.Kinds)
+	if r.Match.Check != nil {
+		score += 2
+	}
+	if r.Match.Log != nil {
+		score += 4
+	}
+	if p := r.Match.PR; p != nil {
+		if p.BaseHead != BaseAny {
+			score++
+		}
+		if p.TitlePattern != "" {
+			score++
+		}
+		score += len(p.Files)
+	}
+	return score
+}
+
 // remediableStates are the classifications a rule may act on, by their name
 // in a document. Merged, security and untrusted-author outcomes are absent:
 // no rule acts on them.

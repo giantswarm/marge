@@ -1,0 +1,13 @@
+name: a build that actually failed is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update module github.com/google/go-github/v92 to v92.1.0"
+  failing: ["ci/circleci: go-build"]
+  logs:
+    "circleci:ci/circleci: go-build": |
+      # github.com/giantswarm/marge/internal/process
+      internal/process/processor.go:412:2: undefined: classifyThing
+      Exited with code exit status 1
+expect:
+  rule: ""

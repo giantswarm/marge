@@ -200,6 +200,19 @@ func (r *Registry) hold(name Name, reason string) {
 // action runs.
 func (r *Registry) HeldReason(name Name) string { return r.held[name] }
 
+// GuardNames lists the guards an action enforces, in the order it runs them.
+func (r *Registry) GuardNames(name Name) []string {
+	action, ok := r.Lookup(name)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(action.Guards()))
+	for _, guard := range action.Guards() {
+		out = append(out, guard.Name)
+	}
+	return out
+}
+
 // Names lists every implemented action, sorted, for validation errors and
 // help text.
 func (r *Registry) Names() []Name {
@@ -233,7 +246,7 @@ func (r *Registry) Apply(ctx context.Context, name Name, req *Request, extra []G
 // action's guards, so no path reaches a write past them.
 func refuse(guards []Guard, req *Request) string {
 	for _, guard := range guards {
-		if reason := guard(req); reason != "" {
+		if reason := guard.Refuse(req); reason != "" {
 			return reason
 		}
 	}

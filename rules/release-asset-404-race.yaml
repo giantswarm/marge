@@ -1,0 +1,12 @@
+name: release-asset-404-race
+summary: A consumer job 404s on a release asset published moments earlier.
+source: runbook row 33 (L151)
+match:
+  states: [failed]
+  log:
+    source: actions
+    pattern: 'releases/download/[^\n]*\n(?:[^\n]*\n){0,3}curl: \(22\)[^\n]*404'
+action:
+  name: rerun-failed
+evidence:
+  reason: the release asset was not published yet when the job ran, so the failed jobs were rerun

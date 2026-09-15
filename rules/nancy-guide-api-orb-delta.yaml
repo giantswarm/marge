@@ -1,0 +1,16 @@
+name: nancy-guide-api-orb-delta
+summary: nancy fails on a branch pinned to an architect orb older than 9.4.3.
+source: runbook row 37 (L155)
+match:
+  states: [failed, stale]
+  check:
+    name: "go-test"
+  log:
+    source: circleci
+    pattern: 'guide API request failed: json: cannot unmarshal object into Go value of type \[\]sonatypeguide\.ComponentReportPost'
+  pr:
+    baseHead: green
+action:
+  name: update-branch
+evidence:
+  reason: the orb on the base branch carries the fix, so the branch was updated from it

@@ -1,0 +1,11 @@
+name: a missing go.sum entry is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "fix(deps): update module github.com/giantswarm/mcp-oauth to v5.3.1"
+  failing: ["go-build"]
+  logs:
+    "actions:go-build": |
+      go: github.com/giantswarm/mcp-oauth/v5@v5.3.1: missing go.sum entry; to add it: go mod download
+expect:
+  rule: ""

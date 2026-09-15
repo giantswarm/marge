@@ -22,12 +22,12 @@ const (
 // NotAlignFiles refuses an action on an Align files PR. The alignment branch
 // is regenerated every cycle, so closing such a PR only makes the bot open
 // it again.
-func NotAlignFiles(req *Request) string {
+var NotAlignFiles = Guard{"not-align-files", func(req *Request) string {
 	if req.Kind == pr.KindAlignFiles {
 		return "an Align files PR is regenerated, not closed"
 	}
 	return ""
-}
+}}
 
 // closePR closes a PR nobody has to fix. The evidence the engine writes
 // after it says why, so the action posts no comment of its own.

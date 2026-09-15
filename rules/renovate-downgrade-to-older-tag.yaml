@@ -1,0 +1,15 @@
+name: renovate-downgrade-to-older-tag
+summary: Renovate proposes a tagged release older than the pseudo-version in use.
+source: runbook row 16 (L134)
+match:
+  states: [failed, obsolete]
+  kinds: [renovate]
+  pr:
+    titlePattern: '(?i)^(chore|fix)\(deps\): update module '
+  log:
+    source: actions
+    pattern: '(?m)^go: downgraded \S+ v\S*[-.]\d{14}-[0-9a-f]{12} => v\S+'
+action:
+  name: close
+evidence:
+  reason: the proposed tag is older than the pseudo-version in use, so the PR was closed

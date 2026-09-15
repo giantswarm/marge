@@ -1,0 +1,13 @@
+name: a test asserting a rate-limit body is not a runner download failure
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update module github.com/google/go-github/v92 to v92.1.0"
+  failing: ["build"]
+  logs:
+    "actions:build": |
+      --- FAIL: TestSecondaryRateLimit (0.01s)
+          client_test.go:214: want "429 Too Many Requests", got "403 Forbidden"
+      Error: Process completed with exit code 1.
+expect:
+  rule: ""

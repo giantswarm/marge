@@ -1,0 +1,12 @@
+name: gosec run with --no-config on an align PR waits on the orb
+subject:
+  state: failed
+  kind: align-files
+  title: "Align files"
+  failing: ["go-build"]
+  logs:
+    "circleci:go-build": |
+      golangci-lint run --no-config --default=none --enable=gosec --timeout 10m ./...
+      internal/pr/parse_test.go:44:12: G101: Potential hardcoded credentials (gosec)
+expect:
+  rule: upstream-orb-gosec-fixtures

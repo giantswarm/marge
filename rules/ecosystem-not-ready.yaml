@@ -1,0 +1,12 @@
+name: ecosystem-not-ready
+summary: A bump blocked by an upstream release that does not exist yet.
+source: runbook rows 7, 9, 15 and 31 (L125, L127, L133, L149)
+match:
+  states: [failed]
+  log:
+    source: actions
+    pattern: 'The engine "node" is incompatible with this module|peer .* from the root project|ERESOLVE could not resolve|prebuild-install .* (ENOENT|404)'
+action:
+  name: mark-wait
+evidence:
+  reason: the bump waits on an upstream release, so it is marked and left open

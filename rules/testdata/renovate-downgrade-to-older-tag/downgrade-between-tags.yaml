@@ -1,0 +1,12 @@
+name: a downgrade between two released tags is not this failure
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update module sigs.k8s.io/controller-runtime to v0.23.3"
+  failing: ["go-build"]
+  logs:
+    "actions:go-build": |
+      go: downgraded golang.org/x/net v0.46.0 => v0.45.0
+      Error: Process completed with exit code 1.
+expect:
+  rule: ""

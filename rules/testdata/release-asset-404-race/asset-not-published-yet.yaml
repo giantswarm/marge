@@ -1,0 +1,13 @@
+name: a release asset that is not published yet is a rerun
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update giantswarm/klausctl to v0.4.2"
+  failing: ["validate"]
+  logs:
+    "actions:validate": |
+      Run curl -sSfL -o klausctl https://github.com/giantswarm/klausctl/releases/download/v0.4.2/klausctl-linux-amd64
+      curl: (22) The requested URL returned error: 404
+      Error: Process completed with exit code 22.
+expect:
+  rule: release-asset-404-race

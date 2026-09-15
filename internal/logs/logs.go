@@ -114,7 +114,40 @@ func (f *Fetcher) download(ctx context.Context, url string, maxBytes int) (strin
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("reading log: HTTP %d", resp.StatusCode)
 	}
-	return tail(io.LimitReader(resp.Body, downloadLimit), maxBytes)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, downloadLimit))
+	if err != nil {
+		return "", err
+	}
+	return aroundError(string(body), maxBytes), nil
+}
+
+// errorMarker is what the Actions runner writes in front of the line that
+// failed a step.
+const errorMarker = "##[error]"
+
+// aroundError returns the excerpt a rule matches against: the maxBytes that
+// end just after the last failure the runner reported. A job log ends with
+// credential cleanup and orphan-process removal, so its tail says nothing
+// about why the job failed. A log with no error marker falls back to the
+// tail, which is where a crash without a marker leaves its output.
+func aroundError(body string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	end := len(body)
+	if at := strings.LastIndex(body, errorMarker); at >= 0 {
+		end = at + len(errorMarker)
+		if nl := strings.IndexByte(body[end:], '\n'); nl >= 0 {
+			end += nl + 1
+		} else {
+			end = len(body)
+		}
+	}
+	start := end - maxBytes
+	if start < 0 {
+		start = 0
+	}
+	return body[start:end]
 }
 
 // tail returns the last maxBytes of a stream without holding more than that

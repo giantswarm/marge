@@ -21,21 +21,22 @@ var nameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Parse decodes and validates one rule document. Decoding is strict: an
 // unknown key is an error, so no document can carry an option the schema
-// does not define. fileName is the document's path, reported in errors and
-// checked against the rule name.
+// does not define. fileName is the document's path, checked against the rule
+// name. The error names no file: the caller knows which one it read, and
+// reports it once.
 func Parse(fileName string, data []byte, reg *remedy.Registry) (*Rule, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
 	var rule Rule
 	if err := dec.Decode(&rule); err != nil {
-		return nil, fmt.Errorf("%s: %w", fileName, err)
+		return nil, err
 	}
 	if err := dec.Decode(new(Rule)); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%s: one rule per file", fileName)
+		return nil, errors.New("one rule per file")
 	}
 	if err := rule.validate(fileName, reg); err != nil {
-		return nil, fmt.Errorf("%s: %w", fileName, err)
+		return nil, err
 	}
 	return &rule, nil
 }

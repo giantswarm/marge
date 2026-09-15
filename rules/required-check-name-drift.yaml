@@ -1,0 +1,15 @@
+name: required-check-name-drift
+summary: A required context no job posts any more, left behind by an alignment migration.
+source: runbook rows 21 and 44 (L139, L162)
+match:
+  states: [waiting-checks]
+  protection:
+    missingContexts:
+      - "ci/circleci: *"
+      - "package and push * chart"
+      - "*-build"
+      - "*-test"
+action:
+  name: fix-protection-context
+evidence:
+  reason: the required context names a job that no longer runs, so it was dropped from the protection

@@ -1,0 +1,9 @@
+name: a PR waiting on a context that will still report is left alone
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update giantswarm/architect orb to v10.5.1"
+  failing: []
+  missingContexts: []
+expect:
+  rule: ""

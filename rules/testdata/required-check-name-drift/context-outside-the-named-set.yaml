@@ -1,0 +1,9 @@
+name: a required context the rule does not name is not its drift
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update giantswarm/architect orb to v10.5.1"
+  failing: []
+  missingContexts: ["Analyze (go)"]
+expect:
+  rule: ""

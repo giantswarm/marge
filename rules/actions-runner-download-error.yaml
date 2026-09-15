@@ -1,0 +1,12 @@
+name: actions-runner-download-error
+summary: A GitHub Actions step fails while downloading an action or a tool.
+source: runbook, transient CI failures (D9)
+match:
+  states: [failed]
+  log:
+    source: actions
+    pattern: 'Error: (Failed to download action|getaddrinfo EAI_AGAIN)|Error:.*HTTP 5\d\d.*(download|registry)|Error:.*429 Too Many Requests|##\[error\].*(429 Too Many Requests|Failed to download)'
+action:
+  name: rerun-failed
+evidence:
+  reason: the step failed while downloading, not while building, so the failed jobs were rerun

@@ -1,0 +1,11 @@
+name: a failure green on the base head refreshes the branch
+subject:
+  state: stale
+  kind: renovate
+  title: "chore(deps): update module golang.org/x/net to v0.46.0"
+  failing: ["go-build"]
+  baseState:
+    go-build: green
+expect:
+  rule: stale-failure-green-on-base
+  check: go-build

@@ -1,0 +1,12 @@
+name: a gosec finding under the repository configuration is left alone
+subject:
+  state: failed
+  kind: align-files
+  title: "Align files"
+  failing: ["go-build"]
+  logs:
+    "circleci:go-build": |
+      golangci-lint run -E gosec -E goconst --timeout=15m ./...
+      internal/github/client.go:31:9: G402: TLS InsecureSkipVerify set true (gosec)
+expect:
+  rule: ""

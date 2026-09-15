@@ -1,0 +1,13 @@
+name: an entry already in the transparency log is retried
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update giantswarm/architect orb to v10.5.1"
+  failing: ["ci/circleci: push-to-registries"]
+  logs:
+    "circleci:ci/circleci: push-to-registries": |
+      Generating ephemeral keys...
+      Error: signing gsoci.azurecr.io/giantswarm/marge:0.9.0: createLogEntryConflict: an equivalent entry already exists in the transparency log with UUID 24296fb2
+expect:
+  rule: cosign-transparency-log-conflict
+  check: "ci/circleci: push-to-registries"

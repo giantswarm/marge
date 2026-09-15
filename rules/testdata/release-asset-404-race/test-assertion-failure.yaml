@@ -1,0 +1,13 @@
+name: a failing assertion is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update giantswarm/klausctl to v0.4.2"
+  failing: ["validate"]
+  logs:
+    "actions:validate": |
+      --- FAIL: TestKlausctlVersion (0.00s)
+          version_test.go:22: expected v0.4.2, got v0.4.1
+      Error: Process completed with exit code 1.
+expect:
+  rule: ""

@@ -1,0 +1,9 @@
+name: a required context no job posts is a protection fix
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update giantswarm/architect orb to v10.5.1"
+  failing: []
+  missingContexts: ["ci/circleci: go-build"]
+expect:
+  rule: required-check-name-drift
