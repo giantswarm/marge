@@ -2,10 +2,14 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
 )
@@ -61,6 +65,79 @@ func TestScenarios(t *testing.T) {
 		t.Run(scenario.Rule+"/"+scenario.Name, func(t *testing.T) {
 			if problem := scenario.Run(catalogue); problem != "" {
 				t.Errorf("%s: %s", scenario.Path, problem)
+			}
+		})
+	}
+}
+
+// loginFor is the trusted bot whose PRs a scenario of that kind describes.
+// A scenario that names no kind is a Renovate PR, the commonest.
+func loginFor(kind string) string {
+	for _, login := range pr.TrustedLogins() {
+		if string(pr.KindOf(login)) == kind {
+			return login
+		}
+	}
+	return "renovate[bot]"
+}
+
+// requestFor builds the most favourable action request a scenario allows: a
+// trusted bot's open PR, no failing security check, every required context
+// green, a head that has finished reporting, and no earlier attempt. A guard
+// that still refuses here refuses for ever.
+func requestFor(rule *rules.Rule, scenario *rules.Scenario) *remedy.Request {
+	now := time.Now()
+	req := &remedy.Request{
+		Info: pr.PRInfo{Owner: "giantswarm", Repo: "marge", Number: 1},
+		Pull: &github.PullRequest{
+			User:  &github.User{Login: new(loginFor(scenario.Subject.Kind))},
+			Base:  &github.PullRequestBranch{Ref: new("main")},
+			State: new("open"),
+		},
+		Kind:            pr.Kind(scenario.Subject.Kind),
+		Failing:         scenario.Subject.Failing,
+		Required:        remedy.Required{Green: []string{"go-build"}},
+		Now:             now,
+		Reported:        len(scenario.Subject.Failing) + 1,
+		ChecksSettledAt: now.Add(-24 * time.Hour),
+		MissingContexts: scenario.Subject.MissingContexts,
+		LogMatched:      rule.Match.Log != nil,
+	}
+	req.Required.Missing = scenario.Subject.MissingContexts
+	return req
+}
+
+// No rule names an action whose guards refuse it on every PR. A scenario
+// asserts which rule matched and never calls Apply, so without this a rule
+// that matches and is then refused for ever passes every other test here.
+func TestNoRuleIsRefusedForEver(t *testing.T) {
+	catalogue := loadCatalogue(t)
+	scenarios, err := rules.LoadScenarios(filepath.Join(catalogueDir, rules.ScenarioDir))
+	require.NoError(t, err)
+	registry := remedy.Default()
+
+	positives := make(map[string]*rules.Scenario, len(scenarios))
+	for _, scenario := range scenarios {
+		if scenario.Expect.Rule == scenario.Rule {
+			positives[scenario.Rule] = scenario
+		}
+	}
+
+	for _, rule := range catalogue.Rules {
+		t.Run(rule.Name, func(t *testing.T) {
+			scenario := positives[rule.Name]
+			require.NotNil(t, scenario, "no scenario matches this rule")
+
+			action, known := registry.Lookup(rule.Action.Name)
+			require.True(t, known)
+			if held := registry.HeldReason(rule.Action.Name); held != "" {
+				t.Skipf("%s is held: %s", rule.Action.Name, held)
+			}
+
+			request := requestFor(rule, scenario)
+			for _, guard := range slices.Concat(action.Guards(), rule.Guards()) {
+				require.Empty(t, guard.Refuse(request),
+					"the rule matches and the action then refuses it, on every PR")
 			}
 		})
 	}

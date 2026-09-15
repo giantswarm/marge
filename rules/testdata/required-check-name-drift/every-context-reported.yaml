@@ -4,6 +4,6 @@ subject:
   kind: renovate
   title: "chore(deps): update giantswarm/architect orb to v10.5.1"
   failing: []
-  requiredMissing: false
+  missingContexts: []
 expect:
   rule: ""

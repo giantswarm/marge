@@ -1,0 +1,13 @@
+name: a 404 on something that is not a release asset is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update giantswarm/klausctl to v0.4.2"
+  failing: ["validate"]
+  logs:
+    "actions:validate": |
+      Run curl -sSfL -o schema.json https://json.schemastore.org/klausctl.json
+      curl: (22) The requested URL returned error: 404
+      Error: Process completed with exit code 22.
+expect:
+  rule: ""

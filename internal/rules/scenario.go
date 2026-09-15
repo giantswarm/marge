@@ -45,9 +45,9 @@ type ScenarioSubject struct {
 	Title     string                `yaml:"title"`
 	Failing   []string              `yaml:"failing"`
 	BaseState map[string]CheckState `yaml:"baseState"`
-	// RequiredMissing records a base branch that requires a context the head
-	// never reported.
-	RequiredMissing bool              `yaml:"requiredMissing"`
+	// MissingContexts records the required contexts of the base branch that
+	// the head never reported.
+	MissingContexts []string          `yaml:"missingContexts"`
 	Files           []string          `yaml:"files"`
 	Logs            map[string]string `yaml:"logs"`
 }
@@ -149,7 +149,7 @@ func (s *Scenario) subject() *Subject {
 		Title:           s.Subject.Title,
 		Failing:         s.Subject.Failing,
 		BaseState:       s.Subject.BaseState,
-		RequiredMissing: s.Subject.RequiredMissing,
+		MissingContexts: s.Subject.MissingContexts,
 	}
 	if len(s.Subject.Files) > 0 {
 		subject.Files = func() []string { return s.Subject.Files }

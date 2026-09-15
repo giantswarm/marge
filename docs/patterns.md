@@ -85,7 +85,9 @@ reason several guards exist.
   failing step's log. Never classify from a check name, a title, a
   repository, or a previous sweep's table. Validation refuses a rule whose
   only signal is one of those: a rule needs a log signal, or a `baseHead`,
-  `files` or `requiredMissing` signal that reads the PR's state.
+  `files` or `match.protection.missingContexts` signal that reads the PR's
+  state. A glob that matches everything is refused wherever one is
+  accepted, so `files: ["**"]` is no way past it.
 - **Absent is not green.** A base branch that never ran a check has not
   passed it. A job filtered off the default branch makes "green on main"
   meaningless.
@@ -105,7 +107,14 @@ reason several guards exist.
 - **A merged rule is live on the next sweep.** Nothing gates the catalogue
   but review on this repository: there is no signature and no release. That
   is the point, and it is why `strict-chain`, the one action that merges, is
-  held out of the catalogue until a measured run shows PRs that need it.
+  **held** in the registry until a measured run shows PRs that need it. A
+  rule may name it and validation accepts it; the sweep refuses it and says
+  so, so the gate is code rather than the absence of a rule.
+- **A context that has not reported is not a context nobody posts.** A
+  queued workflow reports nothing, which is what drift looks like. The
+  `checks-settled` guard waits for the head to finish reporting, and a
+  drift rule names the context shapes it diagnoses so the protection write
+  touches those and no others.
 - **A generated file is never hand-edited.** `zz_*`, the generated
   `renovate.json5`, the align-managed `.pre-commit-config.yaml` and
   `.circleci/workflows.yml`. `Makefile.custom.mk` and `Chart.yaml` are the

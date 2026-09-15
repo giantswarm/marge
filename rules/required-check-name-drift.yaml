@@ -3,8 +3,12 @@ summary: A required context no job posts any more, left behind by an alignment m
 source: runbook rows 21 and 44 (L139, L162)
 match:
   states: [waiting-checks]
-  pr:
-    requiredMissing: true
+  protection:
+    missingContexts:
+      - "ci/circleci: *"
+      - "package and push * chart"
+      - "*-build"
+      - "*-test"
 action:
   name: fix-protection-context
 evidence:

@@ -8,7 +8,7 @@ match:
     titlePattern: '(?i)^(chore|fix)\(deps\): update module '
   log:
     source: actions
-    pattern: 'go: downgraded|updates to go\.mod needed.*downgrade'
+    pattern: '(?m)^go: downgraded \S+ v\S*[-.]\d{14}-[0-9a-f]{12} => v\S+'
 action:
   name: close
 evidence:

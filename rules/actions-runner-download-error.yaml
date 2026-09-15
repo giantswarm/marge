@@ -5,7 +5,7 @@ match:
   states: [failed]
   log:
     source: actions
-    pattern: 'Error: (Failed to download action|getaddrinfo EAI_AGAIN)|HTTP 5\d\d.*(download|registry)|429 Too Many Requests'
+    pattern: 'Error: (Failed to download action|getaddrinfo EAI_AGAIN)|Error:.*HTTP 5\d\d.*(download|registry)|Error:.*429 Too Many Requests|##\[error\].*(429 Too Many Requests|Failed to download)'
 action:
   name: rerun-failed
 evidence:

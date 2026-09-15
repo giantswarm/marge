@@ -57,9 +57,10 @@ here is skipped at runtime, so the rule it carries would silently not exist.`,
 		if len(catalogue.Skipped) > 0 {
 			return fmt.Errorf("%d of %d documents are not usable rules", len(catalogue.Skipped), len(catalogue.Skipped)+len(catalogue.Rules))
 		}
+		registry := remedy.Default()
 		fmt.Printf("%d rules, catalogue %s\n", len(catalogue.Rules), catalogue.Digest)
 		for _, rule := range catalogue.Rules {
-			fmt.Printf("  %-34s %s\n", rule.Name, rule.Action.Name)
+			fmt.Printf("  %-34s %-24s %s\n", rule.Name, rule.Action.Name, guardSet(registry, rule))
 		}
 		return nil
 	},
@@ -110,6 +111,20 @@ so a rule cannot land on a signal nobody recorded.`,
 		fmt.Printf("%d scenarios over %d rules\n", len(scenarios), len(catalogue.Rules))
 		return nil
 	},
+}
+
+// guardSet is what refuses the rule's action: the guards the action itself
+// enforces, then the refusals the rule adds. A held action says so first,
+// because it refuses before any guard runs.
+func guardSet(registry *remedy.Registry, rule *rules.Rule) string {
+	if held := registry.HeldReason(rule.Action.Name); held != "" {
+		return "HELD: " + held
+	}
+	names := registry.GuardNames(rule.Action.Name)
+	for _, refusal := range rule.Refuse {
+		names = append(names, "+"+refusal)
+	}
+	return strings.Join(names, " ")
 }
 
 // loadCatalogueForCLI reads the catalogue from disk, or from a repository

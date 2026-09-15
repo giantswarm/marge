@@ -5,7 +5,7 @@ match:
   states: [failed]
   log:
     source: actions
-    pattern: 'curl: \(22\).*404'
+    pattern: 'releases/download/[^\n]*\n(?:[^\n]*\n){0,3}curl: \(22\)[^\n]*404'
 action:
   name: rerun-failed
 evidence:
