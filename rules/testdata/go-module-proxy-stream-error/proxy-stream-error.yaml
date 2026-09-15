@@ -1,0 +1,13 @@
+name: a dropped module-proxy connection is a rerun
+subject:
+  state: failed
+  kind: renovate
+  title: "fix(deps): update module github.com/giantswarm/mcp-oauth to v1.4.1"
+  failing: ["bootstrap"]
+  logs:
+    "actions:bootstrap": |
+      go: downloading github.com/giantswarm/selfupdate-cosign v0.2.0
+      go: gonum.org/v1/gonum/stat/distuv: github.com/giantswarm/selfupdate-cosign@v0.2.0: read "https://proxy.golang.org/github.com/giantswarm/selfupdate-cosign/@v/v0.2.0.mod": stream error: stream ID 51; INTERNAL_ERROR; received from peer
+      ##[error]Process completed with exit code 1.
+expect:
+  rule: go-module-proxy-stream-error

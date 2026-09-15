@@ -155,6 +155,9 @@ type StatusEntry struct {
 	// Policy is the sweep policy resolved for this PR's repository. Nil
 	// for a PR the sweep could not fetch.
 	Policy *Policy
+	// Unhandled describes a failure no rule of the catalogue recognised.
+	// Nil when a rule matched, or when the state is not one a rule acts on.
+	Unhandled *Unhandled
 }
 
 // ObsoleteReason names why a PR is not worth fixing.
@@ -271,6 +274,42 @@ func (s *PRStatus) Snapshot() []StatusEntry {
 	snap := make([]StatusEntry, len(s.entries))
 	copy(snap, s.entries)
 	return snap
+}
+
+// Unhandled is a failure the catalogue does not recognise yet. Its
+// signature groups the same failure across PRs, so a pattern worth a rule
+// is visible as a count rather than as one PR at a time.
+type Unhandled struct {
+	// Signature identifies the shape of the failure: the failing checks and
+	// the log excerpt, normalised.
+	Signature string
+	// Checks are the failing checks that produced a verdict.
+	Checks []string
+	// Excerpt is the log excerpt a rule would match against, when one was
+	// read. Empty when no rule asked for a log.
+	Excerpt string
+}
+
+// SetUnhandled records that no rule recognised this PR's failure.
+func (s *PRStatus) SetUnhandled(idx int, unhandled *Unhandled) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx >= 0 && idx < len(s.entries) {
+		s.entries[idx].Unhandled = unhandled
+	}
+}
+
+// UnhandledEntries returns the entries whose failure no rule recognised.
+func (s *PRStatus) UnhandledEntries() []StatusEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []StatusEntry
+	for _, e := range s.entries {
+		if e.Unhandled != nil {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // Counts holds the aggregate tallies of a sweep by outcome category.

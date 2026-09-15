@@ -161,3 +161,21 @@ func TestAroundErrorShorterThanTheBound(t *testing.T) {
 	body := "one\n##[error]two\ntrailer\n"
 	require.Equal(t, "one\n##[error]two\n", aroundError(body, 4096))
 }
+
+func TestPlainText(t *testing.T) {
+	raw := "2026-09-15T10:11:02.6059740Z \x1b[90m│\x1b[39m \x1b[38;2;241;97;97mTypeError: boom\x1b[39m\r\n" +
+		"2026-09-15T10:11:02.6060980Z   at resolveTypescriptProject\n"
+
+	got := PlainText(raw)
+
+	require.Equal(t, "│ TypeError: boom\n  at resolveTypescriptProject\n", got)
+}
+
+// Two occurrences of one failure differ only in their timestamps and their
+// colouring, so the stripped text is what identifies the failure.
+func TestPlainTextIsStableAcrossRuns(t *testing.T) {
+	first := "2026-09-15T10:11:02.6059740Z \x1b[31mError: boom\x1b[0m\n"
+	second := "2026-09-16T22:04:51.1000000Z Error: boom\n"
+
+	require.Equal(t, PlainText(first), PlainText(second))
+}

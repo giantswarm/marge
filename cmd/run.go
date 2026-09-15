@@ -23,6 +23,12 @@ var runOpts RunOptions
 
 var runActions string
 
+var runFlags struct {
+	rulesRepo string
+	rulesRef  string
+	rulesPath string
+}
+
 func init() {
 	runCmd.Flags().BoolVar(&runOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
 	runCmd.Flags().StringVar(&runActions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
@@ -32,6 +38,9 @@ func init() {
 	runCmd.Flags().StringVar(&runOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to scan for bot PRs instead of searching GitHub")
 	runCmd.Flags().BoolVar(&runOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	runCmd.Flags().BoolVar(&runOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
+	runCmd.Flags().StringVar(&runFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name")
+	runCmd.Flags().StringVar(&runFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from")
+	runCmd.Flags().StringVar(&runFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")
 	runCmd.Flags().StringVar(&runOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(runCmd)
@@ -75,6 +84,8 @@ and merge the eligible green ones.`,
 			query = args[0]
 		}
 
+		source := RulesSource{Repo: runFlags.rulesRepo, Ref: runFlags.rulesRef, Path: runFlags.rulesPath}
+
 		return watchLoop(ctx, runOpts.Watch, func(ctx context.Context) error {
 			scope, err := runOpts.resolveScope(ctx, client)
 			if err != nil {
@@ -90,8 +101,12 @@ and merge the eligible green ones.`,
 			}
 			prs := filterByOrg(found.PRs, runOpts.Org)
 
+			catalogue, rulesReport := loadRules(ctx, client, source)
+			reportRules(os.Stderr, rulesReport)
+
 			opts := runOpts
 			opts.Policies = scope.Policies
+			opts.Rules = catalogue
 			opts.Cols = pr.FullColumns()
 
 			if query == "" && len(prs) > 0 {

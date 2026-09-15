@@ -2,9 +2,16 @@ package process
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"maps"
+	"regexp"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
@@ -28,6 +35,7 @@ func (p *Processor) applyRule(ctx context.Context, run *prRun) {
 
 	hit := p.Rules.Match(p.subject(ctx, run, state))
 	if hit == nil {
+		p.recordUnhandled(run)
 		return
 	}
 	if p.DryRun {
@@ -225,4 +233,58 @@ func (p *Processor) appliedThisChange(ctx context.Context, run *prRun) map[remed
 		}
 	}
 	return applied
+}
+
+// recordUnhandled notes a failure no rule recognised, with a signature that
+// groups the same failure across PRs. It reads only excerpts the rules
+// already fetched, so noticing a pattern costs no extra request.
+func (p *Processor) recordUnhandled(run *prRun) {
+	if len(run.failing) == 0 {
+		return
+	}
+	checks := slices.Clone(run.failing)
+	slices.Sort(checks)
+
+	excerpt := ""
+	for _, key := range slices.Sorted(maps.Keys(run.excerpts)) {
+		if run.excerpts[key] != "" {
+			excerpt = signatureTail(logs.PlainText(run.excerpts[key]))
+			break
+		}
+	}
+	run.status.SetUnhandled(run.idx, &pr.Unhandled{
+		Signature: failureSignature(checks, excerpt),
+		Checks:    checks,
+		Excerpt:   excerpt,
+	})
+}
+
+// signatureBytes is how much of an excerpt identifies a failure. A rule's
+// excerpt ends at the error the job reported, so its last lines are the
+// failure; everything before it is the run that led there, and it carries
+// runner versions and image digests that differ between two PRs failing the
+// same way.
+const signatureBytes = 2000
+
+func signatureTail(excerpt string) string {
+	if len(excerpt) <= signatureBytes {
+		return excerpt
+	}
+	return excerpt[len(excerpt)-signatureBytes:]
+}
+
+// digitRE and hexRE blank out the parts of a log line that differ between
+// two occurrences of one failure: build numbers, SHAs, timestamps.
+var (
+	digitRE = regexp.MustCompile(`\d+`)
+	hexRE   = regexp.MustCompile(`\b[0-9a-f]{7,}\b`)
+)
+
+// failureSignature identifies the shape of a failure. Two PRs failing the
+// same way share it, whatever their build numbers and commit SHAs.
+func failureSignature(checks []string, excerpt string) string {
+	normalised := hexRE.ReplaceAllString(strings.ToLower(excerpt), "#")
+	normalised = digitRE.ReplaceAllString(normalised, "#")
+	sum := sha256.Sum256([]byte(strings.Join(checks, "\n") + "\n" + normalised))
+	return hex.EncodeToString(sum[:])[:12]
 }

@@ -19,6 +19,7 @@ the index.
 | cosign transparency-log conflict | `cosign-transparency-log-conflict` | `circleci-retry` | 32 |
 | A release asset 404 moments after publication | `release-asset-404-race` | `rerun-failed` | 33 |
 | An action or tool download that failed | `actions-runner-download-error` | `rerun-failed` | transient CI |
+| A dropped Go module-proxy connection | `go-module-proxy-stream-error` | `rerun-failed` | observed 2026-09-14 |
 | A failure already green on the base head | `stale-failure-green-on-base` | `update-branch` | 68 |
 | nancy guide-API error on an old orb | `nancy-guide-api-orb-delta` | `update-branch` | 37 |
 | A tag older than the pseudo-version in use | `renovate-downgrade-to-older-tag` | `close` | 16 |
@@ -26,6 +27,12 @@ the index.
 | A required context nobody reported | `required-check-name-drift` | `fix-protection-context` | 21, 44 |
 | A bump waiting on an upstream release | `ecosystem-not-ready` | `mark-wait` | 7, 9, 15, 31 |
 | gosec run without the repository configuration | `upstream-orb-gosec-fixtures` | `mark-wait` | 63 |
+
+A failure no rule recognises is grouped by signature in the sweep report
+under `unhandled`. `marge rules draft <signature>` writes a rule skeleton and
+a pair of scenarios from the PRs that carry it, then opens a draft pull
+request on `rule/<name>`. The skeleton leaves the action blank, so it does
+not validate until a person names one.
 
 ## Patterns that need a person
 
