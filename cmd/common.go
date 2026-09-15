@@ -84,14 +84,15 @@ func (o RunOptions) resolveScope(ctx context.Context, client *github.Client) (po
 	return scope, nil
 }
 
-// policyLoader returns a loader for the repository that holds the team
+// policyLoader returns a loader over the repository that holds the team
 // files and the policy files.
 func policyLoader(client *github.Client) (policy.Loader, error) {
 	owner, name, err := teamFileRepo()
 	if err != nil {
 		return policy.Loader{}, err
 	}
-	return policy.Loader{Client: client, Owner: owner, Repo: name}, nil
+	source := policy.GitHubSource{Client: client, Owner: owner, Repo: name}
+	return policy.Loader{Source: source, Owner: owner}, nil
 }
 
 // teamFileRepoEnv names the owner/repo that holds one file per team

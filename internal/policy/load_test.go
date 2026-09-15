@@ -1,46 +1,29 @@
 package policy
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"context"
 	"testing"
 
-	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
 
-// loader serves files over the contents API of a fake giantswarm/github. A
-// path that is not in files answers 404, the way GitHub answers both for a
-// file that is not there and for a repository the token cannot read.
+// mapSource holds the policy files of a fake giantswarm/github. A path it
+// does not hold is absent, the way GitHub answers both for a file that is
+// not there and for a repository the token cannot read.
+type mapSource map[string]string
+
+func (m mapSource) String() string { return "giantswarm/github" }
+
+func (m mapSource) Read(_ context.Context, path string) (string, bool, error) {
+	content, found := m[path]
+	return content, found, nil
+}
+
 func loader(t *testing.T, files map[string]string) Loader {
 	t.Helper()
-	const owner, repo = "giantswarm", "github"
-	prefix := fmt.Sprintf("/repos/%s/%s/contents/", owner, repo)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
-		content, ok := files[strings.TrimPrefix(r.URL.Path, prefix)]
-		if !ok {
-			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
-			return
-		}
-		body := base64.StdEncoding.EncodeToString([]byte(content))
-		kind, encoding := "file", "base64"
-		_ = json.NewEncoder(w).Encode(github.RepositoryContent{Type: &kind, Encoding: &encoding, Content: &body})
-	})
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	baseURL := server.URL + "/"
-	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
-	require.NoError(t, err)
-	return Loader{Client: client, Owner: owner, Repo: repo}
+	return Loader{Source: mapSource(files), Owner: "giantswarm"}
 }
 
 // TestTeamScope resolves the three files of a team scope and records which
@@ -78,16 +61,16 @@ func TestTeamScope_noPolicyFiles(t *testing.T) {
 	require.False(t, scope.Policies.Base().Schedule, "a team without a policy file is never swept by the schedule")
 }
 
-// TestTeamScope_unreadableRepository names the access in the error. The
-// repository list is read first for this reason: GitHub answers 404 for a
-// repository the token cannot read, so without it every file looks absent
-// and the sweep would run on the company defaults.
+// TestTeamScope_unreadableRepository names the source and the access in the
+// error. The repository list is read first for this reason: a source
+// reports an unreadable repository as an absent file, so without it every
+// file looks absent and the sweep would run on the company defaults.
 func TestTeamScope_unreadableRepository(t *testing.T) {
 	l := loader(t, nil)
 
 	_, err := l.TeamScope(t.Context(), "bumblebee")
 	require.ErrorContains(t, err, `no team file for "bumblebee"`)
-	require.ErrorContains(t, err, "the token cannot read giantswarm/github")
+	require.ErrorContains(t, err, "or it cannot be read")
 }
 
 // TestTeamScope_malformedFileStops refuses to sweep under a policy the team

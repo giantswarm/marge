@@ -25,12 +25,53 @@ func RepositoriesFile(team string) string {
 	return fmt.Sprintf("repositories/team-%s.yaml", team)
 }
 
-// Loader reads the policy files from the default branch of one repository,
-// giantswarm/github in every real run.
+// Source holds the policy files. Read returns the content of path, and
+// reports found false for a path the source does not hold, which is not an
+// error: an absent policy file falls back to the company defaults. A Source
+// names where it looked in its String, so an error can say so.
+//
+// GitHubSource is the only source the sweep ships. Nothing else in the
+// package knows where a file was read from.
+type Source interface {
+	fmt.Stringer
+	Read(ctx context.Context, path string) (content string, found bool, err error)
+}
+
+// Loader resolves a sweep's scope and policy from the files of one Source.
 type Loader struct {
+	Source Source
+	// Owner is the GitHub organisation the repository lists name their
+	// entries under. It is a property of what the files say, not of where
+	// they are read from, so it stays on the loader.
+	Owner string
+}
+
+// GitHubSource reads the files from the default branch of one repository,
+// giantswarm/github in every real run.
+type GitHubSource struct {
 	Client *github.Client
 	Owner  string
 	Repo   string
+}
+
+func (g GitHubSource) String() string { return g.Owner + "/" + g.Repo }
+
+// Read returns the content of path on the repository's default branch.
+// GitHub answers 404 both for a file that is not there and for a repository
+// the token cannot read, so neither is reported as an error here.
+func (g GitHubSource) Read(ctx context.Context, path string) (string, bool, error) {
+	file, _, resp, err := g.Client.Repositories.GetContents(ctx, g.Owner, g.Repo, path, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	content, err := file.GetContent()
+	if err != nil {
+		return "", false, fmt.Errorf("decoding %s: %w", path, err)
+	}
+	return content, true, nil
 }
 
 // Scope is what one sweep resolves before it starts: the repositories it
@@ -53,12 +94,12 @@ type Scope struct {
 // first turns that case into one error that names the access.
 func (l Loader) TeamScope(ctx context.Context, team string) (Scope, error) {
 	path := RepositoriesFile(team)
-	content, found, err := l.read(ctx, path)
+	content, found, err := l.Source.Read(ctx, path)
 	if err != nil {
 		return Scope{}, err
 	}
 	if !found {
-		return Scope{}, fmt.Errorf("no team file for %q: %s/%s has no %s, or the token cannot read %s/%s", team, l.Owner, l.Repo, path, l.Owner, l.Repo)
+		return Scope{}, fmt.Errorf("no team file for %q: %s has no %s, or it cannot be read", team, l.Source, path)
 	}
 	repos, exceptions, err := ParseRepositories(content, l.Owner, path)
 	if err != nil {
@@ -107,27 +148,11 @@ func (l Loader) companyAndTeamFiles(ctx context.Context, team string) ([]File, e
 // document reads and parses one policy file. A file that is not there
 // yields a nil document; every other read problem is an error.
 func (l Loader) document(ctx context.Context, path string) (*Document, error) {
-	content, found, err := l.read(ctx, path)
+	content, found, err := l.Source.Read(ctx, path)
 	if err != nil || !found {
 		return nil, err
 	}
 	return ParseDocument(path, content)
-}
-
-// read returns the content of path on the repository's default branch.
-func (l Loader) read(ctx context.Context, path string) (content string, found bool, err error) {
-	file, _, resp, err := l.Client.Repositories.GetContents(ctx, l.Owner, l.Repo, path, nil)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("reading %s: %w", path, err)
-	}
-	content, err = file.GetContent()
-	if err != nil {
-		return "", false, fmt.Errorf("decoding %s: %w", path, err)
-	}
-	return content, true, nil
 }
 
 // ParseRepositories returns the owner/name entries of a team's repository
