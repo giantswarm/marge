@@ -32,6 +32,9 @@ func NewSet(files []File, exceptions map[string]Exception) (*Set, error) {
 		if file.Doc == nil {
 			continue
 		}
+		if !file.Doc.resolved {
+			return nil, fmt.Errorf("policy file %s: only ParseDocument builds a document the sweep can apply", file.Path)
+		}
 		base = apply(base, file.Path, file.Doc)
 	}
 	set := &Set{base: base}

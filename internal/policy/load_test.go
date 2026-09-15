@@ -118,3 +118,18 @@ func TestTeamScope_emptyRepositoryList(t *testing.T) {
 	_, err := l.TeamScope(t.Context(), "shield")
 	require.ErrorContains(t, err, "lists no repositories")
 }
+
+// TestTeamScope_refusesATeamThatIsNotAName keeps a caller's team name out
+// of the file paths. The name reaches the loader from a flag and from an
+// MCP request, and it becomes part of two paths in giantswarm/github.
+func TestTeamScope_refusesATeamThatIsNotAName(t *testing.T) {
+	tests := []string{"../../secrets", "team/bumblebee", "Bumblebee", "", "-bumblebee"}
+	for _, team := range tests {
+		t.Run(team, func(t *testing.T) {
+			l := loader(t, map[string]string{RepositoriesFile("bumblebee"): "- name: marge\n"})
+
+			_, err := l.TeamScope(t.Context(), team)
+			require.ErrorContains(t, err, "is not a team name")
+		})
+	}
+}

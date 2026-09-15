@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/google/go-github/v92/github"
@@ -23,6 +24,19 @@ func TeamFile(team string) string {
 // RepositoriesFile returns the path of a team's repository list.
 func RepositoriesFile(team string) string {
 	return fmt.Sprintf("repositories/team-%s.yaml", team)
+}
+
+// teamName is the shape of a team name. The name reaches the loader from a
+// flag and from an MCP request, and it becomes part of two file paths, so
+// only the shape a team slug actually has is accepted.
+var teamName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// validateTeam refuses a team name that cannot name a policy file.
+func validateTeam(team string) error {
+	if !teamName.MatchString(team) {
+		return fmt.Errorf("team %q is not a team name: lowercase letters, digits and dashes, starting with a letter or a digit", team)
+	}
+	return nil
 }
 
 // Source holds the policy files. Read returns the content of path, and
@@ -93,6 +107,9 @@ type Scope struct {
 // giantswarm/github look the same. Reading the one file that must exist
 // first turns that case into one error that names the access.
 func (l Loader) TeamScope(ctx context.Context, team string) (Scope, error) {
+	if err := validateTeam(team); err != nil {
+		return Scope{}, err
+	}
 	path := RepositoriesFile(team)
 	content, found, err := l.Source.Read(ctx, path)
 	if err != nil {

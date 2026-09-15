@@ -263,3 +263,15 @@ func TestResolve_documentReuseDoesNotShare(t *testing.T) {
 	require.True(t, first.Base().Eligible(pr.KindRenovate, pr.UpdateMinor), "the exception stays on its repository")
 	require.True(t, second.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor), "a second set is untouched")
 }
+
+// TestNewSet_refusesAnUnresolvedDocument keeps the one construction path.
+// A Document's fields are exported for the YAML decoder, so a caller can
+// fill them by hand and reach a document whose names were never checked;
+// applying it would drop every update type the file names.
+func TestNewSet_refusesAnUnresolvedDocument(t *testing.T) {
+	byHand := &Document{UpdateTypes: map[string][]string{"renovate": {"patch"}}}
+
+	_, err := NewSet([]File{{Path: DefaultFile, Doc: byHand}}, nil)
+	require.ErrorContains(t, err, "only ParseDocument builds a document")
+	require.ErrorContains(t, err, DefaultFile)
+}

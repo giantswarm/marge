@@ -88,3 +88,21 @@ func TestPolicy_nilSetAppliesCompanyDefaults(t *testing.T) {
 	require.NotNil(t, entry.Policy)
 	require.Equal(t, pr.CompanyDefaults(), *entry.Policy)
 }
+
+// TestPolicy_switchedOffRepositoryWritesNothingForAnyAuthor holds "no write
+// at all" for a PR the sweep would not touch anyway: the repository decides
+// before the author does, so no classification label reaches it.
+func TestPolicy_switchedOffRepositoryWritesNothingForAnyAuthor(t *testing.T) {
+	off := false
+	fixture := greenFixture()
+	fixture.author = "a-person"
+	entry := fixture.run(t, func(p *Processor) {
+		p.Policies = policySet(t, "", map[string]policy.Exception{"repo": {Enabled: &off}})
+	})
+
+	require.Equal(t, pr.StatusSkipped, entry.State)
+	require.Equal(t, 0, int(fixture.labelAdds.Load()), "an excluded repository receives no write at all")
+	require.Equal(t, 0, int(fixture.labelRemoves.Load()))
+	require.Equal(t, 0, int(fixture.commentPosts.Load()))
+	require.Empty(t, entry.Label)
+}

@@ -129,6 +129,11 @@ func TestParseRepositories_failsLoudly(t *testing.T) {
 			want:    `botPRsSweep.updateTypes of repository marge: unknown update type "teeny"`,
 		},
 		{
+			name:    "none in an exception",
+			content: "- name: marge\n  botPRsSweep:\n    updateTypes: [patch, none]\n",
+			want:    `botPRsSweep.updateTypes of repository marge: "none" reaches no kind an exception covers`,
+		},
+		{
 			name:    "not a repository list",
 			content: "name: marge\n",
 			want:    "parsing team file",

@@ -180,6 +180,14 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	run := &prRun{info: info, pull: pullReq, status: status, idx: idx}
 	defer p.finish(ctx, run)
 
+	resolved := p.Policies.For(info.Repo)
+	status.SetPolicy(idx, resolved)
+	if !resolved.Sweep {
+		run.untouched = true
+		run.set(pr.StatusSkipped, "sweep switched off for this repository by policy")
+		return
+	}
+
 	author := pullReq.GetUser().GetLogin()
 	kind := pr.KindOf(author)
 	if kind == "" {
@@ -188,14 +196,6 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
 	status.SetClassification(idx, kind, updateType)
-
-	resolved := p.Policies.For(info.Repo)
-	status.SetPolicy(idx, resolved)
-	if !resolved.Sweep {
-		run.untouched = true
-		run.set(pr.StatusSkipped, "sweep switched off for this repository by policy")
-		return
-	}
 
 	if pullReq.GetMerged() {
 		run.set(pr.StatusAlreadyMerged, "")

@@ -163,7 +163,7 @@ A repository entry deviates under `botPRsSweep`, with three keys that only narro
 
 `updateTypes` here reaches Renovate and Dependabot only. An Align files or Herald PR names no version, so restricting the update sizes of one repository does not stop those two kinds from merging.
 
-An exception that tries to switch the rescues back on where the team switched them off is an error, and so is an update type the team merges for no kind. A widening is refused, never silently narrowed. `enabled` has no team-level counterpart: a repository is the only place the sweep itself is switched off.
+An exception that tries to switch the rescues back on where the team switched them off is an error, and so is an update type the team merges for no kind. A widening is refused, never silently narrowed. `none` is refused here too: it belongs to Align files and Herald, which an exception does not reach, so a list that names it would read as a restriction and switch every Renovate and Dependabot merge off. `enabled` has no team-level counterpart: a repository is the only place the sweep itself is switched off.
 
 `giantswarm/github` validates both policy files against `bot-prs-sweep/policy.schema.json` on every pull request, so a misspelled key fails there and not on the next sweep.
 
@@ -432,7 +432,7 @@ marge sweep --team bumblebee --output json
 2. In interactive mode, groups results by repository (or dependency) and presents a selector.
 3. For each PR, in parallel (the policy's `concurrency`, by default 5 repositories at a time and one PR per repository):
    - Reads the PR, its kind and update size, its checks, the base branch's required status checks and its markers.
-   - Applies the [guards](#guards) in order: trusted author, repository swept at all, auto-merge, security check, required checks, red non-required checks, eligibility.
+   - Applies the [guards](#guards) in order: repository swept at all, trusted author, auto-merge, security check, required checks, red non-required checks, eligibility.
    - Approves the PR if not already approved, then squash-merges it; a PR behind its base is brought up to date instead.
    - On a failure, looks behind failing CircleCI statuses (auto-cancelled builds are `Cancelled` and retried by the `retry` action) and compares the failing checks with the base head (fixed there already is `Stale` and refreshed by the `refresh` action).
    - Writes the classification label and, where it acted, an evidence comment.

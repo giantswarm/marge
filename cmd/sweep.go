@@ -96,10 +96,11 @@ applying defaults the team never wrote. Every outcome records the policy it
 was decided under.
 
 Each PR gets one bot-prs-sweep/<class> label with its classification.
-Green eligible PRs (by company default: patch and minor updates, Align
-files, Herald) are approved and squash-merged; majors and unreadable
-updates are held for a person. A repository whose exception switches the
-sweep off receives no write at all, the label included. A required check that is pending or never reported is a wait,
+Green eligible PRs (by company default: patch, minor, digest, pin and
+lockfile updates, Align files, Herald) are approved and squash-merged;
+majors and unreadable updates are held for a person. A repository whose
+exception switches the sweep off receives no write at all, the label
+included. A required check that is pending or never reported is a wait,
 never a bypass. A failing security check is never merged past. A red
 non-required check blocks the merge when it is green on the base head and
 is merged past, named in the evidence, when it is red there too.

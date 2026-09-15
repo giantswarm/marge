@@ -46,6 +46,11 @@ type Document struct {
 
 	// updateTypes is UpdateTypes with every name resolved.
 	updateTypes map[pr.Kind][]pr.UpdateType
+	// resolved is set by ParseDocument alone. The exported fields exist
+	// for the YAML decoder, so a caller can fill them by hand and reach a
+	// document whose names were never checked; NewSet refuses that
+	// document instead of applying a policy with an empty updateTypes.
+	resolved bool
 }
 
 // RescueDocument is the rescue section of a policy file.
@@ -123,6 +128,7 @@ func ParseDocument(path, content string) (*Document, error) {
 	if err := doc.resolve(); err != nil {
 		return nil, fmt.Errorf("policy file %s: %w", path, err)
 	}
+	doc.resolved = true
 	return &doc, nil
 }
 
@@ -205,6 +211,12 @@ func (e Exception) resolve(repo string) ([]pr.UpdateType, error) {
 	types, err := updateTypes(e.UpdateTypes)
 	if err != nil {
 		return nil, fmt.Errorf("botPRsSweep.updateTypes of repository %s: %w", repo, err)
+	}
+	// An exception reaches the kinds that name a version. UpdateNone belongs
+	// to Align files and Herald alone, so a list that holds it intersects
+	// every versioned list to nothing while reading as a restriction.
+	if slices.Contains(types, pr.UpdateNone) {
+		return nil, fmt.Errorf("botPRsSweep.updateTypes of repository %s: %q reaches no kind an exception covers: an exception restricts the Renovate and Dependabot lists, and those always name a version", repo, pr.UpdateNone)
 	}
 	return types, nil
 }
