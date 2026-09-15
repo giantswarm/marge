@@ -26,6 +26,9 @@ type Subject struct {
 	// BaseState says what the base head reported for each failing check.
 	// A name absent from the map is CheckAbsent, and absent is not green.
 	BaseState map[string]CheckState
+	// RequiredMissing reports whether the base branch requires a context the
+	// head never reported.
+	RequiredMissing bool
 	// Files returns the paths of the PR diff. It is called only for a rule
 	// that carries a file signal, so a catalogue without one costs no
 	// comparison. Nil returns no files, and such a rule does not match.
@@ -81,8 +84,7 @@ func (r *Rule) match(subject *Subject) *Hit {
 		return nil
 	}
 	if r.Match.PR != nil && r.Match.PR.BaseHead != BaseAny {
-		candidates = filterByBaseState(candidates, subject, CheckState(r.Match.PR.BaseHead))
-		if len(candidates) == 0 {
+		if !allInBaseState(candidates, subject, CheckState(r.Match.PR.BaseHead)) {
 			return nil
 		}
 	}
@@ -108,24 +110,34 @@ func (r *Rule) candidates(subject *Subject) []string {
 	return out
 }
 
-func filterByBaseState(candidates []string, subject *Subject, want CheckState) []string {
-	var out []string
+// allInBaseState reports whether the base head answers want for every check
+// the rule selected. One of them is not enough: a PR that carries a
+// transient failure the base fixed and a real failure beside it is not a PR
+// the base head has anything to say about, and the evidence a rule writes
+// speaks for every check it named.
+func allInBaseState(candidates []string, subject *Subject, want CheckState) bool {
+	if len(candidates) == 0 {
+		return false
+	}
 	for _, name := range candidates {
 		state, ok := subject.BaseState[name]
 		if !ok {
 			state = CheckAbsent
 		}
-		if state == want {
-			out = append(out, name)
+		if state != want {
+			return false
 		}
 	}
-	return out
+	return true
 }
 
 func (r *Rule) matchPRMetadata(subject *Subject) bool {
 	p := r.Match.PR
 	if p == nil {
 		return true
+	}
+	if p.RequiredMissing && !subject.RequiredMissing {
+		return false
 	}
 	if re := r.TitlePattern(); re != nil && !re.MatchString(subject.Title) {
 		return false

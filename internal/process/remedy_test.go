@@ -89,9 +89,9 @@ func remedyRun(state pr.StatusState) *prRun {
 	}
 }
 
-// Every remediable classification reaches the rule stage. ProcessPR ends a
-// PR from many branches and each one runs finish, so a new early return
-// cannot silently skip the catalogue.
+// The rule stage runs for every remediable classification and for no
+// other. TestProcessPRReachesTheRuleStage covers the wiring that gets a PR
+// here.
 func TestRuleStageRunsForEveryRemediableState(t *testing.T) {
 	states := map[string]pr.StatusState{
 		"failed":            pr.StatusFailed,

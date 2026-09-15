@@ -62,13 +62,14 @@ func evidenceReason(hit *rules.Hit, digest string) string {
 // subject is what the catalogue matches against.
 func (p *Processor) subject(ctx context.Context, run *prRun, state pr.StatusState) *rules.Subject {
 	return &rules.Subject{
-		State:     state,
-		Kind:      run.kind,
-		Title:     run.pull.GetTitle(),
-		Failing:   run.failing,
-		BaseState: p.baseStates(ctx, run),
-		Files:     func() []string { return p.diffFiles(ctx, run) },
-		Log:       p.logExcerpt(ctx, run),
+		State:           state,
+		Kind:            run.kind,
+		Title:           run.pull.GetTitle(),
+		Failing:         run.failing,
+		BaseState:       p.baseStates(ctx, run),
+		RequiredMissing: len(run.required.Missing) > 0,
+		Files:           func() []string { return p.diffFiles(ctx, run) },
+		Log:             p.logExcerpt(ctx, run),
 	}
 }
 
@@ -115,7 +116,7 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 		Failing:           run.failing,
 		SecurityFailure:   classifySecurityFailure(run.failing, p.securityPatterns()),
 		Required:          run.required,
-		Base:              p.baseSplit(ctx, run),
+		Base:              baseSplit(p.baseStates(ctx, run)),
 		Check:             hit.Check,
 		CheckURL:          run.checkURL(hit.Check),
 		LogMatched:        hit.LogMatched,
@@ -161,9 +162,9 @@ func (p *Processor) baseStates(ctx context.Context, run *prRun) map[string]rules
 }
 
 // baseSplit partitions the failing checks the way an action reads them.
-func (p *Processor) baseSplit(ctx context.Context, run *prRun) remedy.BaseStates {
+func baseSplit(states map[string]rules.CheckState) remedy.BaseStates {
 	var split remedy.BaseStates
-	for name, state := range p.baseStates(ctx, run) {
+	for name, state := range states {
 		switch state {
 		case rules.CheckGreen:
 			split.Green = append(split.Green, name)

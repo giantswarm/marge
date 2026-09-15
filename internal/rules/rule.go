@@ -85,10 +85,17 @@ type PRMatch struct {
 	TitlePattern string `yaml:"titlePattern"`
 	// Files are globs; every one of them must match a file of the diff.
 	Files []string `yaml:"files"`
+	// RequiredMissing asks for a base branch that requires a context the
+	// head never reported. Such a PR has no failing check to read, so this
+	// is the only signal that reaches it.
+	RequiredMissing bool `yaml:"requiredMissing"`
 }
 
 // BaseHead is what the base branch head reported for the checks failing on
-// the PR. Absent is its own value: a check the base never ran is not green.
+// the PR. Every failing check the rule selected must report it, so a PR
+// that carries one transient failure and one real failure matches neither
+// green nor red. Absent is its own value: a check the base never ran is not
+// green.
 type BaseHead string
 
 const (

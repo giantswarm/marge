@@ -676,3 +676,18 @@ func TestParseActions(t *testing.T) {
 	require.Contains(t, err.Error(), "classify, approve, merge, refresh, retry, remedy, mark")
 	require.True(t, strings.Contains(err.Error(), fmt.Sprintf("%q", "rescue")))
 }
+
+// once-per-change reads the evidence marker, and only the mark action
+// writes one. A remedy without it would repeat on every sweep, so the pair
+// is refused rather than silently weakened.
+func TestParseActionsRefusesRemedyWithoutMark(t *testing.T) {
+	_, err := ParseActions("classify,remedy")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "needs")
+	require.Contains(t, err.Error(), "once-per-change")
+
+	both, err := ParseActions("remedy,mark")
+	require.NoError(t, err)
+	require.True(t, both.Has(ActionRemedy))
+	require.True(t, both.Has(ActionMark))
+}

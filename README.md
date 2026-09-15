@@ -192,13 +192,13 @@ An action marge performed, or a guard decision a person needs to see, is written
 
 #### Actions
 
-`--actions` runs a subset of the sweep steps, always in this order: `classify` (read the PR, its checks and markers, decide the state, write the label; always runs), `approve`, `merge`, `refresh` (update stale branches from their base), `retry` (re-run auto-cancelled CircleCI builds on the same head), `remedy` (apply the catalogue rule that matches the classification; see [Rules](#rules)), `mark` (write markers and evidence comments). `--dry-run` decides every outcome and writes nothing, labels included.
+`--actions` runs a subset of the sweep steps, always in this order: `classify` (read the PR, its checks and markers, decide the state, write the label; always runs), `approve`, `merge`, `refresh` (update stale branches from their base), `retry` (re-run auto-cancelled CircleCI builds on the same head), `remedy` (apply the catalogue rule that matches the classification; see [Rules](#rules)), `mark` (write markers and evidence comments). `remedy` needs `mark` and is refused without it: the one-attempt-per-change guard reads the evidence marker, so a remedy that writes none repeats on every sweep. `--dry-run` decides every outcome and writes nothing, labels included.
 
 #### Rules
 
 The `remedy` step matches a classified PR against a catalogue of rules and applies the action the matching rule names. Rules live in this repository under `rules/`, one YAML document per file, and are **read at the start of every sweep from the default branch**. The binary does not embed them, so a merged rule is live on the next run without a release. `--rules-ref`, `--rules-repo` and `--rules-path` change where the catalogue is read from; `--rules-path` reads a directory on disk, which is how a rule is tried before it is merged.
 
-A rule carries a detection signal (a check-name glob, a bounded log-excerpt expression, or PR metadata), the name of one action, refusals it adds, and the evidence line written on the PR:
+A rule carries a detection signal, the name of one action, refusals it adds, and the evidence line written on the PR. The signal is a check-name glob (`match.check.name`), a bounded log-excerpt expression (`match.log`), or PR metadata (`match.pr`): the title (`titlePattern`), the diff (`files`), what the base head reported for the failing checks (`baseHead`), or a required context the head never reported (`requiredMissing`). A `baseHead` condition must hold for every check the rule selected, so a PR carrying one transient failure and one real failure matches neither `green` nor `red`.
 
 ```yaml
 name: circleci-auto-cancel

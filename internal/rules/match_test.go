@@ -227,3 +227,47 @@ func TestMatchNilCatalogue(t *testing.T) {
 	var missing *Catalogue
 	require.Nil(t, missing.Match(&Subject{State: pr.StatusFailed}))
 }
+
+// A base-head condition speaks for every check the rule selected. One
+// transient failure the base fixed does not carry a real failure beside it.
+func TestMatchBaseHeadHoldsForEveryCandidate(t *testing.T) {
+	cat := catalogue(t, behindRule)
+
+	subject := &Subject{
+		State:   pr.StatusStale,
+		Failing: []string{"go-build", "go-test"},
+		BaseState: map[string]CheckState{
+			"go-build": CheckGreen,
+			"go-test":  CheckRed,
+		},
+	}
+	require.Nil(t, cat.Match(subject), "one check green on the base head is not every check")
+
+	subject.BaseState["go-test"] = CheckGreen
+	require.NotNil(t, cat.Match(subject))
+}
+
+// A PR waiting on a context nobody reported carries no failing check, so
+// requiredMissing is the only signal that reaches it.
+func TestMatchRequiredMissing(t *testing.T) {
+	cat := catalogue(t, `
+name: context-drift
+summary: A required context no job posts any more.
+source: runbook rows 21 and 44
+match:
+  states: [waiting-checks]
+  pr:
+    requiredMissing: true
+action:
+  name: update-branch
+evidence:
+  reason: refreshed
+`)
+
+	require.Nil(t, cat.Match(&Subject{State: pr.StatusWaitingChecks}))
+
+	hit := cat.Match(&Subject{State: pr.StatusWaitingChecks, RequiredMissing: true})
+	require.NotNil(t, hit)
+	require.Equal(t, "context-drift", hit.Rule.Name)
+	require.Empty(t, hit.Check)
+}

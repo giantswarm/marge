@@ -57,6 +57,9 @@ func ParseActions(csv string) (ActionSet, error) {
 		set[name] = true
 	}
 	set[ActionClassify] = true
+	if set[ActionRemedy] && !set[ActionMark] {
+		return nil, fmt.Errorf("action %q needs %q: the once-per-change guard reads the evidence marker, so a remedy without it repeats on every sweep", ActionRemedy, ActionMark)
+	}
 	return set, nil
 }
 

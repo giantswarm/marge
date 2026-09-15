@@ -126,8 +126,8 @@ func (r *Rule) validateMatch() error {
 			}
 			r.compiled.titleRE = compiled
 		}
-		if p.BaseHead == BaseAny && p.TitlePattern == "" && len(p.Files) == 0 {
-			return errors.New("match.pr needs baseHead, titlePattern or files")
+		if p.BaseHead == BaseAny && p.TitlePattern == "" && len(p.Files) == 0 && !p.RequiredMissing {
+			return errors.New("match.pr needs baseHead, titlePattern, files or requiredMissing")
 		}
 		for _, glob := range p.Files {
 			if strings.TrimSpace(glob) == "" {
