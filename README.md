@@ -78,7 +78,7 @@ export GITHUB_TOKEN="ghp_..."
 | Contents | Read & write | Compare a PR with its base (stale classification, marker fingerprints); update a PR branch from its base |
 | Administration | Read | Read the base branch's required status checks. Without it marge approves and tries the merge, GitHub enforces the checks, and a refusal for a check reason is reported as `Waiting for checks` |
 
-With `--team`, the token also needs read access to `giantswarm/github`, where the team files live.
+With `--team`, the token also needs read access to the team-file repository: `giantswarm/github`, or the `owner/repo` that `MARGE_TEAM_FILE_REPO` names.
 
 Optionally, a CircleCI API token lets marge inspect builds of **private** CircleCI projects and retry auto-cancelled builds (see [Cancelled builds](#cancelled-builds-circleci-auto-cancel)). marge reads `CIRCLECI_CLI_TOKEN` or the CircleCI CLI's own config, `~/.circleci/cli.yml`, and sends it as the `Circle-Token` header. Public projects need no token.
 
@@ -247,8 +247,10 @@ Use [`marge mark`](#marge-mark-pr-url-flags) to write markers without knowing th
 
 Sweeps one scope without interactive grouping. Exactly one scope is given:
 
-- `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in `giantswarm/github` (only each entry's `name` is read) and sweeps their open bot PRs. Pending checks are not waited for: a `Waiting for checks` PR is reported and the next sweep decides.
-- `--query <text>` runs marge's GitHub search the way `marge [query]` does, for personal repositories and organisations without a team file; `--org` and `--repos-file` belong to this scope. Pending checks are polled for up to `--check-timeout` (5 minutes).
+- `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in the team-file repository (`giantswarm/github` unless `MARGE_TEAM_FILE_REPO` names another `owner/repo`; only each entry's `name` is read) and sweeps their open bot PRs.
+- `--query <text>` runs marge's GitHub search the way `marge [query]` does, for personal repositories and organisations without a team file; `--org` and `--repos-file` belong to this scope.
+
+A sweep does not wait for pending checks: a `Waiting for checks` PR is reported and the next sweep decides. `--check-timeout` opts into a wait.
 
 The live table shows every PR's outcome, including the failure reason and any ai-rescue marker, followed by a one-line summary. With `--no-tui` the results are printed as plain-text groups: **Merged**, **Security failures**, **Failed**, **Stale** and **Refreshed**, **Cancelled** and **Retried**, **Obsolete** (bot PRs a higher-version sibling replaces, and bot PRs whose diff changes nothing that executes, see [Obsolete bot PRs](#obsolete-bot-prs)), **Waiting for checks**, **CI unavailable (Actions budget)**, **CI unavailable (no verdict)** (PRs whose failing checks established nothing about the code, see [CI unavailable (no verdict)](#ci-unavailable-no-verdict)), and **Skipped**. With `--output json` the same structure the MCP `sweep` tool returns is printed, including `repositories_failed` for repositories whose PRs could not be listed.
 
@@ -258,7 +260,7 @@ The live table shows every PR's outcome, including the failure reason and any ai
 | `--query` | | | GitHub search text (query scope) |
 | `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `mark` (see [Actions](#actions)) |
 | `--dry-run` | | `false` | Decide every outcome, write nothing |
-| `--check-timeout` | | `0` with `--team`, `5m` with `--query` | How long to wait for one PR's pending checks |
+| `--check-timeout` | | `0` | How long to wait for one PR's pending checks; zero reports the PR as waiting |
 | `--watch` | `-w` | `false` | Keep polling for new PRs every 60 seconds |
 | `--org` | | | Limit to repos owned by this org or user (query scope) |
 | `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan instead of searching GitHub (query scope) |
@@ -363,7 +365,7 @@ marge sweep --team bumblebee --output json
 
 ## How it works
 
-1. Resolves the scope: with `--team`, the repositories of the team file in `giantswarm/github`; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`. A repository whose PRs cannot be listed is reported, never silently dropped.
+1. Resolves the scope: with `--team`, the repositories of the team file in the team-file repository; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`. A repository whose PRs cannot be listed is reported, never silently dropped.
 2. In interactive mode, groups results by repository (or dependency) and presents a selector.
 3. For each PR, in parallel (up to 5 concurrent, one repository at a time):
    - Reads the PR, its kind and update size, its checks, the base branch's required status checks and its markers.

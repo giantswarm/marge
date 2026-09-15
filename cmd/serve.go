@@ -209,7 +209,7 @@ func sweepTool() mcp.Tool {
 			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
 		),
 		mcp.WithString("team",
-			mcp.Description("Sweep the repositories of this team, read from repositories/team-<name>.yaml in giantswarm/github. Mutually exclusive with query, org, repos and repos_file."),
+			mcp.Description("Sweep the repositories of this team, read from repositories/team-<name>.yaml in the team-file repository (giantswarm/github, or $MARGE_TEAM_FILE_REPO). Mutually exclusive with query, org, repos and repos_file."),
 		),
 		mcp.WithString("actions",
 			mcp.Description("Comma-separated sweep steps to run, in fixed order: classify, approve, merge, refresh, retry, mark (default: all). refresh updates stale branches from their base; retry reruns the CircleCI workflow of auto-cancelled builds on the same head from its failed jobs, falling back to a single-build retry (needs CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); mark writes markers and evidence comments."),
@@ -287,9 +287,6 @@ func parseSweepRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 	}
 	if req.Opts.Team != "" && (req.Query != "" || len(req.Repos) > 0 || req.Opts.Org != "" || req.Opts.ReposFile != "") {
 		return sweepRequest{}, errors.New("team is mutually exclusive with query, org, repos and repos_file")
-	}
-	if req.Opts.Team == "" {
-		req.Opts.CheckTimeout = defaultQueryCheckTimeout
 	}
 	return req, nil
 }

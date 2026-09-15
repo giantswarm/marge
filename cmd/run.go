@@ -57,7 +57,7 @@ and merge the eligible green ones.`,
 			return err
 		}
 		runOpts.Actions = actions
-		runOpts.CheckTimeout = defaultQueryCheckTimeout
+		runOpts.CheckTimeout = interactiveCheckTimeout
 
 		client, err := gh.NewClient(ctx)
 		if err != nil {

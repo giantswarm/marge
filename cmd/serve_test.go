@@ -223,7 +223,6 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 			MergeAuto:        true,
 			Quiet:            true,
 			Actions:          process.ActionSet{process.ActionClassify: true, process.ActionMerge: true},
-			CheckTimeout:     defaultQueryCheckTimeout,
 			Org:              "my-org",
 			ReposFile:        "/tmp/repos.txt",
 			SecurityPatterns: "Trivy,Analyze",
@@ -235,8 +234,7 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 }
 
 // TestParseSweepRequest_teamScope guards the two scopes: team resolves the
-// repositories and waits zero for pending checks; team together with any
-// query-scope argument is refused.
+// repositories; team together with any query-scope argument is refused.
 func TestParseSweepRequest_teamScope(t *testing.T) {
 	got, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"team": "bumblebee"}}})
 	if err != nil {
@@ -262,9 +260,8 @@ func TestParseSweepRequest_teamScope(t *testing.T) {
 }
 
 // TestParseSweepRequest_defaultsMatchSweepCommand guards that a call with no
-// arguments behaves like a bare `marge sweep --query ""`: every action, the
-// query scope's check wait, no query, and Quiet because stdout is the
-// transport.
+// arguments behaves like a bare `marge sweep --query ""`: every action, no
+// wait for checks, no query, and Quiet because stdout is the transport.
 func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
 	got, err := parseSweepRequest(mcp.CallToolRequest{})
 	if err != nil {
@@ -273,9 +270,8 @@ func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
 	allActions, _ := process.ParseActions("")
 	want := sweepRequest{
 		Opts: RunOptions{
-			Quiet:        true,
-			Actions:      allActions,
-			CheckTimeout: defaultQueryCheckTimeout,
+			Quiet:   true,
+			Actions: allActions,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

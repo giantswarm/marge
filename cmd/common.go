@@ -64,22 +64,41 @@ func (o RunOptions) repoList(ctx context.Context, client *github.Client) ([]stri
 	return readReposFile(o.ReposFile)
 }
 
-// teamFileOwner and teamFileRepo name the repository that holds one file
-// per team listing the repositories the team owns.
+// teamFileRepoEnv names the owner/repo that holds one file per team
+// listing the repositories the team owns; defaultTeamFileRepo applies when
+// it is unset.
 const (
-	teamFileOwner = "giantswarm"
-	teamFileRepo  = "github"
+	teamFileRepoEnv     = "MARGE_TEAM_FILE_REPO"
+	defaultTeamFileRepo = "giantswarm/github"
 )
 
+// teamFileRepo returns the owner and name of the team-file repository.
+func teamFileRepo() (owner, name string, err error) {
+	spec := strings.TrimSpace(os.Getenv(teamFileRepoEnv))
+	if spec == "" {
+		spec = defaultTeamFileRepo
+	}
+	owner, name, ok := strings.Cut(spec, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", "", fmt.Errorf("%s=%q: want owner/repo", teamFileRepoEnv, spec)
+	}
+	return owner, name, nil
+}
+
 // teamRepos resolves a team's repositories from repositories/team-<name>.yaml
-// in giantswarm/github. Only each entry's name is read; every other key of
-// the team file belongs to the generators and changes without notice.
+// in the team-file repository. Only each entry's name is read; every other
+// key of the team file belongs to the generators and changes without
+// notice. The repositories live under the team-file repository's owner.
 func teamRepos(ctx context.Context, client *github.Client, team string) ([]string, error) {
+	owner, name, err := teamFileRepo()
+	if err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("repositories/team-%s.yaml", team)
-	file, _, resp, err := client.Repositories.GetContents(ctx, teamFileOwner, teamFileRepo, path, nil)
+	file, _, resp, err := client.Repositories.GetContents(ctx, owner, name, path, nil)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("no team file for %q: %s/%s has no %s", team, teamFileOwner, teamFileRepo, path)
+			return nil, fmt.Errorf("no team file for %q: %s/%s has no %s", team, owner, name, path)
 		}
 		return nil, fmt.Errorf("reading team file %s: %w", path, err)
 	}
@@ -87,11 +106,11 @@ func teamRepos(ctx context.Context, client *github.Client, team string) ([]strin
 	if err != nil {
 		return nil, fmt.Errorf("decoding team file %s: %w", path, err)
 	}
-	return parseTeamFile(content, path)
+	return parseTeamFile(content, owner, path)
 }
 
 // parseTeamFile returns the owner/name entries of a team file's content.
-func parseTeamFile(content, path string) ([]string, error) {
+func parseTeamFile(content, owner, path string) ([]string, error) {
 	var entries []struct {
 		Name string `yaml:"name"`
 	}
@@ -101,7 +120,7 @@ func parseTeamFile(content, path string) ([]string, error) {
 	var repos []string
 	for _, e := range entries {
 		if name := strings.TrimSpace(e.Name); name != "" {
-			repos = append(repos, teamFileOwner+"/"+name)
+			repos = append(repos, owner+"/"+name)
 		}
 	}
 	if len(repos) == 0 {

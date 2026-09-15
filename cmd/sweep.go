@@ -20,23 +20,22 @@ import (
 var sweepOpts RunOptions
 
 var sweepFlags struct {
-	actions         string
-	output          string
-	checkTimeout    time.Duration
-	checkTimeoutSet bool
+	actions      string
+	output       string
+	checkTimeout time.Duration
 }
 
-// defaultQueryCheckTimeout is how long a query-scope sweep waits for
-// pending checks on one PR, as marge always did. The team scope waits
-// zero: a pending PR is reported and the next sweep decides.
-const defaultQueryCheckTimeout = 5 * time.Minute
+// interactiveCheckTimeout is how long the interactive command waits for
+// pending checks on one PR. A sweep waits zero unless --check-timeout asks
+// for it: a pending PR is reported and the next sweep decides.
+const interactiveCheckTimeout = 5 * time.Minute
 
 func init() {
-	sweepCmd.Flags().StringVar(&sweepOpts.Team, "team", "", "Sweep the repositories of this team, read from repositories/team-<name>.yaml in giantswarm/github")
+	sweepCmd.Flags().StringVar(&sweepOpts.Team, "team", "", "Sweep the repositories of this team, read from repositories/team-<name>.yaml in "+defaultTeamFileRepo+" (or $"+teamFileRepoEnv+")")
 	sweepCmd.Flags().StringVar(&sweepOpts.Query, "query", "", "Sweep the bot PRs matching this GitHub search text, the way `marge [query]` does")
 	sweepCmd.Flags().StringVar(&sweepFlags.actions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
 	sweepCmd.Flags().BoolVar(&sweepOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
-	sweepCmd.Flags().DurationVar(&sweepFlags.checkTimeout, "check-timeout", 0, "How long to wait for a PR's pending checks (default: 0 with --team, 5m with --query)")
+	sweepCmd.Flags().DurationVar(&sweepFlags.checkTimeout, "check-timeout", 0, "How long to wait for a PR's pending checks; zero reports the PR as waiting")
 	sweepCmd.Flags().BoolVarP(&sweepOpts.Watch, "watch", "w", false, "Keep polling for new PRs (every 60s)")
 	sweepCmd.Flags().StringVar(&sweepOpts.Org, "org", "", "Limit to repos owned by this org or user (query scope)")
 	sweepCmd.Flags().StringVar(&sweepOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to scan for bot PRs instead of searching GitHub (query scope)")
@@ -50,7 +49,7 @@ func init() {
 
 // resolveSweepOptions validates the scope flags and fills the options that
 // depend on them.
-func resolveSweepOptions(cmd *cobra.Command, opts *RunOptions) error {
+func resolveSweepOptions(opts *RunOptions) error {
 	switch {
 	case opts.Team != "" && opts.Query != "":
 		return errors.New("--team and --query are mutually exclusive")
@@ -65,9 +64,6 @@ func resolveSweepOptions(cmd *cobra.Command, opts *RunOptions) error {
 	}
 	opts.Actions = actions
 	opts.CheckTimeout = sweepFlags.checkTimeout
-	if !cmd.Flags().Changed("check-timeout") && opts.Team == "" {
-		opts.CheckTimeout = defaultQueryCheckTimeout
-	}
 	switch sweepFlags.output {
 	case "table":
 	case "json":
@@ -137,7 +133,7 @@ marge never closes a PR itself.`,
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
-		if err := resolveSweepOptions(cmd, &sweepOpts); err != nil {
+		if err := resolveSweepOptions(&sweepOpts); err != nil {
 			return err
 		}
 
