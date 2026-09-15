@@ -36,7 +36,7 @@ linters:
       # CircleCI CLI's own ~/.circleci/cli.yml and the --rules-path
       # catalogue is the feature: every one of those paths is chosen by the
       # person running marge on their own machine, never by remote input.
-      - path: (cmd/common\.go|internal/circleci/circleci\.go|internal/rules/load\.go)
+      - path: (cmd/common\.go|internal/circleci/circleci\.go|internal/rules/(load|scenario)\.go)
         linters:
           - gosec
         text: "G304"
