@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -71,9 +72,7 @@ func NewProcessor(client *github.Client, dryRun bool, mergeAutoMerge bool, login
 		src = DefaultTrustedAuthors
 	}
 	merged := make(map[string]bool, len(src)+1)
-	for k, v := range src {
-		merged[k] = v
-	}
+	maps.Copy(merged, src)
 	merged[login] = true
 	return &Processor{
 		Client:         client,
@@ -159,13 +158,19 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 		switch outcome.state {
 		case stateSuccess:
 			return nil
-		case "blocked":
+		case stateBlockedBudget:
 			// CI never ran because a GitHub Actions budget / spending-limit
 			// block prevented every job from starting. This is not a code
 			// failure, so surface it under a distinct status and keep it out
 			// of the rescue path.
 			status.Update(idx, pr.StatusBlockedCI, blockedDetail(outcome.blockedChecks))
 			return fmt.Errorf("ci unavailable: actions budget")
+		case stateNoVerdict:
+			// Every failing check established nothing about the code, so
+			// there is nothing to rescue and a security check in this shape
+			// is not a finding. The detail names the remedy per check.
+			status.Update(idx, pr.StatusNoVerdict, noVerdictDetail(outcome.noVerdictChecks))
+			return fmt.Errorf("ci unavailable: checks produced no verdict")
 		case stateFailure, stateError:
 			// A CircleCI build that CircleCI itself cancelled carries no
 			// verdict on the code, so it is neither a failure nor stale.
@@ -207,17 +212,22 @@ func (p *Processor) waitForChecks(ctx context.Context, info pr.PRInfo, pullReq *
 }
 
 // checkOutcome is the result of evaluating a PR's combined commit status and
-// check runs. failedChecks holds genuine failures; blockedChecks holds checks
-// that failed solely because a GitHub Actions budget block kept the job from
-// starting. The two are tracked separately so a billing block is never
-// reported as a real CI failure.
+// check runs. failedChecks holds genuine failures; the other two lists hold
+// checks that report failure although they never produced a verdict on the
+// code. They are tracked apart so none of them is reported as a real CI
+// failure.
 type checkOutcome struct {
 	state string
 	// sha is the commit the statuses and check runs belong to: the PR head
 	// as GitHub resolved it for this poll.
-	sha           string
-	failedChecks  []string
+	sha          string
+	failedChecks []string
+	// blockedChecks failed because a GitHub Actions budget block kept the
+	// job from starting.
 	blockedChecks []string
+	// noVerdictChecks established nothing about the code: the job was
+	// cancelled, or a project setting refused the pipeline.
+	noVerdictChecks []noVerdictCheck
 	// statusTargets maps each failing commit-status context to its
 	// target_url, so the CircleCI lookup can find the build behind it.
 	// Check runs have no entry.
@@ -245,6 +255,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 
 	var failedChecks []string
 	var blockedChecks []string
+	var noVerdictChecks []noVerdictCheck
 	allComplete := true
 	hasFailure := false
 	for _, cr := range checkRuns.CheckRuns {
@@ -253,15 +264,21 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 			continue
 		}
 		conclusion := cr.GetConclusion()
-		if conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == "cancelled" {
+		if conclusion == stateFailure || conclusion == "startup_failure" || conclusion == "timed_out" || conclusion == conclusionCancelled {
 			name := cr.GetName()
-			// A job that never started because of an Actions budget /
-			// spending-limit block is not a real failure -- route it to the
-			// blocked bucket instead so it is surfaced separately and kept
-			// out of the rescue path.
-			if p.isBudgetBlockedCheckRun(ctx, info, cr) {
+			// A check run that reports failure although it never produced a
+			// verdict on the code -- a budget block, a cancelled job, a
+			// pipeline a project setting refuses -- belongs in its own
+			// bucket, out of the failure counts and out of the rescue path.
+			switch kind, reason := p.classifyCheckRun(ctx, info, cr, conclusion); kind {
+			case kindBudgetBlock:
 				if name != "" {
 					blockedChecks = append(blockedChecks, name)
+				}
+				continue
+			case kindNoVerdict:
+				if name != "" {
+					noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: reason})
 				}
 				continue
 			}
@@ -273,36 +290,56 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	}
 
 	var statusTargets map[string]string
+	hasStatusFailure := false
 	for _, s := range combined.Statuses {
 		state := s.GetState()
-		if state == stateFailure || state == stateError {
-			if name := s.GetContext(); name != "" {
-				failedChecks = append(failedChecks, name)
-				if statusTargets == nil {
-					statusTargets = make(map[string]string)
-				}
-				statusTargets[name] = s.GetTargetURL()
-			}
+		if state != stateFailure && state != stateError {
+			continue
 		}
+		name := s.GetContext()
+		if name == "" {
+			hasStatusFailure = true
+			continue
+		}
+		// The CircleCI GitHub app reports the setup-workflow refusal in the
+		// status description.
+		if isSetupWorkflowBlock(s.GetDescription()) {
+			noVerdictChecks = append(noVerdictChecks, noVerdictCheck{Name: name, Reason: circleCISetupReason})
+			continue
+		}
+		hasStatusFailure = true
+		failedChecks = append(failedChecks, name)
+		if statusTargets == nil {
+			statusTargets = make(map[string]string)
+		}
+		statusTargets[name] = s.GetTargetURL()
 	}
 
+	// The same check can arrive as a commit status and as a check run.
+	noVerdictChecks = dedupeByName(noVerdictChecks)
+
 	out := checkOutcome{
-		sha:           combined.GetSHA(),
-		failedChecks:  failedChecks,
-		blockedChecks: blockedChecks,
-		statusTargets: statusTargets,
+		sha:             combined.GetSHA(),
+		failedChecks:    failedChecks,
+		blockedChecks:   blockedChecks,
+		noVerdictChecks: noVerdictChecks,
+		statusTargets:   statusTargets,
 	}
 	switch {
-	case hasFailure:
+	case hasFailure || hasStatusFailure:
 		out.state = stateFailure
 	case !allComplete:
 		out.state = statePending
-	case combinedState == stateFailure || combinedState == stateError:
-		out.state = combinedState
+	case len(noVerdictChecks) > 0:
+		// Nothing genuinely failed and every failing check established
+		// nothing about the code: the detail carries the remedy.
+		out.state = stateNoVerdict
 	case len(blockedChecks) > 0:
 		// Every failing check was a budget block and nothing genuinely
 		// failed: the PR's CI could not run at all.
-		out.state = "blocked"
+		out.state = stateBlockedBudget
+	case combinedState == stateFailure || combinedState == stateError:
+		out.state = combinedState
 	case combinedState == statePending && len(combined.Statuses) > 0:
 		out.state = statePending
 	default:
@@ -311,35 +348,80 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	return out, nil
 }
 
-// isBudgetBlockedCheckRun reports whether a failed check run failed only
-// because a GitHub Actions budget / spending-limit block prevented the job
-// from starting. It inspects the check run's output fields first (cheap, no
-// extra request) and falls back to fetching the run's annotations, which is
-// where GitHub records the "job was not started because an Actions budget is
-// preventing further use" message. Annotation-fetch errors are treated as
-// "not a budget block" so a transient API error never hides a real failure.
-func (p *Processor) isBudgetBlockedCheckRun(ctx context.Context, info pr.PRInfo, cr *github.CheckRun) bool {
-	out := cr.GetOutput()
-	title := out.GetTitle()
-	summary := out.GetSummary()
-	text := out.GetText()
-	if isBudgetBlockOutput(title, summary, text, nil) {
-		return true
-	}
+// checkKind says what a failing check run actually established.
+type checkKind string
 
+const (
+	// kindRealFailure: the check ran and the failure is about the code.
+	kindRealFailure checkKind = ""
+	// kindBudgetBlock: an Actions budget block kept the job from starting.
+	kindBudgetBlock checkKind = "budget-block"
+	// kindNoVerdict: the check established nothing about the code.
+	kindNoVerdict checkKind = "no-verdict"
+)
+
+// classifyCheckRun decides whether a failing check run produced a verdict on
+// the code, and when it did not, why.
+//
+// The check run's own fields are read first, which costs no extra request.
+// Only a run that carries annotations and still looks like a failure has
+// them fetched, because GitHub records the budget-block message there. A
+// fetch error is treated as kindRealFailure so a transient API error never
+// hides a real failure.
+func (p *Processor) classifyCheckRun(ctx context.Context, info pr.PRInfo, cr *github.CheckRun, conclusion string) (checkKind, string) {
+	out := cr.GetOutput()
+	title, summary, text := out.GetTitle(), out.GetSummary(), out.GetText()
+	if kind, reason := classifyCheckRunMessages(title, summary, text, nil); kind != kindRealFailure {
+		return kind, reason
+	}
+	// A cancelled job built, tested and scanned nothing, whatever it
+	// reports: the conclusion alone settles it.
+	if conclusion == conclusionCancelled {
+		return kindNoVerdict, cancelledReason
+	}
 	if out.GetAnnotationsCount() == 0 {
-		return false
+		return kindRealFailure, ""
 	}
 
 	annotations, _, err := p.Client.Checks.ListCheckRunAnnotations(ctx, info.Owner, info.Repo, cr.GetID(), nil)
 	if err != nil {
-		return false
+		return kindRealFailure, ""
 	}
 	messages := make([]string, 0, len(annotations))
 	for _, a := range annotations {
 		messages = append(messages, a.GetMessage())
 	}
-	return isBudgetBlockOutput("", "", "", messages)
+	return classifyCheckRunMessages("", "", "", messages)
+}
+
+// classifyCheckRunMessages decides what a set of check-run messages says
+// about a failing run. It is pure so the classification can be exercised
+// without hitting the GitHub API.
+func classifyCheckRunMessages(title, summary, text string, annotationMessages []string) (checkKind, string) {
+	switch {
+	case isBudgetBlockOutput(title, summary, text, annotationMessages):
+		return kindBudgetBlock, ""
+	case matchesAnyMessage(isSetupWorkflowBlock, title, summary, text, annotationMessages):
+		return kindNoVerdict, circleCISetupReason
+	}
+	return kindRealFailure, ""
+}
+
+// dedupeByName keeps the first entry for each check name, preserving order.
+func dedupeByName(checks []noVerdictCheck) []noVerdictCheck {
+	if len(checks) < 2 {
+		return checks
+	}
+	seen := make(map[string]struct{}, len(checks))
+	out := checks[:0]
+	for _, c := range checks {
+		if _, dup := seen[c.Name]; dup {
+			continue
+		}
+		seen[c.Name] = struct{}{}
+		out = append(out, c)
+	}
+	return out
 }
 
 // attachRescueMarker looks for the newest ai-rescue marker in the PR's
@@ -412,11 +494,17 @@ func failureDetail(failedChecks []string) string {
 	if len(failedChecks) == 0 {
 		return "checks failed"
 	}
-	const maxShow = 3
-	if len(failedChecks) <= maxShow {
-		return fmt.Sprintf("checks failed: %s", strings.Join(failedChecks, ", "))
+	return fmt.Sprintf("checks failed: %s", joinCapped(failedChecks))
+}
+
+// joinCapped joins parts with ", ", naming at most detailMaxChecks of them
+// and counting the rest, so a detail stays readable on one line.
+func joinCapped(parts []string) string {
+	const detailMaxChecks = 3
+	if len(parts) <= detailMaxChecks {
+		return strings.Join(parts, ", ")
 	}
-	return fmt.Sprintf("checks failed: %s (+%d more)", strings.Join(failedChecks[:maxShow], ", "), len(failedChecks)-maxShow)
+	return fmt.Sprintf("%s (+%d more)", strings.Join(parts[:detailMaxChecks], ", "), len(parts)-detailMaxChecks)
 }
 
 // withNote appends an operator note (for instance why a CircleCI build could
@@ -553,8 +641,7 @@ func (p *Processor) isAuthorTrusted(login string) bool {
 }
 
 func ghErrorDetail(prefix string, err error) string {
-	var ghErr *github.ErrorResponse
-	if errors.As(err, &ghErr) {
+	if ghErr, ok := errors.AsType[*github.ErrorResponse](err); ok {
 		for _, e := range ghErr.Errors {
 			if e.Message != "" {
 				return fmt.Sprintf("%s: %s", prefix, e.Message)

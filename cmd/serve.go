@@ -167,13 +167,16 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, addr string, lo
 func sweepTool() mcp.Tool {
 	return mcp.NewTool("sweep",
 		mcp.WithDescription("Sweep dependency update PRs: find, approve, and merge Renovate/Dependabot PRs. "+
-			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable and skipped lists. "+
+			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, ci_unavailable, ci_no_verdict and skipped lists. "+
 			"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
 			"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
 			"set refresh_stale to update such branches from their base so CI re-runs (they are then listed under refreshed). "+
 			"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
 			"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
 			"set retry_cancelled to rerun their workflow from its failed jobs on the same commit (they are then listed under retried). "+
+			"A failing check that established nothing about the code is excluded from action_required too and listed under ci_no_verdict, with the remedy in its detail: "+
+			"a cancelled job (rerun it), or a CircleCI pipeline refused because setup workflows are disabled for the repository (a human must change the project setting). "+
+			"A security check in that shape is not a finding and is never listed under security_failures. "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
 			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
 		mcp.WithString("query",
@@ -313,7 +316,13 @@ type SweepResult struct {
 	// are NOT failures: the remedy is to raise or await the Actions budget,
 	// so they are reported separately and excluded from action_required.
 	CIUnavailable []SweepPREntry `json:"ci_unavailable,omitempty"`
-	Skipped       []SweepPREntry `json:"skipped,omitempty"`
+	// CINoVerdict lists PRs whose every failing check established nothing
+	// about the code: a cancelled job, or a pipeline a CircleCI project
+	// setting refuses. These are NOT failures, and a security check in this
+	// shape is NOT a finding, so they are excluded from action_required and
+	// security_failures. Each entry's detail names its own remedy.
+	CINoVerdict []SweepPREntry `json:"ci_no_verdict,omitempty"`
+	Skipped     []SweepPREntry `json:"skipped,omitempty"`
 }
 
 // SweepSummary contains aggregate counts from the sweep.
@@ -330,6 +339,9 @@ type SweepSummary struct {
 	// CIUnavailable counts PRs whose CI could not run because of a GitHub
 	// Actions budget block. It is disjoint from Failed and SecurityFailures.
 	CIUnavailable int `json:"ci_unavailable"`
+	// CINoVerdict counts PRs whose every failing check established nothing
+	// about the code. It is disjoint from Failed and SecurityFailures.
+	CINoVerdict int `json:"ci_no_verdict"`
 	// Stale counts failing PRs whose failure is already fixed on the base
 	// branch (see SweepResult.Stale); Refreshed counts the stale PRs whose
 	// branch was updated in this run. Both are disjoint from Failed.
@@ -431,6 +443,7 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 			Failed:           counts.Failed - len(securityEntries),
 			SecurityFailures: len(securityEntries),
 			CIUnavailable:    counts.Blocked,
+			CINoVerdict:      counts.NoVerdict,
 			Stale:            counts.Stale,
 			Refreshed:        counts.Refreshed,
 			Cancelled:        counts.Cancelled,
@@ -479,6 +492,10 @@ func buildSweepResult(status *pr.PRStatus) SweepResult {
 
 	for _, e := range blockedEntries {
 		result.CIUnavailable = append(result.CIUnavailable, toEntry(e))
+	}
+
+	for _, e := range status.NoVerdictEntries() {
+		result.CINoVerdict = append(result.CINoVerdict, toEntry(e))
 	}
 
 	for _, e := range status.StaleEntries() {
