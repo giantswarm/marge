@@ -45,8 +45,8 @@ func TestTeamScope(t *testing.T) {
 	require.True(t, base.Schedule, "the team file opts the team into the schedule")
 	require.Equal(t, []string{"built-in company defaults", DefaultFile, TeamFile("bumblebee")}, base.Sources)
 
-	require.True(t, scope.Policies.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
-	require.False(t, scope.Policies.For("muster").Eligible(pr.KindRenovate, pr.UpdateMinor), "the exception narrows to patch")
+	require.True(t, scope.Policies.For("giantswarm", "marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
+	require.False(t, scope.Policies.For("giantswarm", "muster").Eligible(pr.KindRenovate, pr.UpdateMinor), "the exception narrows to patch")
 }
 
 // TestTeamScope_noPolicyFiles falls back to the company defaults and says
@@ -57,7 +57,7 @@ func TestTeamScope_noPolicyFiles(t *testing.T) {
 	scope, err := l.TeamScope(t.Context(), "shield")
 	require.NoError(t, err)
 	require.Equal(t, []string{"giantswarm/cluster-aws"}, scope.Repos)
-	require.Equal(t, pr.CompanyDefaults(), scope.Policies.For("cluster-aws"))
+	require.Equal(t, pr.CompanyDefaults(), scope.Policies.For("giantswarm", "cluster-aws"))
 	require.False(t, scope.Policies.Base().Schedule, "a team without a policy file is never swept by the schedule")
 }
 

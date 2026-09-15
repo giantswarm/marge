@@ -115,7 +115,7 @@ A team declares its own appetite for sweeps in `giantswarm/github`, in files the
 | File | Holds | Owned by |
 |------|-------|----------|
 | `bot-prs-sweep/default.yaml` | the company defaults | Bumblebee, in CODEOWNERS |
-| `bot-prs-sweep/team-<name>.yaml` | one team's deviations | that team, in CODEOWNERS |
+| `bot-prs-sweep/team-<name>.yaml` | one team's deviations | that team, in CODEOWNERS: a new team file adds its own line, or the directory line leaves it with Bumblebee |
 | `botPRsSweep` on a repository entry of `repositories/team-<name>.yaml` | one repository's exception | that team |
 
 A team opts into the scheduled sweep with `schedule: enabled` in its own file, and pauses it again with `schedule: disabled` or by deleting the key. A team without a policy file, or one that never sets the key, is swept by hand from the CLI and never by the schedule.
@@ -124,7 +124,7 @@ marge holds no scheduler yet. `schedule` is resolved and reported on every outco
 
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
-slackChannel: team-bumblebee
+slackChannel: standup-bumblebee
 schedule: enabled
 updateTypes:
   renovate: [patch, minor]
@@ -144,9 +144,9 @@ modelConfig: default-model-config
 
 Every key is optional and an absent key keeps what the file before it said. `updateTypes` replaces the list of the kinds it names; the known update types are `major`, `minor`, `patch`, `digest`, `pin`, `lockfile` and `none`, and an update whose size marge could not read can never be declared eligible. An empty list is a list: `renovate: []` merges no Renovate PR at all.
 
-`timeout` and `weekly` are enforced. The two `budget` figures are part of the team contract and are not enforced yet: a per-rescue budget needs the platform to accept a budget on a run, and a weekly budget needs the cost of a finished run to be readable. Every outcome records `budget_enforced: false`, and a sweep whose policy declares a budget with the rescues switched on says so on stderr. Enforcement moves under the same file later without a team editing anything.
+marge dispatches no rescue yet, so the whole `rescue` section is declared and none of it is applied: `timeout`, `weekly` and the two `budget` figures alike. Every outcome records `rescues_dispatched: false` and `budget_enforced: false`, and a sweep whose policy switches the rescues on names every bound it does not apply on stderr. The rescue agent enforces `timeout` and `weekly` when it lands; a per-rescue budget then needs the platform to accept a budget on a run, and a weekly budget needs the cost of a finished run to be readable. Enforcement moves under the same file without a team editing anything.
 
-`concurrency` has a ceiling marge owns: `perTeam` reaches 20 and `perRepo` reaches 5. GitHub answers a burst of writes with a secondary rate limit, which a sweep cannot tell apart from a repository it may not touch, so a file that declares more is an error rather than a sweep that fails halfway.
+`concurrency` has a ceiling marge owns: `perTeam` reaches 20, `perRepo` reaches 5, and the two multiply to at most 20 PRs in flight. GitHub answers a burst of writes with a secondary rate limit, which a sweep cannot tell apart from a repository it may not touch, so a policy that declares more is an error rather than a sweep that fails halfway. The product is checked on the resolved policy, so `perTeam: 20` in a team file is an error when the company file already raised `perRepo`. `bot-prs-sweep/policy.schema.json` checks each key against its own range; JSON Schema cannot multiply, so the pair is marge's to refuse.
 
 A repository entry deviates under `botPRsSweep`, with three keys that only narrow:
 
@@ -169,7 +169,7 @@ An exception that tries to switch the rescues back on where the team switched th
 
 `giantswarm/github` validates both policy files against `bot-prs-sweep/policy.schema.json` on every pull request, so a misspelled key fails there and not on the next sweep.
 
-A file marge cannot read stops the sweep and names the file and the key: a misspelled key, an unknown bot PR kind or update type, a timeout that is not a duration, a negative cap, a confirmation that is neither `per-pr` nor `per-sweep`. Falling back to the defaults would sweep a team's repositories under a policy the team never wrote. A file that is simply absent is not an error: the company defaults apply and the outcome names the files that were read.
+A file marge cannot read stops the sweep and names the file and the key: a misspelled key, a second YAML document, an unknown bot PR kind or update type, a timeout that is not a duration, a negative cap, a confirmation that is neither `per-pr` nor `per-sweep`. Falling back to the defaults would sweep a team's repositories under a policy the team never wrote. A file that is simply absent is not an error: the company defaults apply and the outcome names the files that were read.
 
 The policy each PR was decided under is on its outcome entry, with the list of files that produced it, so every decision can be explained after the fact. `--output json` and the MCP `sweep` tool carry it as the `policy` object.
 

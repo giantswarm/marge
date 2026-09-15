@@ -27,6 +27,14 @@ func TestParseDocument_failsLoudly(t *testing.T) {
 			want:    "field shedule not found",
 		},
 		{
+			// Decoding the first document alone would drop the rest of
+			// the file without a word, and a team would read back a
+			// policy its file does not describe.
+			name:    "a second YAML document",
+			content: "schedule: enabled\n---\nschedule: disabled\n",
+			want:    "more than one YAML document",
+		},
+		{
 			name:    "misspelled key of a section",
 			content: "rescue:\n  wekly: 3\n",
 			want:    "field wekly not found",
@@ -136,12 +144,12 @@ func TestParseRepositories_failsLoudly(t *testing.T) {
 		{
 			name:    "unknown update type in an exception",
 			content: "- name: marge\n  botPRsSweep:\n    updateTypes: [teeny]\n",
-			want:    `botPRsSweep.updateTypes of repository marge: unknown update type "teeny"`,
+			want:    `botPRsSweep.updateTypes of repository giantswarm/marge: unknown update type "teeny"`,
 		},
 		{
 			name:    "none in an exception",
 			content: "- name: marge\n  botPRsSweep:\n    updateTypes: [patch, none]\n",
-			want:    `botPRsSweep.updateTypes of repository marge: "none" reaches no kind an exception covers`,
+			want:    `botPRsSweep.updateTypes of repository giantswarm/marge: "none" reaches no kind an exception covers`,
 		},
 		{
 			name:    "not a repository list",

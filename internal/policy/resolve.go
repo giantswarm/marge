@@ -25,7 +25,7 @@ type Set struct {
 
 // NewSet resolves the base policy from the files, applies each repository
 // exception on top of it, and returns the result. Exceptions are keyed by
-// repository name, matched the way GitHub matches them, without case.
+// "owner/name", matched the way GitHub matches a repository, without case.
 func NewSet(files []File, exceptions map[string]Exception) (*Set, error) {
 	base := pr.CompanyDefaults()
 	for _, file := range files {
@@ -37,6 +37,9 @@ func NewSet(files []File, exceptions map[string]Exception) (*Set, error) {
 		}
 		base = apply(base, file.Path, file.Doc)
 	}
+	if err := checkInFlight(base); err != nil {
+		return nil, err
+	}
 	set := &Set{base: base}
 	if len(exceptions) == 0 {
 		return set, nil
@@ -47,32 +50,30 @@ func NewSet(files []File, exceptions map[string]Exception) (*Set, error) {
 		if err != nil {
 			return nil, err
 		}
-		set.byRepo[exceptionKey(repo)] = resolved
+		owner, name, _ := strings.Cut(repo, "/")
+		set.byRepo[exceptionKey(owner, name)] = resolved
 	}
 	return set, nil
 }
 
-// For returns the policy repo is swept under. repo is a repository name,
-// with or without its owner: "marge" and "giantswarm/marge" resolve to the
-// same policy, because a team's exceptions cover one owner only. The
-// returned policy is read-only: callers never write to it or to its map.
-func (s *Set) For(repo string) pr.Policy {
+// For returns the policy the repository is swept under. The owner is part
+// of the lookup: a sweep can hold repositories of more than one owner, and a
+// team's exception covers its own owner alone. The returned policy is
+// read-only: callers never write to it or to its map.
+func (s *Set) For(owner, name string) pr.Policy {
 	if s == nil {
 		return pr.CompanyDefaults()
 	}
-	if resolved, ok := s.byRepo[exceptionKey(repo)]; ok {
+	if resolved, ok := s.byRepo[exceptionKey(owner, name)]; ok {
 		return resolved
 	}
 	return s.base
 }
 
-// exceptionKey is how a repository name keys the exception map: without its
-// owner, and without case, the way GitHub matches a repository name.
-func exceptionKey(repo string) string {
-	if _, name, found := strings.Cut(repo, "/"); found {
-		repo = name
-	}
-	return strings.ToLower(repo)
+// exceptionKey is how a repository keys the exception map: owner and name,
+// without case, the way GitHub matches a repository.
+func exceptionKey(owner, name string) string {
+	return strings.ToLower(owner + "/" + name)
 }
 
 // Base returns the policy of a repository without an exception. The sweep

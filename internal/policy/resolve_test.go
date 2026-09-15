@@ -75,7 +75,7 @@ updateTypes:
 	require.NoError(t, err)
 
 	// A repository without an exception is swept under the team policy.
-	plain := set.For("marge")
+	plain := set.For("giantswarm", "marge")
 	require.True(t, plain.Sweep)
 	require.True(t, plain.Schedule)
 	require.Equal(t, "team-bumblebee", plain.SlackChannel)
@@ -100,7 +100,7 @@ updateTypes:
 
 	// The exception restricts the update types of the kinds that name a
 	// version and switches the rescues off; nothing else changes.
-	restricted := set.For("muster")
+	restricted := set.For("giantswarm", "muster")
 	require.True(t, restricted.Sweep)
 	require.False(t, restricted.Rescue.Enabled)
 	require.Equal(t, 3, restricted.Rescue.Weekly)
@@ -112,17 +112,16 @@ updateTypes:
 	require.True(t, restricted.Eligible(pr.KindAlignFiles, pr.UpdateNone))
 
 	// The exception switches the sweep off for the repository alone.
-	require.False(t, set.For("klaus").Sweep)
-	require.True(t, set.For("marge").Sweep)
+	require.False(t, set.For("giantswarm", "klaus").Sweep)
+	require.True(t, set.For("giantswarm", "marge").Sweep)
 
-	// Matching is case-insensitive, the way GitHub matches repository names.
-	require.False(t, set.For("KLAUS").Sweep)
+	// Matching is case-insensitive, the way GitHub matches a repository.
+	require.False(t, set.For("GiantSwarm", "KLAUS").Sweep)
 
-	// Both shapes of a repository name reach the same exception, so a
-	// caller that holds the owner/name of Scope.Repos never silently falls
-	// back to the base policy.
-	require.False(t, set.For("giantswarm/klaus").Sweep)
-	require.True(t, set.For("giantswarm/marge").Sweep)
+	// The owner is part of the lookup. A sweep can hold repositories of
+	// more than one owner, and a team's exception covers its own owner
+	// alone, so a same-named repository elsewhere keeps the base policy.
+	require.True(t, set.For("someone-else", "klaus").Sweep)
 
 	// Every resolved policy names the files it came from, exception last.
 	require.Equal(t, []string{
@@ -134,7 +133,7 @@ updateTypes:
 		"built-in company defaults",
 		DefaultFile,
 		TeamFile("bumblebee"),
-		"botPRsSweep of repository muster",
+		"botPRsSweep of repository giantswarm/muster",
 	}, restricted.Sources)
 }
 
@@ -143,7 +142,7 @@ updateTypes:
 func TestResolve_noFiles(t *testing.T) {
 	set, err := NewSet([]File{{Path: DefaultFile, Doc: nil}}, nil)
 	require.NoError(t, err)
-	resolved := set.For("marge")
+	resolved := set.For("giantswarm", "marge")
 
 	require.Equal(t, pr.CompanyDefaults(), resolved)
 	require.False(t, resolved.Schedule, "a team without a policy file is never swept by the schedule")
@@ -160,13 +159,13 @@ func TestResolve_scheduleKey(t *testing.T) {
 	require.NoError(t, err)
 	set, err := NewSet([]File{{Path: TeamFile("shield"), Doc: running}}, nil)
 	require.NoError(t, err)
-	require.True(t, set.For("any").Schedule)
+	require.True(t, set.For("giantswarm", "any").Schedule)
 
 	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
 	require.NoError(t, err)
 	set, err = NewSet([]File{{Path: TeamFile("shield"), Doc: silent}}, nil)
 	require.NoError(t, err)
-	require.False(t, set.For("any").Schedule, "a team file that says nothing keeps the company default")
+	require.False(t, set.For("giantswarm", "any").Schedule, "a team file that says nothing keeps the company default")
 }
 
 // TestResolve_exceptionOnlyNarrows refuses an exception that widens what
@@ -177,22 +176,22 @@ func TestResolve_exceptionOnlyNarrows(t *testing.T) {
 
 	yes := true
 	_, err = NewSet([]File{{Path: TeamFile("bumblebee"), Doc: off}}, map[string]Exception{
-		"marge": {Rescue: &yes},
+		"giantswarm/marge": {Rescue: &yes},
 	})
 	require.ErrorContains(t, err, "cannot switch the rescues on")
 
 	sweepOff, err := ParseDocument(DefaultFile, "")
 	require.NoError(t, err)
 	base, err := NewSet([]File{{Path: DefaultFile, Doc: sweepOff}}, map[string]Exception{
-		"marge": {Enabled: &yes},
+		"giantswarm/marge": {Enabled: &yes},
 	})
 	require.NoError(t, err, "switching a sweep on where it already is on is not a widening")
-	require.True(t, base.For("marge").Sweep)
+	require.True(t, base.For("giantswarm", "marge").Sweep)
 
 	defaults, err := ParseDocument(DefaultFile, companyDefaultFile)
 	require.NoError(t, err)
 	_, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}}, map[string]Exception{
-		"marge": {UpdateTypes: []string{"major"}},
+		"giantswarm/marge": {UpdateTypes: []string{"major"}},
 	})
 	require.ErrorContains(t, err, "the team merges no major update")
 }
@@ -202,10 +201,45 @@ func TestResolve_exceptionOnlyNarrows(t *testing.T) {
 func TestPolicy_declaredUnenforced(t *testing.T) {
 	resolved := pr.CompanyDefaults()
 	resolved.Rescue.Budget = pr.Budget{PerRescueUSD: 3, WeeklyUSD: 15}
-	require.Empty(t, resolved.DeclaredUnenforced(), "an unenforced cap on a rescue that never runs bounds nothing")
+	require.Empty(t, resolved.DeclaredUnenforced(), "a cap on a rescue the team does not want bounds nothing")
 
+	// No rescue runs in this build, so every bound the team wrote down is
+	// named: the timeout and the weekly count as well as the two budget
+	// figures. A file that calls any of them enforced is wrong.
+	require.False(t, pr.RescuesDispatched)
 	resolved.Rescue.Enabled = true
-	require.Equal(t, []string{"rescue.budget.perRescue", "rescue.budget.weekly"}, resolved.DeclaredUnenforced())
+	require.Equal(t, []string{
+		"rescue.timeout",
+		"rescue.weekly",
+		"rescue.budget.perRescue",
+		"rescue.budget.weekly",
+	}, resolved.DeclaredUnenforced())
+}
+
+// TestResolve_inFlightCeiling refuses a resolved policy whose two
+// concurrency bounds multiply past what the sweep puts on one token at
+// once. Each bound stays inside its own range while the pair does not, so
+// the check must see the pair the files resolve to and not one file's half.
+func TestResolve_inFlightCeiling(t *testing.T) {
+	wide, err := ParseDocument(DefaultFile, "concurrency:\n  perTeam: 20\n  perRepo: 5\n")
+	require.NoError(t, err, "each key is inside its own range")
+	_, err = NewSet([]File{{Path: DefaultFile, Doc: wide}}, nil)
+	require.ErrorContains(t, err, "100 PRs in flight")
+	require.ErrorContains(t, err, DefaultFile, "the error names the files that resolved it")
+
+	// The company file raises perRepo and the team file raises perTeam.
+	// Neither file is wrong on its own; the policy they resolve to is.
+	perRepo, err := ParseDocument(DefaultFile, "concurrency:\n  perRepo: 5\n")
+	require.NoError(t, err)
+	perTeam, err := ParseDocument(TeamFile("shield"), "concurrency:\n  perTeam: 20\n")
+	require.NoError(t, err)
+	_, err = NewSet([]File{{Path: DefaultFile, Doc: perRepo}, {Path: TeamFile("shield"), Doc: perTeam}}, nil)
+	require.ErrorContains(t, err, "100 PRs in flight")
+
+	ok, err := ParseDocument(TeamFile("shield"), "concurrency:\n  perTeam: 10\n  perRepo: 2\n")
+	require.NoError(t, err)
+	_, err = NewSet([]File{{Path: TeamFile("shield"), Doc: ok}}, nil)
+	require.NoError(t, err, "20 in flight is the ceiling, not past it")
 }
 
 // TestResolve_emptyUpdateTypeListNarrowsToNothing separates the two ways a
@@ -223,26 +257,26 @@ func TestResolve_emptyUpdateTypeListNarrowsToNothing(t *testing.T) {
 	require.NoError(t, err)
 	set, err := NewSet([]File{{Path: DefaultFile, Doc: defaults}, {Path: TeamFile("shield"), Doc: silent}}, nil)
 	require.NoError(t, err)
-	require.True(t, set.For("cluster-aws").Eligible(pr.KindRenovate, pr.UpdatePatch))
+	require.True(t, set.For("giantswarm", "cluster-aws").Eligible(pr.KindRenovate, pr.UpdatePatch))
 
 	// An empty list on the team file merges no Renovate PR at all.
 	empty, err := ParseDocument(TeamFile("shield"), "updateTypes:\n  renovate: []\n")
 	require.NoError(t, err)
 	set, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}, {Path: TeamFile("shield"), Doc: empty}}, nil)
 	require.NoError(t, err)
-	resolved := set.For("cluster-aws")
+	resolved := set.For("giantswarm", "cluster-aws")
 	require.False(t, resolved.Eligible(pr.KindRenovate, pr.UpdatePatch))
 	require.True(t, resolved.Eligible(pr.KindHerald, pr.UpdateNone), "only the kind the file named changes")
 
 	// The same difference on a repository exception.
 	set, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}}, map[string]Exception{
-		"absent": {},
-		"none":   {UpdateTypes: []string{}},
+		"giantswarm/absent": {},
+		"giantswarm/none":   {UpdateTypes: []string{}},
 	})
 	require.NoError(t, err)
-	require.True(t, set.For("absent").Eligible(pr.KindRenovate, pr.UpdatePatch), "an exception without the key narrows nothing")
-	require.False(t, set.For("none").Eligible(pr.KindRenovate, pr.UpdatePatch))
-	require.True(t, set.For("none").Eligible(pr.KindHerald, pr.UpdateNone), "an exception reaches only the kinds that name a version")
+	require.True(t, set.For("giantswarm", "absent").Eligible(pr.KindRenovate, pr.UpdatePatch), "an exception without the key narrows nothing")
+	require.False(t, set.For("giantswarm", "none").Eligible(pr.KindRenovate, pr.UpdatePatch))
+	require.True(t, set.For("giantswarm", "none").Eligible(pr.KindHerald, pr.UpdateNone), "an exception reaches only the kinds that name a version")
 }
 
 // TestResolve_documentReuseDoesNotShare applies one parsed document to two
@@ -253,15 +287,15 @@ func TestResolve_documentReuseDoesNotShare(t *testing.T) {
 	require.NoError(t, err)
 
 	first, err := NewSet([]File{{Path: DefaultFile, Doc: doc}}, map[string]Exception{
-		"marge": {UpdateTypes: []string{"patch"}},
+		"giantswarm/marge": {UpdateTypes: []string{"patch"}},
 	})
 	require.NoError(t, err)
 	second, err := NewSet([]File{{Path: DefaultFile, Doc: doc}}, nil)
 	require.NoError(t, err)
 
-	require.False(t, first.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
+	require.False(t, first.For("giantswarm", "marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
 	require.True(t, first.Base().Eligible(pr.KindRenovate, pr.UpdateMinor), "the exception stays on its repository")
-	require.True(t, second.For("marge").Eligible(pr.KindRenovate, pr.UpdateMinor), "a second set is untouched")
+	require.True(t, second.For("giantswarm", "marge").Eligible(pr.KindRenovate, pr.UpdateMinor), "a second set is untouched")
 }
 
 // TestNewSet_refusesAnUnresolvedDocument keeps the one construction path.

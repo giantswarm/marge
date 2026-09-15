@@ -174,9 +174,9 @@ func (l Loader) document(ctx context.Context, path string) (*Document, error) {
 
 // ParseRepositories returns the owner/name entries of a team's repository
 // list together with the botPRsSweep exception of every entry that carries
-// one. Only the name and that one key are read; every other key of the file
-// belongs to the generators and changes without notice. The repositories
-// live under the list's own owner.
+// one, keyed by the same owner/name. Only the name and that one key are
+// read; every other key of the file belongs to the generators and changes
+// without notice. The repositories live under the list's own owner.
 func ParseRepositories(content, owner, path string) ([]string, map[string]Exception, error) {
 	var entries []struct {
 		Name string `yaml:"name"`
@@ -194,21 +194,22 @@ func ParseRepositories(content, owner, path string) ([]string, map[string]Except
 		if name == "" {
 			continue
 		}
-		repos = append(repos, owner+"/"+name)
+		repo := owner + "/" + name
+		repos = append(repos, repo)
 		if entry.BotPRsSweep.Kind == 0 {
 			continue
 		}
 		var exception Exception
 		if err := strictDecodeNode(&entry.BotPRsSweep, &exception); err != nil {
-			return nil, nil, fmt.Errorf("parsing botPRsSweep of repository %s in %s: %w", name, path, err)
+			return nil, nil, fmt.Errorf("parsing botPRsSweep of repository %s in %s: %w", repo, path, err)
 		}
 		// Exception.apply resolves the names again, for a caller that
 		// builds a Set without this function. Here the file path is still
 		// in hand, so the error names the file.
-		if _, err := exception.resolve(name); err != nil {
+		if _, err := exception.resolve(repo); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
-		exceptions[name] = exception
+		exceptions[repo] = exception
 	}
 	if len(repos) == 0 {
 		return nil, nil, fmt.Errorf("team file %s lists no repositories", path)

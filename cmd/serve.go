@@ -447,7 +447,11 @@ type SweepRescuePolicy struct {
 	BudgetPerRescueUSD float64 `json:"budget_per_rescue_usd,omitempty"`
 	BudgetWeeklyUSD    float64 `json:"budget_weekly_usd,omitempty"`
 	BudgetEnforced     bool    `json:"budget_enforced"`
-	Confirm            string  `json:"confirm,omitempty"`
+	// RescuesDispatched says whether this build dispatches a rescue at all.
+	// While it is false Timeout and Weekly are declared and neither of them
+	// bounds anything.
+	RescuesDispatched bool   `json:"rescues_dispatched"`
+	Confirm           string `json:"confirm,omitempty"`
 }
 
 // SweepConcurrency is the concurrency section of a resolved policy.
@@ -480,6 +484,7 @@ func policyInfo(resolved *pr.Policy) *SweepPolicyInfo {
 			BudgetPerRescueUSD: resolved.Rescue.Budget.PerRescueUSD,
 			BudgetWeeklyUSD:    resolved.Rescue.Budget.WeeklyUSD,
 			BudgetEnforced:     pr.BudgetEnforced,
+			RescuesDispatched:  pr.RescuesDispatched,
 			Confirm:            string(resolved.Rescue.Confirm),
 		},
 		Concurrency:  SweepConcurrency{PerTeam: resolved.Concurrency.PerTeam, PerRepo: resolved.Concurrency.PerRepo},

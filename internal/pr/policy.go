@@ -24,14 +24,22 @@ type Budget struct {
 	WeeklyUSD    float64
 }
 
+// RescuesDispatched reports whether this build dispatches a rescue. It is
+// false until the rescue agent runs on an installation. While it is false
+// every bound in RescuePolicy is declared and none of them applies, so a
+// sweep must say so rather than let a team read its file as a guarantee.
+const RescuesDispatched = false
+
 // BudgetEnforced reports whether this build enforces the rescue budget.
 // It is false until the platform accepts a budget on a run and reports the
-// cost of a finished one.
+// cost of a finished one. It stays false once RescuesDispatched is true
+// and the budget still needs the platform.
 const BudgetEnforced = false
 
 // RescuePolicy bounds the rescues of one team. Timeout is the wall-clock
-// budget of a single rescue and becomes the run's execution timeout; Weekly
-// is how many rescues the team spends per week.
+// budget of a single rescue and is meant to become the run's execution
+// timeout; Weekly is how many rescues the team spends per week. See
+// RescuesDispatched for what this build applies.
 type RescuePolicy struct {
 	Enabled bool
 	Timeout time.Duration
@@ -116,18 +124,28 @@ func (p Policy) AllowsUpdate(updateType UpdateType) bool {
 
 // DeclaredUnenforced names the caps the policy declares that this build
 // does not enforce, so a team is told rather than left to assume. It is
-// empty while the rescues are off: an unenforced cap on a rescue that never
-// runs bounds nothing.
+// empty while the team has the rescues off: a cap on a rescue the team does
+// not want bounds nothing either way.
 func (p Policy) DeclaredUnenforced() []string {
-	if !p.Rescue.Enabled || BudgetEnforced {
+	if !p.Rescue.Enabled {
 		return nil
 	}
 	var out []string
-	if p.Rescue.Budget.PerRescueUSD > 0 {
-		out = append(out, "rescue.budget.perRescue")
+	if !RescuesDispatched {
+		if p.Rescue.Timeout > 0 {
+			out = append(out, "rescue.timeout")
+		}
+		if p.Rescue.Weekly > 0 {
+			out = append(out, "rescue.weekly")
+		}
 	}
-	if p.Rescue.Budget.WeeklyUSD > 0 {
-		out = append(out, "rescue.budget.weekly")
+	if !BudgetEnforced {
+		if p.Rescue.Budget.PerRescueUSD > 0 {
+			out = append(out, "rescue.budget.perRescue")
+		}
+		if p.Rescue.Budget.WeeklyUSD > 0 {
+			out = append(out, "rescue.budget.weekly")
+		}
 	}
 	return out
 }

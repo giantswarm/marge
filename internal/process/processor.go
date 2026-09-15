@@ -180,7 +180,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	run := &prRun{info: info, pull: pullReq, status: status, idx: idx}
 	defer p.finish(ctx, run)
 
-	resolved := p.Policies.For(info.Repo)
+	resolved := p.Policies.For(info.Owner, info.Repo)
 	status.SetPolicy(idx, resolved)
 	if !resolved.Sweep {
 		run.untouched = true

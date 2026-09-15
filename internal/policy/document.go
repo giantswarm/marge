@@ -92,9 +92,15 @@ type Exception struct {
 // a burst of writes with a secondary rate limit, which a sweep cannot tell
 // apart from a repository it may not touch, so the ceiling is the sweep's
 // and not the team's to raise.
+//
+// What reaches GitHub is the product of the two, so maxInFlight bounds that
+// product as well. Without it perTeam and perRepo each stay inside their own
+// range and put 100 PRs on one token at once, which is the burst the two
+// ranges exist to prevent.
 const (
-	maxPerTeam = 20
-	maxPerRepo = 5
+	maxPerTeam  = 20
+	maxPerRepo  = 5
+	maxInFlight = 20
 )
 
 // The two values the schedule key takes. A team switches its scheduled
@@ -164,15 +170,39 @@ func (d *Document) resolve() error {
 	if err := d.Rescue.resolve(); err != nil {
 		return err
 	}
-	if c := d.Concurrency; c != nil {
-		if c.PerTeam != nil && (*c.PerTeam < 1 || *c.PerTeam > maxPerTeam) {
-			return fmt.Errorf("concurrency.perTeam: %d is outside 1 to %d", *c.PerTeam, maxPerTeam)
-		}
-		if c.PerRepo != nil && (*c.PerRepo < 1 || *c.PerRepo > maxPerRepo) {
-			return fmt.Errorf("concurrency.perRepo: %d is outside 1 to %d", *c.PerRepo, maxPerRepo)
-		}
+	if err := d.Concurrency.resolve(); err != nil {
+		return err
 	}
 	return nil
+}
+
+// resolve checks the range of each concurrency key. The product of the two
+// is checked on the resolved policy, where the value of a key no file names
+// is known; see checkInFlight.
+func (c *ConcurrencyDocument) resolve() error {
+	if c == nil {
+		return nil
+	}
+	if c.PerTeam != nil && (*c.PerTeam < 1 || *c.PerTeam > maxPerTeam) {
+		return fmt.Errorf("concurrency.perTeam: %d is outside 1 to %d", *c.PerTeam, maxPerTeam)
+	}
+	if c.PerRepo != nil && (*c.PerRepo < 1 || *c.PerRepo > maxPerRepo) {
+		return fmt.Errorf("concurrency.perRepo: %d is outside 1 to %d", *c.PerRepo, maxPerRepo)
+	}
+	return nil
+}
+
+// checkInFlight refuses a resolved concurrency whose two bounds multiply to
+// more PRs than the sweep puts on one token at once. Each bound stays inside
+// its own range while the pair reaches 100, so the product is checked where
+// both values are known and the policy names the files that set them.
+func checkInFlight(resolved pr.Policy) error {
+	inFlight := resolved.Concurrency.PerTeam * resolved.Concurrency.PerRepo
+	if inFlight <= maxInFlight {
+		return nil
+	}
+	return fmt.Errorf("concurrency: perTeam %d and perRepo %d put %d PRs in flight at once, and the sweep allows %d: resolved from %s",
+		resolved.Concurrency.PerTeam, resolved.Concurrency.PerRepo, inFlight, maxInFlight, strings.Join(resolved.Sources, ", "))
 }
 
 func (r *RescueDocument) resolve() error {
@@ -245,14 +275,25 @@ func updateTypes(names []string) ([]pr.UpdateType, error) {
 
 // strictUnmarshal decodes content into out and refuses every key out does
 // not declare, so a misspelled policy key is an error and not a silent
-// default. An empty document leaves out untouched.
+// default. An empty document leaves out untouched. A second document after
+// a "---" is an error too: one file holds one policy, and decoding the
+// first alone would drop the rest of the file without a word.
 func strictUnmarshal(content string, out any) error {
 	dec := yaml.NewDecoder(strings.NewReader(content))
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	return nil
+	var extra yaml.Node
+	err := dec.Decode(&extra)
+	switch {
+	case err == nil:
+		return fmt.Errorf("more than one YAML document: one file holds one policy")
+	case errors.Is(err, io.EOF):
+		return nil
+	default:
+		return err
+	}
 }
 
 // strictDecodeNode decodes one YAML node strictly. The node is written back

@@ -273,7 +273,11 @@ func reportUnenforced(w io.Writer, resolved pr.Policy) {
 	if len(unenforced) == 0 {
 		return
 	}
-	_, _ = fmt.Fprintf(w, "policy declares %s; this build does not enforce it yet\n", strings.Join(unenforced, " and "))
+	subject := "it"
+	if len(unenforced) > 1 {
+		subject = "them"
+	}
+	_, _ = fmt.Fprintf(w, "policy declares %s; this build does not enforce %s yet\n", strings.Join(unenforced, ", "), subject)
 }
 
 func watchLoop(ctx context.Context, watch bool, fn func(ctx context.Context) error) error {

@@ -61,7 +61,7 @@ func TestPolicy_exceptionSwitchesTheSweepOff(t *testing.T) {
 	off := false
 	fixture := greenFixture()
 	entry := fixture.run(t, func(p *Processor) {
-		p.Policies = policySet(t, "", map[string]policy.Exception{"repo": {Enabled: &off}})
+		p.Policies = policySet(t, "", map[string]policy.Exception{"org/repo": {Enabled: &off}})
 	})
 
 	require.Equal(t, pr.StatusSkipped, entry.State)
@@ -75,7 +75,7 @@ func TestPolicy_exceptionSwitchesTheSweepOff(t *testing.T) {
 	require.Empty(t, entry.Label)
 	require.NotNil(t, entry.Policy)
 	require.False(t, entry.Policy.Sweep)
-	require.Contains(t, entry.Policy.Sources, "botPRsSweep of repository repo")
+	require.Contains(t, entry.Policy.Sources, "botPRsSweep of repository org/repo")
 }
 
 // TestPolicy_nilSetAppliesCompanyDefaults keeps a processor without a
@@ -97,7 +97,7 @@ func TestPolicy_switchedOffRepositoryWritesNothingForAnyAuthor(t *testing.T) {
 	fixture := greenFixture()
 	fixture.author = "a-person"
 	entry := fixture.run(t, func(p *Processor) {
-		p.Policies = policySet(t, "", map[string]policy.Exception{"repo": {Enabled: &off}})
+		p.Policies = policySet(t, "", map[string]policy.Exception{"org/repo": {Enabled: &off}})
 	})
 
 	require.Equal(t, pr.StatusSkipped, entry.State)
