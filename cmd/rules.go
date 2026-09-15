@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	gh "github.com/giantswarm/marge/internal/github"
+	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
 )
@@ -160,7 +161,7 @@ var draftFlags struct {
 func init() {
 	rulesDraftCmd.Flags().StringVar(&draftFlags.from, "from", "-", "Sweep report to read the signature from; - reads standard input")
 	rulesDraftCmd.Flags().StringVar(&draftFlags.name, "name", "", "Name of the rule to draft (default: derived from the failing checks)")
-	rulesDraftCmd.Flags().BoolVar(&draftFlags.dryRun, "dry-run", false, "Write the files and print them; open no pull request")
+	rulesDraftCmd.Flags().BoolVar(&draftFlags.dryRun, "dry-run", false, "Write the files only; print no commands to open a pull request")
 	rulesCmd.AddCommand(rulesDraftCmd)
 }
 
@@ -169,7 +170,7 @@ var rulesDraftCmd = &cobra.Command{
 	Short: "Draft a rule and its scenarios from an unrecognised failure",
 	Long: `Read one unhandled signature out of a sweep report (marge sweep --output json)
 and write a rule skeleton with a pair of scenarios built from the PRs that
-carry it, then open a draft pull request.
+carry it, then print the commands that open the draft pull request.
 
 The skeleton leaves the action blank on purpose: it does not validate until a
 person names one, so promoting a pattern is editing a draft rather than
@@ -337,11 +338,14 @@ func quoteList(names []string) string {
 	return strings.Join(out, ", ")
 }
 
+// indent lays an excerpt out as a YAML block scalar. The excerpt is
+// stripped first: a raw escape from a colouring runner is not valid content
+// in YAML, and a fixture that carries one cannot be read back.
 func indent(body string, by int) string {
 	pad := strings.Repeat(" ", by)
-	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(logs.PlainText(body), "\n"), "\n")
 	for i, line := range lines {
-		lines[i] = pad + line
+		lines[i] = pad + strings.TrimRight(line, " \t")
 	}
 	return strings.Join(lines, "\n")
 }

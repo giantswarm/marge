@@ -181,3 +181,20 @@ func lastBytes(s string, maxBytes int) string {
 	}
 	return s[len(s)-maxBytes:]
 }
+
+// ansiRE matches the escape sequences a colouring runner writes, and
+// stampRE the timestamp the Actions runner puts in front of every line.
+// Both differ between two occurrences of one failure, and a raw escape is
+// not valid content in a YAML scenario.
+var (
+	ansiRE  = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	stampRE = regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?`)
+)
+
+// PlainText is an excerpt with nothing in it that a person did not write:
+// no colour, no per-line timestamp, no carriage return.
+func PlainText(excerpt string) string {
+	out := ansiRE.ReplaceAllString(excerpt, "")
+	out = stampRE.ReplaceAllString(out, "")
+	return strings.ReplaceAll(out, "\r", "")
+}

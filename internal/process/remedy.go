@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
@@ -247,7 +248,7 @@ func (p *Processor) recordUnhandled(run *prRun) {
 	excerpt := ""
 	for _, key := range slices.Sorted(maps.Keys(run.excerpts)) {
 		if run.excerpts[key] != "" {
-			excerpt = signatureTail(run.excerpts[key])
+			excerpt = signatureTail(logs.PlainText(run.excerpts[key]))
 			break
 		}
 	}

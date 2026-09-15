@@ -87,7 +87,6 @@ and merge the eligible green ones.`,
 		source := RulesSource{Repo: runFlags.rulesRepo, Ref: runFlags.rulesRef, Path: runFlags.rulesPath}
 
 		return watchLoop(ctx, runOpts.Watch, func(ctx context.Context) error {
-
 			scope, err := runOpts.resolveScope(ctx, client)
 			if err != nil {
 				return err
