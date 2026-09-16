@@ -5,6 +5,10 @@ This document carries the sweep's knowledge of bot PR failures. Rules under
 ones a person or an agent still decides, and the hazards that make a wrong
 decision easy.
 
+The condensed form a model reads when no rule matched is
+[`skills/marge-rescue`](../skills/marge-rescue/SKILL.md). A pattern promoted
+to a rule loses its hint there in the same pull request.
+
 Every row of the runbook extraction is either a rule under `rules/` or a row
 on this page, and each one cites its runbook row. That is the condition for
 retiring the runbook.
