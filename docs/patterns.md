@@ -5,9 +5,19 @@ This document carries the sweep's knowledge of bot PR failures. Rules under
 ones a person or an agent still decides, and the hazards that make a wrong
 decision easy.
 
-Every row of the runbook extraction is either a rule under `rules/` or a row
-on this page, and each one cites its runbook row. That is the condition for
-retiring the runbook.
+Every row of the runbook extraction is a rule under `rules/`, a row on this
+page citing its runbook row, or one of the thirteen named below. That is the
+condition for retiring the runbook.
+
+Rows 78, 80, 82, 83, 84, 85, 95, 102, 106 and 108 to 111 are **deliberately
+not carried**. They describe hazards of driving the sweep from a shell: a
+CircleCI token read from a local file, `set -- $var` not word-splitting under
+zsh, `commit.gpgsign` dropping a fix commit, `gh` losing its token mid-run,
+scratch clones on a tmpfs, and the rescue runtime's own parameter names. The
+engine has none of them. It makes no local commit, runs no shell and reads
+no local credential file, so writing them down here would document a
+workflow this repository exists to replace. The one with an engine-side
+answer, row 93, is in the Hazards section under `checks-settled`.
 
 ## Patterns the engine acts on
 
@@ -150,31 +160,6 @@ the pattern. Each says which.
 | An archived repository still carrying open bot PRs | The sweep never sees them. Discovery searches `is:pr is:open archived:false`, so the PRs are filtered out before classification, and an archived repository is read-only in any case | 8 |
 | An architect-orb bump on a devctl-managed repository | The signal is the repository's own CircleCI config, not anything on the PR. A rule reads the diff, the checks and the logs, never a file on the default branch. The runbook's remedy also ends in "coordinate with the operator" | 30 |
 | A transitive-only `/v2` un-pin leaving a vulnerable v1 path | The signal is `go mod why` reporting that the main module does not need the package, which the engine cannot run. The nancy line alone does not separate a pin floor that still holds from a real finding, and the action would be `close` | 48 |
-
-## Hazards of running the sweep by hand
-
-The runbook carries these because a person drove it from a shell. The engine
-does not have them: it makes no local commit, runs no shell word-splitting,
-and never lifts admin enforcement. They are recorded so the runbook can be
-retired, not because marge acts on them.
-
-| Hazard | Runbook row |
-|---|---|
-| Reading CircleCI logs without a valid token | 78 |
-| Auditing the repository list before the sweep | 80 |
-| `require_all_checks_green` passing silently under zsh | 82 |
-| `commit.gpgsign=true` dropping a fix commit | 83 |
-| `--admin` not bypassing review while `enforce_admins` is on | 84 |
-| `gh` losing its token mid-sweep | 85 |
-| `gh pr checks` reporting all green on a head with no checks yet | 93 |
-| `set -- $var` not word-splitting under zsh | 95 |
-| Scratch clones on a tmpfs running out of space | 102 |
-| Triaging the output of `devctl pr approve-align-files` | 106 |
-| Choosing the toolchain for a rescue agent from the repository's manifest | 108 |
-| The rescue runtime's parameter names and its failure modes | 109, 110, 111 |
-
-The engine's own answer to row 93 is the `checks-settled` guard: a head that
-has not finished reporting is not a head that passed.
 
 ## Hazards
 
