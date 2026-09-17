@@ -41,19 +41,11 @@ spec:
             - serve
             - --transport=streamable-http
             - --http-addr=:8080
+          # The server acts as the person calling it, with the grant muster
+          # attaches as a bearer, so the pod holds no GitHub credential of
+          # its own. The CircleCI token is not an identity: it reads the
+          # builds a classification needs.
           env:
-            {{- if or .Values.marge.github.existingSecret .Values.marge.github.token }}
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  {{- if .Values.marge.github.existingSecret }}
-                  name: {{ .Values.marge.github.existingSecret }}
-                  key: {{ .Values.marge.github.existingSecretKey }}
-                  {{- else }}
-                  name: {{ include "marge.tokenSecretName" . }}
-                  key: github-token
-                  {{- end }}
-            {{- end }}
             {{- if or .Values.marge.circleci.existingSecret .Values.marge.circleci.token }}
             - name: CIRCLECI_CLI_TOKEN
               valueFrom:

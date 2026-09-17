@@ -43,12 +43,15 @@ make install
 
 ### On Kubernetes
 
-The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm/giantswarm-catalog) runs `marge serve` over the MCP Streamable HTTP transport behind a `ClusterIP` Service, ready to be registered as a streamable-http MCP server in [muster](https://github.com/giantswarm/muster). It takes the GitHub token from `marge.github.token` or an existing Secret (`marge.github.existingSecret`); see [helm/marge/README.md](helm/marge/README.md) for every value.
+The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm/giantswarm-catalog) runs `marge serve` over the MCP Streamable HTTP transport behind a `ClusterIP` Service. With `muster.register=true` it also registers the server with [muster](https://github.com/giantswarm/muster), which then runs the GitHub sign-in for it and attaches each person's grant to their calls; the server pod holds no GitHub credential of its own. The registration uses the sweep App's **own** OAuth client (`marge.github.app.oauth.*`), never the shared `github-oauth-client`: a person acting through marge is bounded by the intersection of the App's permissions and their own only while the App is the OAuth client on that path. See [helm/marge/README.md](helm/marge/README.md) for every value.
 
 ```bash
 helm install marge oci://gsoci.azurecr.io/charts/giantswarm/marge --version 0.9.0 \
-  --set marge.github.existingSecret=marge-github-token
+  --set muster.register=true \
+  --set marge.github.app.oauth.existingSecret=marge-github-app
 ```
+
+A freshly reconciled server reports *Auth Required* until the person completes `core_auth_login` in muster, then *Connected*: pinning GitHub's endpoints does not bypass the connect-time probe. `grantScope: subject` files the grant under the person, so every later session reuses it without a second consent, until they sign out of this server.
 
 ## Setup
 
@@ -376,6 +379,7 @@ The live table shows every PR's outcome, including the failure reason and any ai
 | `--watch` | `-w` | `false` | Keep polling for new PRs every 60 seconds |
 | `--org` | | | Limit to repos owned by this org or user (query scope) |
 | `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan instead of searching GitHub (query scope) |
+| `--prs` | | | Sweep only these pull requests of the scope, each a PR URL or `owner/repo#number` (repeatable, or comma-separated). It is a scope of its own: given alone, the repositories of the listed PRs are read |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
 | `--output` | | `table` | `table` or `json` |
 | `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are observed only) |
@@ -390,6 +394,7 @@ Records a failed AI rescue attempt on a PR by posting an [ai-rescue marker](#res
 | `--outcome` | `failed` | Rescue outcome: `failed` (attempted, could not fix) or `blocked` (fix known but waits on something external) |
 | `--reason` | | Short explanation of why the rescue did not succeed |
 | `--tool` | `ai` | Name of the tool/agent that attempted the rescue (e.g. `klaus`) |
+| `--dry-run` | `false` | Show the marker that would be written, head SHA and fingerprint included, and post nothing |
 
 ```bash
 marge mark https://github.com/my-org/my-repo/pull/42 \
@@ -400,17 +405,23 @@ Requires the token to have **Issues: Read & write** (comment) permission in addi
 
 ### `marge serve [flags]`
 
-Starts an MCP server exposing two tools:
+Starts an MCP server exposing four tools: `list`, `sweep`, `remedy` and `mark`. Each one is an adapter over the same engine call the CLI makes, with the same guards, so a tool call and the equivalent `marge sweep` invocation do the same thing. Every tool that can change a PR takes `dry_run` and carries the MCP read-only and destructive annotations, so a client knows what a call costs before making it.
 
-- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`rules`, `unhandled`, `summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`. Each PR entry includes `policy` (the resolved policy the PR was decided under, with the `sources` that produced it), `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`list`** -- read-only. The open bot PRs of a scope with the classification, label, kind, update type, age, evidence and prior-rescue state of each. It is the `classify` step alone on a dry run: nothing is approved, merged, refreshed, retried, remedied or labelled. The result has the same shape as `sweep`'s, so "what is waiting for us" and "what would a sweep do" are one question.
+- **`sweep`** -- mirrors `marge sweep`, returning structured JSON (`rules`, `unhandled`, `summary`, `merged`, `security_failures`, `action_required`, `stale`, `refreshed`, `cancelled`, `retried`, `obsolete`, `waiting`, `ci_unavailable`, `ci_no_verdict`, `skipped`, `repositories_failed`). Each `obsolete` entry carries a `reason` of `superseded` or `no_op`. `team` selects the team scope; `query`, `org`, `repos` (a list of `org/repo` entries) and `repos_file` (a file in the `--repos-file` format) belong to the query scope and are refused together with `team`. `actions` selects the sweep steps like `--actions`, and `prs` narrows the run to the listed PRs (each a PR URL or `owner/repo#number`) like `--prs`; the scope still decides which repositories are read and under which policy, so a PR outside it is refused rather than swept. Each PR entry includes `policy` (the resolved policy the PR was decided under, with the `sources` that produced it), `kind`, `update_type`, `label` (the label on the PR after the sweep; absent when nothing was written, as in `dry_run`), `created_at`, `age_days`, and -- when a prior rescue attempt was found -- a `rescue` object (`tool`, `outcome`, `reason`, `at`, `stale`, `rebased`). `rebased: true` means the PR head moved since the attempt but the diff did not (a Renovate rebase); such a marker is still valid and `stale` is `false`. Agent orchestrators should dispatch on `action_required` only, skip entries whose rescue is not `stale` (rebased or not), and escalate those to a human.
+- **`remedy`** -- classifies one PR and applies the catalogue rule that matches it, through the action that rule names and that action's own guards. It is `classify,remedy,mark` on a single PR, so the refusals and the evidence comment are the sweep's. `rule` narrows the catalogue to one rule, which must still match the PR: naming a rule removes the others from the contest, it never forces an action onto a PR. `team` decides the PR under that team's policy.
 - **`mark`** -- mirrors `marge mark`, so rescue agents can record their own failed attempts. The result echoes what was pinned: `head_sha` plus `patch_id` and `change_id` when they could be computed.
+
+`rescue`, the fifth tool of the plan, waits for the engine's rescue step in [roadmap#4360](https://github.com/giantswarm/roadmap/issues/4360); there is nothing to adapt until it exists.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--transport` | `stdio` | `stdio` (JSON-RPC over stdin/stdout, for an MCP client that starts marge itself) or `streamable-http` (the MCP Streamable HTTP transport, what the Helm chart runs) |
 | `--http-addr` | `:8080` | Listen address for `streamable-http` |
 
-Over `streamable-http` the MCP endpoint is `/mcp`; `/healthz` and `/readyz` answer the Kubernetes probes. The server stops on `SIGTERM`/`SIGINT` after draining in-flight requests for up to ten seconds. The GitHub token is read per tool call, so the server starts without one and reports the missing token on the first `sweep` or `mark`.
+Over `streamable-http` the MCP endpoint is `/mcp`; `/healthz` and `/readyz` answer the Kubernetes probes. The server stops on `SIGTERM`/`SIGINT` after draining in-flight requests for up to ten seconds.
+
+**The two transports act as different people, because they serve a different number of them.** A `stdio` server is started by the person using it and serves that one person, so it acts with their own credential: the App when the environment carries one, otherwise `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`. A `streamable-http` server serves everyone who reaches it, so only a per-request credential can be right: it acts with the token the caller presented as a `Bearer`, which is what muster attaches from the person's GitHub grant. A call that carries no token is answered with a sign-in error and never with a credential the process happens to hold -- a shared server that fell back would attribute one person's merges to whoever configured it.
 
 ```bash
 marge serve                                        # stdio, for a local MCP client

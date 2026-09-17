@@ -187,6 +187,7 @@ var sweepArguments = map[string]any{
 	"org":               "my-org",
 	"repos_file":        "/tmp/repos.txt",
 	"repos":             []any{"my-org/a", "my-org/b"},
+	"prs":               []any{"my-org/a#7", "https://github.com/my-org/b/pull/9"},
 	"merge_auto":        true,
 	"dry_run":           true,
 	"team":              "",
@@ -216,15 +217,17 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 		t.Fatalf("parseSweepRequest: %v", err)
 	}
 	want := sweepRequest{
-		Query: "typescript",
 		Repos: []string{"my-org/a", "my-org/b"},
 		Opts: RunOptions{
+			Query:            "typescript",
 			DryRun:           true,
 			MergeAuto:        true,
 			Quiet:            true,
+			NoTUI:            true,
 			Actions:          process.ActionSet{process.ActionClassify: true, process.ActionMerge: true},
 			Org:              "my-org",
 			ReposFile:        "/tmp/repos.txt",
+			PRs:              []string{"my-org/a#7", "https://github.com/my-org/b/pull/9"},
 			SecurityPatterns: "Trivy,Analyze",
 		},
 	}
@@ -271,6 +274,7 @@ func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
 	want := sweepRequest{
 		Opts: RunOptions{
 			Quiet:   true,
+			NoTUI:   true,
 			Actions: allActions,
 		},
 	}

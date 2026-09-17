@@ -1,0 +1,59 @@
+{{- /*
+Registers the MCP server with muster, so a person reaches the sweep engine
+through the gateway as themselves.
+
+marge is a plain in-cluster backend and holds no authorization server: muster
+runs the sign-in for it. GitHub publishes no RFC 8414 metadata and accepts
+neither Client ID Metadata Documents nor dynamic registration, so the
+authorization server is pinned endpoint by endpoint and muster identifies
+itself with a client registered out of band. grantScope: subject files the
+grant under the person rather than the session, so every later session of
+that person reuses it without a second consent.
+
+The client credentials are the sweep App's own, never the shared
+github-oauth-client. A person acting through marge is bounded by the
+intersection of the App's permissions and their own only while the App is the
+OAuth client on this path; a broader shared client would silently widen what
+a sweep can do to whatever that client was granted.
+
+muster's connect-time probe is not bypassed by the pin, so a freshly
+reconciled server reports "Auth Required" until the person completes
+core_auth_login, and "Connected" after it.
+*/ -}}
+{{- if and .Values.mcp.enabled .Values.muster.register }}
+{{- if not (include "marge.hasOAuthCredential" .) }}
+{{- fail "muster.register needs the App's OAuth client: set marge.github.app.oauth.clientId and clientSecret, or marge.github.app.oauth.existingSecret" }}
+{{- end }}
+apiVersion: muster.giantswarm.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: {{ .Values.muster.name | default (include "marge.fullname" .) }}
+  namespace: {{ .Values.muster.namespace | default .Release.Namespace }}
+  labels:
+    muster.giantswarm.io/type: marge
+    {{- with .Values.muster.toolGroup }}
+    agent-platform.giantswarm.io/tool-group: {{ . }}
+    {{- end }}
+    {{- include "marge.labels" . | nindent 4 }}
+spec:
+  autoStart: true
+  type: streamable-http
+  description: {{ .Values.muster.description | quote }}
+  toolPrefix: {{ .Values.muster.toolPrefix | quote }}
+  url: http://{{ include "marge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/mcp
+  auth:
+    type: oauth
+    authorizationServer:
+      issuer: {{ .Values.muster.github.issuer | quote }}
+      authorizationEndpoint: {{ .Values.muster.github.authorizationEndpoint | quote }}
+      tokenEndpoint: {{ .Values.muster.github.tokenEndpoint | quote }}
+      grantScope: subject
+      {{- with .Values.muster.github.scopes }}
+      scopes: {{ . | quote }}
+      {{- end }}
+      clientCredentialsSecretRef:
+        name: {{ include "marge.oauthSecretName" . }}
+        namespace: {{ .Release.Namespace }}
+        clientIdKey: {{ .Values.marge.github.app.oauth.clientIdKey }}
+        clientSecretKey: {{ .Values.marge.github.app.oauth.clientSecretKey }}
+{{- end }}

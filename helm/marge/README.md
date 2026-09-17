@@ -35,6 +35,16 @@ Set `marge.slack.token` and each run posts one summary to the channel the team's
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | mcp.enabled | bool | `true` | Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone, until a muster registers the server. |
+| muster.register | bool | `false` | Register the MCP server with muster, so a person reaches it through the gateway as themselves. Needs the App's OAuth client credentials and a muster in the cluster. |
+| muster.name | string | `""` | Name of the MCPServer resource. Defaults to the release fullname. |
+| muster.namespace | string | `""` | Namespace the MCPServer is created in. Defaults to the release namespace; set it when muster watches another one. |
+| muster.toolPrefix | string | `"marge"` | Prefix muster gives the tools of this server, so they are reachable as x_<prefix>_<tool>. |
+| muster.description | string | `"Sweep a team's dependency and alignment PRs: list, sweep, remedy and mark, as the signed-in person."` | Description muster shows for the server. |
+| muster.toolGroup | string | `""` | Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off. |
+| muster.github.issuer | string | `"https://github.com"` | Issuer the grants are filed under. GitHub publishes no discovery document, so the endpoints below are pinned instead. |
+| muster.github.authorizationEndpoint | string | `"https://github.com/login/oauth/authorize"` | GitHub's authorization endpoint. |
+| muster.github.tokenEndpoint | string | `"https://github.com/login/oauth/access_token"` | GitHub's token endpoint. |
+| muster.github.scopes | string | `""` | OAuth scopes requested at sign-in. A GitHub App's user-to-server token takes its rights from the App's permissions and the person's own, so no scope is requested. |
 | replicaCount | int | `1` | Number of marge replicas. The MCP transport is stateful per session, so keep it at 1 unless a client-affine load balancer sits in front. |
 | image.registry | string | `"gsoci.azurecr.io"` | Registry of the marge image |
 | image.repository | string | `"giantswarm/marge"` | Repository of the marge image |

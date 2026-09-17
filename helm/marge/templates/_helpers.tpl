@@ -124,6 +124,24 @@ true
 {{- end }}
 
 {{/*
+Whether the App's OAuth client credentials are configured at all. Without
+them muster has no client to run the sign-in with.
+*/}}
+{{- define "marge.hasOAuthCredential" -}}
+{{- if or .Values.marge.github.app.oauth.existingSecret .Values.marge.github.app.oauth.clientSecret -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Name of the Secret that holds the App's OAuth client credentials, which is
+what muster reads to run the sign-in.
+*/}}
+{{- define "marge.oauthSecretName" -}}
+{{- default (include "marge.tokenSecretName" .) .Values.marge.github.app.oauth.existingSecret }}
+{{- end }}
+
+{{/*
 Name of the Secret that holds the App credential, and the keys inside it.
 The App path is what the schedule runs as, so its Secret is resolved once
 here and read by both CronJobs.

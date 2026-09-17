@@ -11,13 +11,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gh "github.com/giantswarm/marge/internal/github"
 )
 
 // TestHTTPHandler_probesAndInitialize drives the streamable HTTP transport
 // the Helm chart runs: the probe paths answer 200, an MCP initialize on the
 // endpoint answers with this server's name, and anything else is a 404.
 func TestHTTPHandler_probesAndInitialize(t *testing.T) {
-	handler, streamable := httpHandler(newMCPServer())
+	handler, streamable := httpHandler(newMCPServer(gh.NewCallerClient))
 	t.Cleanup(func() { streamable.CloseSessions(context.Background()) })
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -84,7 +86,7 @@ func TestServeHTTP_stopsOnContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	var log bytes.Buffer
-	go func() { done <- serveHTTP(ctx, newMCPServer(), addr, &log) }()
+	go func() { done <- serveHTTP(ctx, newMCPServer(gh.NewCallerClient), addr, &log) }()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
