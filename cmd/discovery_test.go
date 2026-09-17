@@ -19,7 +19,7 @@ func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/org/ok/pulls", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode([]*github.PullRequest{
-			{Number: new(1), Title: new("chore(deps): update x"), HTMLURL: new("https://github.com/org/ok/pull/1"), User: &github.User{Login: new("renovate[bot]")}},
+			{Number: new(1), Title: new("chore(deps): update x"), HTMLURL: new("https://github.com/org/ok/pull/1"), User: &github.User{Login: new("renovate[bot]")}, Labels: []*github.Label{{Name: "dependencies"}, {Name: "marge/action-required"}}},
 			{Number: new(2), Title: new("feat: by a person"), HTMLURL: new("https://github.com/org/ok/pull/2"), User: &github.User{Login: new("quentin")}},
 			{Number: new(3), Title: new("chore: align files"), HTMLURL: new("https://github.com/org/ok/pull/3"), User: &github.User{Login: new("giantswarm-align-files[bot]")}},
 		})
@@ -39,6 +39,8 @@ func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	for _, p := range found.PRs {
 		require.NotEqual(t, "", pr.KindOf(p.Author), p.Author)
 	}
+	require.Equal(t, []string{"dependencies", "marge/action-required"}, found.PRs[0].Labels,
+		"the labels carry the classification a previous sweep stored")
 	require.Len(t, found.Failed, 1)
 	require.Equal(t, "org/broken", found.Failed[0].Repo)
 	require.Contains(t, found.Failed[0].Err, "boom")
@@ -74,4 +76,32 @@ func TestBuildSweepResult_labelAndFailedRepositories(t *testing.T) {
 	require.Len(t, got.Waiting, 1)
 	require.Equal(t, 1, got.Summary.Waiting)
 	require.Equal(t, []SweepRepoFailure{{Repo: "o/broken", Error: "boom"}}, got.RepositoriesFailed)
+}
+
+// TestSearchPRs_carriesTheLabels: the GitHub search reports the labels of
+// every issue it returns, so the search path carries the stored
+// classification exactly as the repository listing does.
+func TestSearchPRs_carriesTheLabels(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /search/issues", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(&github.IssuesSearchResult{
+			Issues: []*github.Issue{{
+				Number:  new(1),
+				Title:   new("chore(deps): update x"),
+				HTMLURL: new("https://github.com/org/ok/pull/1"),
+				User:    &github.User{Login: new("renovate[bot]")},
+				Labels:  []*github.Label{{Name: "marge/stale"}},
+			}},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	baseURL := server.URL + "/"
+	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
+	require.NoError(t, err)
+
+	found, err := searchPRs(t.Context(), client, "", "me", nil)
+	require.NoError(t, err)
+	require.Len(t, found.PRs, 1, "the same PR is returned by every query and kept once")
+	require.Equal(t, []string{"marge/stale"}, found.PRs[0].Labels)
 }

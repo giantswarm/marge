@@ -71,6 +71,11 @@ const (
 	// action's evidence names the rule and what it did; the next sweep
 	// classifies the result.
 	StatusRemedied
+	// StatusUnclassified marks a PR that carries no classification label:
+	// no sweep has decided it yet. No sweep writes this state, and no
+	// label stands for it; only a read of the stored classification
+	// reports it.
+	StatusUnclassified
 )
 
 func (s StatusState) String() string {
@@ -125,6 +130,8 @@ func (s StatusState) String() string {
 		return "Eligible"
 	case StatusRemedied:
 		return "Remedied"
+	case StatusUnclassified:
+		return "Unclassified"
 	default:
 		return "Unknown"
 	}
@@ -342,6 +349,13 @@ type Counts struct {
 	Remedied  int
 	Waiting   int
 	Skipped   int
+	// Eligible counts green PRs the sweep did not merge because the merge
+	// action was not selected, which is every green PR of a classify-only
+	// run.
+	Eligible int
+	// Unclassified counts PRs no sweep has labelled. Only a read of the
+	// stored classification produces them.
+	Unclassified int
 }
 
 // countsLocked tallies entries by category. Callers must hold s.mu.
@@ -375,6 +389,10 @@ func (s *PRStatus) countsLocked() Counts {
 			c.Remedied++
 		case StatusSkipped:
 			c.Skipped++
+		case StatusEligible:
+			c.Eligible++
+		case StatusUnclassified:
+			c.Unclassified++
 		}
 	}
 	return c
@@ -594,6 +612,17 @@ func (s *PRStatus) entriesInStates(states ...StatusState) []StatusEntry {
 		}
 	}
 	return result
+}
+
+// EligibleEntries returns the green entries the sweep left unmerged
+// because the merge action was not selected.
+func (s *PRStatus) EligibleEntries() []StatusEntry {
+	return s.entriesInState(StatusEligible)
+}
+
+// UnclassifiedEntries returns the entries no sweep has labelled.
+func (s *PRStatus) UnclassifiedEntries() []StatusEntry {
+	return s.entriesInState(StatusUnclassified)
 }
 
 func (s *PRStatus) SkippedEntries() []StatusEntry {
