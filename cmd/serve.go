@@ -199,7 +199,7 @@ func httpHandler(mcpServer *server.MCPServer) (http.Handler, *server.StreamableH
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", ok)
 	mux.HandleFunc("/readyz", ok)
-	mux.Handle(mcpEndpoint, streamable)
+	mux.Handle(mcpEndpoint, gh.RequireBearer(streamable))
 	return mux, streamable
 }
 

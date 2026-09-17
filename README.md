@@ -48,8 +48,11 @@ The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm
 ```bash
 helm install marge oci://gsoci.azurecr.io/charts/giantswarm/marge --version 0.9.0 \
   --set muster.register=true \
+  --set muster.namespace=agent-platform \
   --set marge.github.app.oauth.existingSecret=marge-github-app
 ```
+
+muster watches MCPServers in its own namespace only, so `muster.namespace` names it when marge runs elsewhere. The OAuth client Secret stays in marge's namespace, and muster's ServiceAccount needs `get` on Secrets there: list the namespace in muster's `rbac.additionalSecretNamespaces` on the platform side.
 
 A freshly reconciled server reports *Auth Required* until the person completes `core_auth_login` in muster, then *Connected*: pinning GitHub's endpoints does not bypass the connect-time probe. `grantScope: subject` files the grant under the person, so every later session reuses it without a second consent, until they sign out of this server.
 
