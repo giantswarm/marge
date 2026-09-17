@@ -136,11 +136,6 @@ func (r allTeamsRun) post(ctx context.Context, team, channel string, result Swee
 	return true, nil
 }
 
-// logPRLimit bounds how many pull requests one section of one team names in
-// the log. A team with fifty blocked PRs must not push the next team's
-// summary out of the window an operator reads.
-const logPRLimit = 10
-
 // report prints one line per team, so the CronJob's log says what every team
 // got without the reader opening Slack, and then the reason behind each PR
 // the run did not move on. A count alone cannot tell a blocked PR from an
@@ -173,13 +168,10 @@ func (r allTeamsRun) reportReasons(result SweepResult) {
 }
 
 // reportEntries names each pull request of one section with the detail that
-// explains its outcome, up to logPRLimit of them.
+// explains its outcome. Every entry is printed: the team's summary line comes
+// first and a log holds the rest, which a Slack channel does not.
 func reportEntries(w io.Writer, label string, entries []SweepPREntry) {
-	for i, entry := range entries {
-		if i == logPRLimit {
-			_, _ = fmt.Fprintf(w, "  and %d more %s\n", len(entries)-logPRLimit, label)
-			return
-		}
+	for _, entry := range entries {
 		_, _ = fmt.Fprintf(w, "  %s %s/%s#%d: %s\n", label, entry.Owner, entry.Repo, entry.Number, logDetail(entry))
 	}
 }

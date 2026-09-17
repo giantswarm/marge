@@ -278,9 +278,10 @@ func TestReport_namesTheRefusedApproval(t *testing.T) {
 	require.Contains(t, line, "no write access to the repository")
 }
 
-// TestReport_boundsALongSection keeps one team's bad day from pushing the
-// next team's summary out of the log.
-func TestReport_boundsALongSection(t *testing.T) {
+// TestReport_namesEveryBlockedPR holds the rule that separates the log from
+// the Slack summary: the log names every PR, and the team's counts stay
+// readable because the summary line comes before them.
+func TestReport_namesEveryBlockedPR(t *testing.T) {
 	result := SweepResult{Summary: SweepSummary{Total: 30, Failed: 30}}
 	for i := range 30 {
 		result.ActionRequired = append(result.ActionRequired, SweepPREntry{
@@ -291,6 +292,8 @@ func TestReport_boundsALongSection(t *testing.T) {
 	var out bytes.Buffer
 	allTeamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: result})
 
-	require.Contains(t, out.String(), "and 20 more blocked")
-	require.Equal(t, 12, strings.Count(out.String(), "\n"), "the team line, 10 PRs and the remainder")
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	require.Len(t, lines, 31, "the team line and one line per PR")
+	require.Contains(t, lines[0], "team bumblebee: 30 PRs")
+	require.Contains(t, lines[30], "blocked giantswarm/marge#29")
 }
