@@ -419,6 +419,9 @@ type SweepResult struct {
 	// first. A signature here is what `marge rules draft` takes.
 	Unhandled []SweepUnhandled `json:"unhandled,omitempty"`
 	Merged    []SweepPREntry   `json:"merged,omitempty"`
+	// AutoMerge lists the PRs handed to GitHub's auto-merge, which merges
+	// them when their last requirement is met.
+	AutoMerge []SweepPREntry `json:"auto_merge,omitempty"`
 	// Remedied lists the PRs a rule of the catalogue acted on in this run:
 	// a rerun, a retry, a branch update, a wait marker or a close.
 	Remedied         []SweepPREntry `json:"remedied,omitempty"`
@@ -521,6 +524,9 @@ type SweepSkippedRule struct {
 type SweepSummary struct {
 	Total  int `json:"total"`
 	Merged int `json:"merged"`
+	// AutoMerge counts the PRs left to GitHub's own auto-merge. They are not
+	// merged: GitHub fires it when the last requirement is met.
+	AutoMerge int `json:"auto_merge"`
 	// Remedied counts the PRs a catalogue rule acted on.
 	Remedied         int `json:"remedied"`
 	Failed           int `json:"failed"`
@@ -819,6 +825,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 		Summary: SweepSummary{
 			Total:            total,
 			Merged:           counts.Merged,
+			AutoMerge:        counts.AutoMerge,
 			Remedied:         counts.Remedied,
 			Failed:           counts.Failed - len(securityEntries),
 			SecurityFailures: len(securityEntries),
@@ -877,6 +884,10 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 
 	for _, e := range status.MergedEntries() {
 		result.Merged = append(result.Merged, toEntry(e))
+	}
+
+	for _, e := range status.AutoMergeEntries() {
+		result.AutoMerge = append(result.AutoMerge, toEntry(e))
 	}
 
 	for _, e := range status.RemediedEntries() {

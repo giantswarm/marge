@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
@@ -359,4 +360,24 @@ func TestSweepRequest_resolveScope(t *testing.T) {
 			t.Fatalf("resolveScope = %v, %v; want a reading repos file error", scope.Repos, err)
 		}
 	})
+}
+
+// TestBuildSweepResult_autoMergeIsDisjointFromMerged: a PR handed to GitHub's
+// auto-merge has not merged. Counting it as merged says a queue drained when
+// it did not, and hides a PR that can wait on a requirement forever.
+func TestBuildSweepResult_autoMergeIsDisjointFromMerged(t *testing.T) {
+	status := pr.NewPRStatus()
+	idx1 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 1})
+	status.Update(idx1, pr.StatusMerged, "squash")
+	idx2 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 2})
+	status.Update(idx2, pr.StatusAutoMerge, "auto-merge enabled; GitHub merges it")
+
+	got := buildSweepResult(status, nil, nil)
+
+	require.Equal(t, 1, got.Summary.Merged)
+	require.Equal(t, 1, got.Summary.AutoMerge)
+	require.Len(t, got.Merged, 1)
+	require.Equal(t, 1, got.Merged[0].Number)
+	require.Len(t, got.AutoMerge, 1)
+	require.Equal(t, 2, got.AutoMerge[0].Number)
 }
