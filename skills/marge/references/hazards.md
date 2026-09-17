@@ -1,8 +1,3 @@
----
-name: marge-rescue
-description: Hazards, guards and known-pattern hints for fixing a bot PR that no marge rule matched. Load it inside the weekly rescue run, before reading a failure or writing a change.
----
-
 # Rescuing a bot PR
 
 marge handed you this PR because no rule matched its failure. Everything a

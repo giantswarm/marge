@@ -6,8 +6,8 @@ ones a person or an agent still decides, and the hazards that make a wrong
 decision easy.
 
 The condensed form a model reads when no rule matched is
-[`skills/marge-rescue`](../skills/marge-rescue/SKILL.md). A pattern promoted
-to a rule loses its hint there in the same pull request.
+[`skills/marge/references/hazards.md`](../skills/marge/references/hazards.md).
+A pattern promoted to a rule loses its hint there in the same pull request.
 
 Every row of the runbook extraction is a rule under `rules/`, a row on this
 page citing its runbook row, or one of the thirteen named below. That is the
