@@ -138,7 +138,7 @@ marge:
         clientId: ""
         # -- OAuth client secret of the App. Do not reuse the shared github-oauth-client secret.
         clientSecret: ""
-        # -- Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values.
+        # -- Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. Defaults to marge.github.app.existingSecret, so one App Secret that carries the client keys below needs no second name.
         existingSecret: ""
         # -- Key of the client ID inside the Secret
         clientIdKey: "github-app-client-id"
