@@ -32,8 +32,6 @@ Set `marge.slack.token` and each run posts one summary to the channel the team's
 
 An entry that sets `args` passes them to the binary as the whole command line, and `tokenAudience` mounts a projected ServiceAccount token at `/var/run/secrets/kagent`. That pair is how the weekly rescue trigger will run. Keep such an entry suspended until the rescue command exists.
 
-`schedule.daily` and `schedule.weekly` are deprecated. Each one is translated into a `schedules` entry, under the name its CronJob already carries, so an installation keeps its resources across the upgrade. `schedule.daily` sweeps every team at once and gives no team a cadence of its own, which is what `schedules` replaces.
-
 **Homepage:** <https://github.com/giantswarm/marge>
 
 ## Maintainers
@@ -115,23 +113,5 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | scheduleDefaults.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
 | scheduleDefaults.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of a scheduled run |
 | schedules | list | `[]` | Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit. |
-| schedule.daily.enabled | bool | `false` | Deprecated. Run the daily sweep of every team whose policy file leaves the schedule enabled. Use schedules instead. |
-| schedule.daily.schedule | string | `"0 6 * * *"` | Cron expression of the daily sweep, in the cluster's timezone unless timeZone is set. |
-| schedule.daily.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expression is read in. |
-| schedule.daily.actions | string | `"classify,approve,merge,refresh,retry,remedy,mark"` | Sweep steps the daily run performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch. |
-| schedule.daily.dryRun | bool | `false` | Report every outcome without writing anything. Turn it on for the first runs on a new installation. |
-| schedule.daily.activeDeadlineSeconds | int | `3600` | Seconds the daily run may take before Kubernetes stops it. |
-| schedule.daily.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
-| schedule.daily.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
-| schedule.daily.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of the daily run |
-| schedule.weekly.enabled | bool | `false` | Run the weekly rescue trigger. It stays off until the rescue run exists: the command it would run is not built yet, so args has no default and an enabled weekly CronJob without args fails to render. |
-| schedule.weekly.schedule | string | `"0 5 * * 1"` | Cron expression of the weekly rescue trigger. |
-| schedule.weekly.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expression is read in. |
-| schedule.weekly.args | list | `[]` | Arguments the weekly run passes to the marge binary. |
-| schedule.weekly.tokenAudience | string | `"kagent"` | Audience of the projected ServiceAccount token the weekly run presents to the agent platform gateway. Mounted at /var/run/secrets/kagent/token. |
-| schedule.weekly.activeDeadlineSeconds | int | `3600` | Seconds the weekly run may take before Kubernetes stops it. |
-| schedule.weekly.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
-| schedule.weekly.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
-| schedule.weekly.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of the weekly run |
 | networkPolicy.enabled | bool | `true` | Create a NetworkPolicy: ingress to the MCP port from the selected namespaces, egress to DNS and HTTPS only (GitHub, CircleCI). |
 | networkPolicy.ingressNamespaceSelector | object | `{}` | Namespaces allowed to reach the MCP port; an empty selector allows every namespace of the cluster. |

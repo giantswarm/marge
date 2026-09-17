@@ -54,16 +54,10 @@ spec:
                 {{- toYaml . | nindent 16 }}
                 {{- else }}
                 - sweep
-                {{- if $entry.allTeams }}
-                - --all-teams
-                {{- else }}
                 - --team={{ $entry.team }}
-                {{- end }}
                 - --actions={{ $entry.actions }}
                 - --no-tui
-                {{- if not $entry.allTeams }}
                 - --post-summary
-                {{- end }}
                 {{- if $entry.dryRun }}
                 - --dry-run
                 {{- end }}

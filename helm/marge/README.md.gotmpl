@@ -33,8 +33,6 @@ Set `marge.slack.token` and each run posts one summary to the channel the team's
 
 An entry that sets `args` passes them to the binary as the whole command line, and `tokenAudience` mounts a projected ServiceAccount token at `/var/run/secrets/kagent`. That pair is how the weekly rescue trigger will run. Keep such an entry suspended until the rescue command exists.
 
-`schedule.daily` and `schedule.weekly` are deprecated. Each one is translated into a `schedules` entry, under the name its CronJob already carries, so an installation keeps its resources across the upgrade. `schedule.daily` sweeps every team at once and gives no team a cadence of its own, which is what `schedules` replaces.
-
 {{ template "chart.homepageLine" . }}
 
 {{ template "chart.maintainersSection" . }}

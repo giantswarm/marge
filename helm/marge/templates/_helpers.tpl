@@ -213,20 +213,12 @@ CronJob and one ServiceAccount, so the CronJob template and the RBAC
 template read the same list.
 
 An entry of .Values.schedules takes the missing keys from
-.Values.scheduleDefaults. The deprecated .Values.schedule.daily and
-.Values.schedule.weekly are translated into an entry each, under the names
-their resources already carry.
+.Values.scheduleDefaults.
 */}}
 {{- define "marge.schedules" -}}
 {{- $entries := list }}
 {{- range $entry := .Values.schedules }}
 {{- $entries = append $entries (mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry) }}
-{{- end }}
-{{- if .Values.schedule.daily.enabled }}
-{{- $entries = append $entries (merge (dict "name" "daily-sweep" "allTeams" true) .Values.schedule.daily) }}
-{{- end }}
-{{- if .Values.schedule.weekly.enabled }}
-{{- $entries = append $entries (merge (dict "name" "weekly-rescue") .Values.schedule.weekly) }}
 {{- end }}
 {{- toYaml $entries }}
 {{- end }}
@@ -248,7 +240,7 @@ Refuses a scheduled run the chart cannot render, and names the entry.
 {{- fail (printf "schedule entry %s sets %s, which is not a key of a scheduled run: %s." $entry.name $key (join ", " $known)) }}
 {{- end }}
 {{- end }}
-{{- if and (not $entry.team) (not $entry.allTeams) (not $entry.args) }}
+{{- if and (not $entry.team) (not $entry.args) }}
 {{- fail (printf "schedule entry %s needs a team: the sweep it runs names one team, or args gives the whole command line." $entry.name) }}
 {{- end }}
 {{- if not (include "marge.hasAppCredential" .context) }}
