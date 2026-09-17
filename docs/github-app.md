@@ -11,14 +11,11 @@ permissions are settled. The App serves both paths:
 - **Unattended.** Installation tokens, minted on demand from the private key,
   back the scheduled sweep and the weekly rescue run. GitHub sees the App.
 
-**Neither path runs yet.** This page records the App, not marge's behaviour
-today. `internal/github` authenticates with one token string read from
-`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth login`. marge holds no App ID, no
-private key and no client credentials, and it mints no installation token.
-Read every claim below about what marge does as the target state. The
-interactive path needs the callback URLs (roadmap#4357); the unattended path
-needs App authentication in `internal/github` and the credentials in cluster
-Secrets (roadmap#4356).
+**The unattended path runs.** `internal/github` authenticates as the App when
+the environment carries the App credential, and with a token otherwise. The
+scheduled sweep in the chart sets the credential, so it acts as the App; a
+person running the CLI sets none and keeps the token path. The interactive
+path still needs the callback URLs (roadmap#4357).
 
 The target is that no personal access token is used anywhere.
 
@@ -32,6 +29,39 @@ The target is that no personal access token is used anywhere.
 | Owner | `giantswarm` organization |
 | Visibility | private to the organization |
 | Webhooks | off. marge polls; it receives no events |
+
+## How marge authenticates as the App
+
+`LoadApp` reads three settings from the environment. It returns nothing when
+all three are absent, and an error when only some of them are set: a partial
+credential is a misconfigured unattended run, never a person's shell.
+
+| Variable | Holds |
+|---|---|
+| `MARGE_GITHUB_APP_ID` | the numeric App ID |
+| `MARGE_GITHUB_APP_INSTALLATION_ID` | the numeric installation ID |
+| `MARGE_GITHUB_APP_PRIVATE_KEY_FILE` | the path of the PEM private key |
+| `MARGE_GITHUB_APP_PRIVATE_KEY` | the PEM itself, for a local test |
+
+Prefer the file. A PEM in an environment variable shows up in every process
+listing of the pod, and the chart mounts the key from a Secret at
+`/etc/marge/github-app/private-key.pem`.
+
+Every request then carries a token the transport mints for it:
+
+- A call on `/repos/{owner}/{name}/...` carries a token scoped to that one
+  repository. GitHub answers `404` for every other repository under it.
+- The mint itself and `GET /app` carry the App JWT, signed RS256 with the
+  private key and valid for nine minutes.
+- A call that names no repository, which is the code search, carries an
+  installation-wide token. A search cannot be scoped to one repository.
+
+A token is kept in memory until a minute before it expires, then replaced.
+Nothing is written to disk and nothing survives the process.
+
+`GET /user` has no meaning under an installation token, so
+`AuthenticatedLogin` reads the App's slug from `GET /app` and returns
+`giantswarm-marge[bot]`.
 
 ## Permission record
 
@@ -85,15 +115,22 @@ approval when `permissions.push` is `false`. A loud refusal beats a silent
 no-op. The check runs on the dry-run path too, so `--dry-run` names the
 refusal after a permission change instead of reporting a plain skip.
 
-**Not yet measured: `permissions.push` under an installation token.** The
-review-counting result below is measured. The field marge reads to predict it
-is not. Nobody has confirmed that `GET /repos` under an installation token
-with `Pull requests: write` and no `Contents: write` answers
-`permissions.push: false`. Until somebody does, two outcomes stay open: the
-field always reports `true`, which makes the guard a no-op, or the field is
-absent, which marge reports as `write access unknown` and treats as a refusal.
-Measure both permission states on the roadmap#4349 repository and record the
-result here.
+### `permissions.push` under an installation token
+
+`hack/measure-push-permission.sh` is the probe. It mints an installation
+token for one repository from the App private key and prints what
+`GET /repos/{owner}/{repo}` answers for `permissions.push`. Run it once with
+`Contents: write` granted to the installation and once without, on the
+roadmap#4349 repository, and record both answers here.
+
+| Installation permissions | `permissions.push` | What `ensureWriteAccess` does |
+|---|---|---|
+| `Pull requests: write` + `Contents: write` | *not recorded yet* | *not recorded yet* |
+| `Pull requests: write` alone | *not recorded yet* | *not recorded yet* |
+
+Until both rows are filled, two outcomes stay open: the field always reports
+`true`, which makes the guard a no-op, or the field is absent, which marge
+reports as `write access unknown` and treats as a refusal.
 
 Two more results from the same test, both permanent:
 
@@ -114,8 +151,13 @@ the `Team Bumblebee` vault, in one item named `marge sweep GitHub App`.
 | OAuth client ID and client secret | the interactive path, through muster's GitHub connector | The App's **own** client credentials. Do not reuse the shared `github-oauth-client` secret. A broader shared client would widen the permission ceiling of every sweep |
 | Webhook secret | nothing | Webhooks are off. Keep the value; do not publish it |
 
-The cluster-side Secrets arrive with the chart. Until then the credentials
-exist in 1Password only.
+The chart puts them in the cluster. `marge.github.app.existingSecret` names a
+Secret that already holds `github-app-id`, `github-app-installation-id` and
+`github-app-private-key`, which is what a real installation uses;
+`marge.github.app.privateKey` and its siblings write them inline, for a test.
+`marge.github.app.oauth` holds the App's own client credentials in the same
+Secret, for muster's `clientCredentialsSecretRef` to reference. marge itself
+never reads them.
 
 ### Rotation
 
@@ -143,8 +185,7 @@ first, then rotate. The App's installations survive; only the key dies.
 ## Installation tokens
 
 An installation token is minted on demand, for one repository, from the
-private key. Both properties below are measured against GitHub, by hand. The
-mint is not wired into marge yet.
+private key. Both properties below are measured against GitHub, by hand.
 
 - **Scoped.** A token minted with `repositories: ["marge"]` lists exactly one
   repository at `GET /installation/repositories`, and answers `404` on a

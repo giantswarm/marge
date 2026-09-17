@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -41,20 +42,26 @@ func TestTeamFileRepo(t *testing.T) {
 }
 
 // contentsMux serves the files of a fake giantswarm/github over the
-// contents API. A path that is not in files answers 404, the way GitHub
-// answers for a team that has no policy file.
+// contents API. A path that holds no file and no file below it answers 404,
+// the way GitHub answers for a team that has no policy file. A path that has
+// files below it answers with the directory listing, which is how the
+// schedule finds the teams that opted in.
 func contentsMux(t *testing.T, owner, repo string, files map[string]string) *github.Client {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc(fmt.Sprintf("GET /repos/%s/%s/contents/", owner, repo), func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/repos/%s/%s/contents/", owner, repo))
-		content, ok := files[path]
-		if !ok {
+		if content, ok := files[path]; ok {
+			body := base64.StdEncoding.EncodeToString([]byte(content))
+			_ = json.NewEncoder(w).Encode(github.RepositoryContent{Type: new("file"), Encoding: new("base64"), Content: new(body)})
+			return
+		}
+		entries := directoryEntries(files, path)
+		if len(entries) == 0 {
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 			return
 		}
-		body := base64.StdEncoding.EncodeToString([]byte(content))
-		_ = json.NewEncoder(w).Encode(github.RepositoryContent{Type: new("file"), Encoding: new("base64"), Content: new(body)})
+		_ = json.NewEncoder(w).Encode(entries)
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -62,6 +69,23 @@ func contentsMux(t *testing.T, owner, repo string, files map[string]string) *git
 	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
 	require.NoError(t, err)
 	return client
+}
+
+// directoryEntries returns the files directly below dir, as the contents
+// API lists them.
+func directoryEntries(files map[string]string, dir string) []github.RepositoryContent {
+	var entries []github.RepositoryContent
+	for path := range files {
+		name, ok := strings.CutPrefix(path, dir+"/")
+		if !ok || strings.Contains(name, "/") {
+			continue
+		}
+		entries = append(entries, github.RepositoryContent{Type: new("file"), Name: new(name), Path: new(path)})
+	}
+	slices.SortFunc(entries, func(a, b github.RepositoryContent) int {
+		return strings.Compare(a.GetPath(), b.GetPath())
+	})
+	return entries
 }
 
 // TestResolveScope_teamScope reads the three files of a team scope and

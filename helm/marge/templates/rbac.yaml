@@ -1,0 +1,17 @@
+{{- range $component, $settings := dict "daily-sweep" .Values.schedule.daily "weekly-rescue" .Values.schedule.weekly }}
+{{- if $settings.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "marge.cronServiceAccountName" (dict "context" $ "component" $component) }}
+  labels:
+    {{- include "marge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+  {{- with $.Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}
+{{- end }}

@@ -4,6 +4,8 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -45,12 +47,70 @@ func ghAuthToken(ctx context.Context) string {
 	return strings.TrimSpace(string(out))
 }
 
-// NewClient returns a GitHub API client authenticated with the token
-// LoadToken finds.
+// NewClient returns a GitHub API client. It authenticates as the sweep App
+// when the environment carries the App credential, and with the token
+// LoadToken finds otherwise.
 func NewClient(ctx context.Context) (*github.Client, error) {
+	app, err := LoadApp()
+	if err != nil {
+		return nil, err
+	}
+	if app != nil {
+		return NewAppClient(app, defaultBaseURL, nil)
+	}
 	token := LoadToken(ctx)
 	if token == "" {
-		return nil, errors.New("no GitHub token found: set GITHUB_TOKEN or GH_TOKEN, or log in with `gh auth login`")
+		return nil, errors.New("no GitHub token found: set GITHUB_TOKEN or GH_TOKEN, log in with `gh auth login`, or set the App credential (" + appIDEnv + ", " + appInstallationIDEnv + ", " + appPrivateKeyFileEnv + ")")
 	}
 	return github.NewClient(github.WithAuthToken(token))
+}
+
+// defaultBaseURL is the REST API root every call is built on. It carries the
+// trailing slash go-github expects.
+const defaultBaseURL = "https://api.github.com/"
+
+// NewAppClient returns a client that authenticates as the App against
+// baseURL. A nil httpClient uses the default transport. Only the tests pass
+// either argument; NewClient supplies GitHub's own.
+func NewAppClient(app *App, baseURL string, httpClient *http.Client) (*github.Client, error) {
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	transport := &appTransport{
+		app:     app,
+		base:    base,
+		baseURL: baseURL,
+		client:  &http.Client{Transport: base, Timeout: httpClient.Timeout},
+		tokens:  make(map[string]installationToken),
+	}
+	return github.NewClient(
+		github.WithHTTPClient(&http.Client{Transport: transport, Timeout: httpClient.Timeout}),
+		github.WithURLs(&baseURL, &baseURL),
+	)
+}
+
+// AuthenticatedLogin returns the login the client acts as. An installation
+// token has no user behind it, so GET /user answers 403 and the App's own
+// slug names the bot instead.
+func AuthenticatedLogin(ctx context.Context, client *github.Client) (string, error) {
+	app, err := LoadApp()
+	if err != nil {
+		return "", err
+	}
+	if app == nil {
+		user, _, err := client.Users.Get(ctx, "")
+		if err != nil {
+			return "", fmt.Errorf("getting authenticated user: %w", err)
+		}
+		return user.GetLogin(), nil
+	}
+	registered, _, err := client.Apps.Get(ctx, "")
+	if err != nil {
+		return "", fmt.Errorf("getting the authenticated App: %w", err)
+	}
+	return registered.GetSlug() + "[bot]", nil
 }

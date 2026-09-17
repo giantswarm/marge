@@ -303,10 +303,13 @@ type SweepResult struct {
 	Rules *SweepRules `json:"rules,omitempty"`
 	// Unhandled groups the failures no rule recognised, most frequent
 	// first. A signature here is what `marge rules draft` takes.
-	Unhandled        []SweepUnhandled `json:"unhandled,omitempty"`
-	Merged           []SweepPREntry   `json:"merged,omitempty"`
-	SecurityFailures []SweepPREntry   `json:"security_failures,omitempty"`
-	ActionRequired   []SweepPREntry   `json:"action_required,omitempty"`
+	Unhandled []SweepUnhandled `json:"unhandled,omitempty"`
+	Merged    []SweepPREntry   `json:"merged,omitempty"`
+	// Remedied lists the PRs a rule of the catalogue acted on in this run:
+	// a rerun, a retry, a branch update, a wait marker or a close.
+	Remedied         []SweepPREntry `json:"remedied,omitempty"`
+	SecurityFailures []SweepPREntry `json:"security_failures,omitempty"`
+	ActionRequired   []SweepPREntry `json:"action_required,omitempty"`
 	// Stale lists failing PRs whose head is behind the base branch and whose
 	// every failing check is green on the base branch head: the failure was
 	// fixed on the base branch after the PR's last build. The remedy is a
@@ -402,8 +405,10 @@ type SweepSkippedRule struct {
 }
 
 type SweepSummary struct {
-	Total            int `json:"total"`
-	Merged           int `json:"merged"`
+	Total  int `json:"total"`
+	Merged int `json:"merged"`
+	// Remedied counts the PRs a catalogue rule acted on.
+	Remedied         int `json:"remedied"`
 	Failed           int `json:"failed"`
 	SecurityFailures int `json:"security_failures"`
 	// CIUnavailable counts PRs whose CI could not run because of a GitHub
@@ -574,11 +579,10 @@ func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	}
 	req.Opts.Policies = scope.Policies
 
-	me, _, err := client.Users.Get(ctx, "")
+	login, err := gh.AuthenticatedLogin(ctx, client)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("getting authenticated user: %v", err)), nil
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-	login := me.GetLogin()
 
 	found, err := searchPRs(ctx, client, req.Query, login, scope.Repos)
 	if err != nil {
@@ -615,6 +619,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 		Summary: SweepSummary{
 			Total:            total,
 			Merged:           counts.Merged,
+			Remedied:         counts.Remedied,
 			Failed:           counts.Failed - len(securityEntries),
 			SecurityFailures: len(securityEntries),
 			CIUnavailable:    counts.Blocked,
@@ -672,6 +677,10 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 
 	for _, e := range status.MergedEntries() {
 		result.Merged = append(result.Merged, toEntry(e))
+	}
+
+	for _, e := range status.RemediedEntries() {
+		result.Remedied = append(result.Remedied, toEntry(e))
 	}
 
 	for _, e := range securityEntries {

@@ -9,6 +9,16 @@ Runs `marge serve --transport streamable-http`: the `sweep` and `mark` MCP tools
 
 marge needs a GitHub token with the permissions listed in the [repository README](https://github.com/giantswarm/marge#setup). Pass it inline (`marge.github.token`, the chart writes a Secret) or point at an existing Secret (`marge.github.existingSecret`, key `marge.github.existingSecretKey`). A CircleCI token (`marge.circleci.*`) is optional; it lets marge inspect private CircleCI projects and retry auto-cancelled builds.
 
+## The scheduled sweep
+
+`schedule.daily` runs `marge sweep --all-teams` as the sweep GitHub App. The run reads every team's policy from `giantswarm/github` at start and sweeps each team that has a policy file whose `schedule` key is `enabled`. It classifies, approves, merges, refreshes stale branches, retries cancelled builds and applies the catalogue's rules. Every one of those steps acts through the GitHub or CircleCI API: the daily run writes no code to any branch.
+
+The schedule acts as the App and never as a person. Set `marge.github.app` and the CronJob mints an installation token per repository, for one hour, and stores none. Without `marge.github.app` the chart refuses to render an enabled schedule. The App's credentials live in 1Password, in the `Team Bumblebee` vault, in the item `marge sweep GitHub App`; see [docs/github-app.md](https://github.com/giantswarm/marge/blob/main/docs/github-app.md).
+
+Set `marge.slack.token` and each run posts one summary to the channel the team's policy names. A run that changed nothing posts nothing.
+
+`schedule.weekly` is the interim trigger of the weekly rescue run. It stays off: the command it runs does not exist yet, so an enabled weekly schedule without `schedule.weekly.args` fails to render.
+
 {{ template "chart.homepageLine" . }}
 
 {{ template "chart.maintainersSection" . }}

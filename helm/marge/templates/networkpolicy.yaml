@@ -1,4 +1,4 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- if and .Values.networkPolicy.enabled .Values.mcp.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -8,7 +8,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      {{- include "marge.selectorLabels" . | nindent 6 }}
+      {{- include "marge.serverSelectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
     - Egress
@@ -26,8 +26,42 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # GitHub and CircleCI APIs
+    # GitHub, CircleCI and Slack APIs
     - ports:
         - port: 443
           protocol: TCP
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+{{- range $component, $settings := dict "daily-sweep" $.Values.schedule.daily "weekly-rescue" $.Values.schedule.weekly }}
+{{- if $settings.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marge.cronName" (dict "context" $ "component" $component) }}
+  labels:
+    {{- include "marge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marge.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # GitHub, CircleCI and Slack APIs
+    - ports:
+        - port: 443
+          protocol: TCP
+{{- end }}
+{{- end }}
 {{- end }}

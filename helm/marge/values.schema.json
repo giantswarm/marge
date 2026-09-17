@@ -106,6 +106,66 @@
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
+                        "app": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "existingSecret": {
+                                    "type": "string",
+                                    "description": "Name of an existing Secret holding the App credential. Takes precedence over the inline values, and must carry every key named below."
+                                },
+                                "id": {
+                                    "type": "string",
+                                    "description": "Numeric ID of the sweep GitHub App. Required by the scheduled sweeps, which mint an installation token per repository instead of holding a token."
+                                },
+                                "idKey": {
+                                    "type": "string",
+                                    "description": "Key of the App ID inside the Secret"
+                                },
+                                "installationId": {
+                                    "type": "string",
+                                    "description": "Numeric ID of the App's installation on the organization."
+                                },
+                                "installationIdKey": {
+                                    "type": "string",
+                                    "description": "Key of the installation ID inside the Secret"
+                                },
+                                "oauth": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "clientId": {
+                                            "type": "string",
+                                            "description": "OAuth client ID of the App. marge never reads it; it is held here so one place holds the App's credentials, and muster's GitHub connector references the same Secret."
+                                        },
+                                        "clientIdKey": {
+                                            "type": "string",
+                                            "description": "Key of the client ID inside the Secret"
+                                        },
+                                        "clientSecret": {
+                                            "type": "string",
+                                            "description": "OAuth client secret of the App. Do not reuse the shared github-oauth-client secret."
+                                        },
+                                        "clientSecretKey": {
+                                            "type": "string",
+                                            "description": "Key of the client secret inside the Secret"
+                                        },
+                                        "existingSecret": {
+                                            "type": "string",
+                                            "description": "Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values."
+                                        }
+                                    }
+                                },
+                                "privateKey": {
+                                    "type": "string",
+                                    "description": "PEM private key of the App. The chart writes it into a Secret; prefer existingSecret in production. The values of this item live in 1Password, in the Team Bumblebee vault, item \"marge sweep GitHub App\"."
+                                },
+                                "privateKeyKey": {
+                                    "type": "string",
+                                    "description": "Key of the PEM private key inside the Secret"
+                                }
+                            }
+                        },
                         "existingSecret": {
                             "type": "string",
                             "description": "Name of an existing Secret holding the GitHub token. Takes precedence over token."
@@ -116,9 +176,37 @@
                         },
                         "token": {
                             "type": "string",
-                            "description": "GitHub token marge uses (needs the permissions listed in the repository README). The chart writes it into a Secret; prefer existingSecret in production."
+                            "description": "GitHub token marge uses (needs the permissions listed in the repository README). The chart writes it into a Secret; prefer existingSecret in production. The scheduled sweeps ignore it and act as the App instead."
                         }
                     }
+                },
+                "slack": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "existingSecret": {
+                            "type": "string",
+                            "description": "Name of an existing Secret holding the Slack bot token. Takes precedence over token."
+                        },
+                        "existingSecretKey": {
+                            "type": "string",
+                            "description": "Key of the Slack bot token inside existingSecret"
+                        },
+                        "token": {
+                            "type": "string",
+                            "description": "Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary."
+                        }
+                    }
+                }
+            }
+        },
+        "mcp": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone, until a muster registers the server."
                 }
             }
         },
@@ -217,6 +305,150 @@
                         },
                         "memory": {
                             "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "schedule": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "daily": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "actions": {
+                            "type": "string",
+                            "description": "Sweep steps the daily run performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch."
+                        },
+                        "activeDeadlineSeconds": {
+                            "type": "integer",
+                            "description": "Seconds the daily run may take before Kubernetes stops it."
+                        },
+                        "dryRun": {
+                            "type": "boolean",
+                            "description": "Report every outcome without writing anything. Turn it on for the first runs on a new installation."
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Run the daily sweep. It sweeps every team whose policy file leaves the schedule enabled, and needs marge.github.app."
+                        },
+                        "failedJobsHistoryLimit": {
+                            "type": "integer",
+                            "description": "Failed Jobs kept"
+                        },
+                        "resources": {
+                            "type": "object",
+                            "description": "Container resources of the daily run",
+                            "additionalProperties": false,
+                            "properties": {
+                                "limits": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "cpu": {
+                                            "type": "integer"
+                                        },
+                                        "memory": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "requests": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "cpu": {
+                                            "type": "string"
+                                        },
+                                        "memory": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "schedule": {
+                            "type": "string",
+                            "description": "Cron expression of the daily sweep, in the cluster's timezone unless timeZone is set."
+                        },
+                        "successfulJobsHistoryLimit": {
+                            "type": "integer",
+                            "description": "Successful Jobs kept"
+                        },
+                        "timeZone": {
+                            "type": "string",
+                            "description": "IANA timezone the cron expression is read in."
+                        }
+                    }
+                },
+                "weekly": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "activeDeadlineSeconds": {
+                            "type": "integer",
+                            "description": "Seconds the weekly run may take before Kubernetes stops it."
+                        },
+                        "args": {
+                            "type": "array",
+                            "description": "Arguments the weekly run passes to the marge binary."
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Run the weekly rescue trigger. It stays off until the rescue run exists: the command it would run is not built yet, so args has no default and an enabled weekly CronJob without args fails to render."
+                        },
+                        "failedJobsHistoryLimit": {
+                            "type": "integer",
+                            "description": "Failed Jobs kept"
+                        },
+                        "resources": {
+                            "type": "object",
+                            "description": "Container resources of the weekly run",
+                            "additionalProperties": false,
+                            "properties": {
+                                "limits": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "cpu": {
+                                            "type": "integer"
+                                        },
+                                        "memory": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "requests": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "cpu": {
+                                            "type": "string"
+                                        },
+                                        "memory": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "schedule": {
+                            "type": "string",
+                            "description": "Cron expression of the weekly rescue trigger."
+                        },
+                        "successfulJobsHistoryLimit": {
+                            "type": "integer",
+                            "description": "Successful Jobs kept"
+                        },
+                        "timeZone": {
+                            "type": "string",
+                            "description": "IANA timezone the cron expression is read in."
+                        },
+                        "tokenAudience": {
+                            "type": "string",
+                            "description": "Audience of the projected ServiceAccount token the weekly run presents to the agent platform gateway. Mounted at /var/run/secrets/kagent/token."
                         }
                     }
                 }

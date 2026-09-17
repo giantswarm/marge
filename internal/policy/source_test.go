@@ -25,14 +25,26 @@ func githubSource(t *testing.T, files map[string]string, status int) GitHubSourc
 			http.Error(w, `{"message":"boom"}`, status)
 			return
 		}
-		content, ok := files[strings.TrimPrefix(r.URL.Path, prefix)]
-		if !ok {
+		path := strings.TrimPrefix(r.URL.Path, prefix)
+		kind, encoding := "file", "base64"
+		if content, ok := files[path]; ok {
+			body := base64.StdEncoding.EncodeToString([]byte(content))
+			_ = json.NewEncoder(w).Encode(github.RepositoryContent{Type: &kind, Encoding: &encoding, Content: &body})
+			return
+		}
+		var entries []github.RepositoryContent
+		for held := range files {
+			name, below := strings.CutPrefix(held, path+"/")
+			if !below || strings.Contains(name, "/") {
+				continue
+			}
+			entries = append(entries, github.RepositoryContent{Type: &kind, Name: &name, Path: &held})
+		}
+		if len(entries) == 0 {
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 			return
 		}
-		body := base64.StdEncoding.EncodeToString([]byte(content))
-		kind, encoding := "file", "base64"
-		_ = json.NewEncoder(w).Encode(github.RepositoryContent{Type: &kind, Encoding: &encoding, Content: &body})
+		_ = json.NewEncoder(w).Encode(entries)
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -74,5 +86,27 @@ func TestGitHubSource_readFailureIsAnError(t *testing.T) {
 
 	_, found, err := source.Read(t.Context(), DefaultFile)
 	require.ErrorContains(t, err, "reading "+DefaultFile)
+	require.False(t, found)
+}
+
+// TestGitHubSource_list decodes the directory listing the schedule reads the
+// opted-in teams out of.
+func TestGitHubSource_list(t *testing.T) {
+	source := githubSource(t, map[string]string{
+		DefaultFile:           "schedule: disabled\n",
+		TeamFile("bumblebee"): "schedule: enabled\n",
+	}, 0)
+
+	paths, found, err := source.List(t.Context(), PolicyDir)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.ElementsMatch(t, []string{DefaultFile, TeamFile("bumblebee")}, paths)
+}
+
+// TestGitHubSource_listNotFound reports an absent directory as not found,
+// the same way an absent file is.
+func TestGitHubSource_listNotFound(t *testing.T) {
+	_, found, err := githubSource(t, map[string]string{}, 0).List(t.Context(), PolicyDir)
+	require.NoError(t, err)
 	require.False(t, found)
 }
