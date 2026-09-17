@@ -78,7 +78,7 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Container security context (restricted Pod Security Standard) |
 | service.type | string | `"ClusterIP"` | Service type |
 | service.port | int | `8080` | Service port; the container listens on 8080 |
-| resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Container resources |
+| resources | object | `{"limits":{"cpu":"500m","ephemeral-storage":"1Gi","memory":"256Mi"},"requests":{"cpu":"50m","ephemeral-storage":"50Mi","memory":"64Mi"}}` | Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies. |
 | nodeSelector | object | `{}` | Node selector for the pod |
 | tolerations | list | `[]` | Tolerations for the pod |
 | affinity | object | `{}` | Affinity for the pod |
@@ -104,14 +104,14 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | marge.circleci.existingSecret | string | `""` | Name of an existing Secret holding the CircleCI token. Takes precedence over token. |
 | marge.circleci.existingSecretKey | string | `"token"` | Key of the CircleCI token inside existingSecret |
 | suspendAll | bool | `false` | Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead. |
-| scheduleDefaults | object | `{"actions":"classify,approve,merge,refresh,retry,remedy,mark","activeDeadlineSeconds":3600,"dryRun":false,"failedJobsHistoryLimit":3,"resources":{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}},"successfulJobsHistoryLimit":3,"timeZone":"Europe/Berlin"}` | Values every entry of schedules takes for the keys it does not set itself. |
+| scheduleDefaults | object | `{"actions":"classify,approve,merge,refresh,retry,remedy,mark","activeDeadlineSeconds":3600,"dryRun":false,"failedJobsHistoryLimit":3,"resources":{"limits":{"cpu":1,"ephemeral-storage":"1Gi","memory":"512Mi"},"requests":{"cpu":"100m","ephemeral-storage":"50Mi","memory":"128Mi"}},"successfulJobsHistoryLimit":3,"timeZone":"Europe/Berlin"}` | Values every entry of schedules takes for the keys it does not set itself. |
 | scheduleDefaults.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expressions are read in. |
 | scheduleDefaults.actions | string | `"classify,approve,merge,refresh,retry,remedy,mark"` | Sweep steps a scheduled sweep performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch. |
 | scheduleDefaults.dryRun | bool | `false` | Report every outcome without writing anything. Turn it on for the first runs on a new installation. |
 | scheduleDefaults.activeDeadlineSeconds | int | `3600` | Seconds a scheduled run may take before Kubernetes stops it. |
 | scheduleDefaults.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
 | scheduleDefaults.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
-| scheduleDefaults.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of a scheduled run |
+| scheduleDefaults.resources | object | `{"limits":{"cpu":1,"ephemeral-storage":"1Gi","memory":"512Mi"},"requests":{"cpu":"100m","ephemeral-storage":"50Mi","memory":"128Mi"}}` | Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies. |
 | schedules | list | `[]` | Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit. |
 | networkPolicy.enabled | bool | `true` | Create a NetworkPolicy: ingress to the MCP port from the selected namespaces, egress to DNS and HTTPS only (GitHub, CircleCI). |
 | networkPolicy.ingressNamespaceSelector | object | `{}` | Namespaces allowed to reach the MCP port; an empty selector allows every namespace of the cluster. |
