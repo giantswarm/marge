@@ -1,0 +1,122 @@
+{{- range $entry := (include "marge.schedules" . | fromYamlArray) }}
+{{- include "marge.checkSchedule" (dict "context" $ "entry" $entry) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "marge.cronName" (dict "context" $ "component" $entry.name) }}
+  labels:
+    {{- include "marge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $entry.name }}
+spec:
+  schedule: {{ $entry.schedule | quote }}
+  {{- with $entry.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  suspend: {{ or $entry.suspend $.Values.suspendAll | default false }}
+  successfulJobsHistoryLimit: {{ $entry.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $entry.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ $entry.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "marge.labels" $ | nindent 12 }}
+            app.kubernetes.io/component: {{ $entry.name }}
+            {{- with $.Values.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $.Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: Never
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "marge.cronServiceAccountName" (dict "context" $ "component" $entry.name) }}
+          automountServiceAccountToken: false
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: {{ $.Chart.Name }}
+              securityContext:
+                {{- toYaml $.Values.securityContext | nindent 16 }}
+              image: "{{ $.Values.image.registry }}/{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              args:
+                {{- with $entry.args }}
+                {{- toYaml . | nindent 16 }}
+                {{- else }}
+                - sweep
+                {{- if $entry.allTeams }}
+                - --all-teams
+                {{- else }}
+                - --team={{ $entry.team }}
+                {{- end }}
+                - --actions={{ $entry.actions }}
+                - --no-tui
+                {{- if $entry.dryRun }}
+                - --dry-run
+                {{- end }}
+                {{- end }}
+              env:
+                {{- include "marge.appEnv" $ | nindent 16 }}
+                {{- with (include "marge.slackEnv" $) }}
+                {{- . | nindent 16 }}
+                {{- end }}
+                {{- with (include "marge.circleciEnv" $) }}
+                {{- . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml $entry.resources | nindent 16 }}
+              volumeMounts:
+                - name: app-credential
+                  mountPath: /etc/marge/github-app
+                  readOnly: true
+                {{- if $entry.tokenAudience }}
+                - name: kagent-token
+                  mountPath: /var/run/secrets/kagent
+                  readOnly: true
+                {{- end }}
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: app-credential
+              secret:
+                secretName: {{ include "marge.appSecretName" $ }}
+                items:
+                  - key: {{ $.Values.marge.github.app.privateKeyKey }}
+                    path: private-key.pem
+            {{- if $entry.tokenAudience }}
+            # The agent platform gateway verifies this token against the
+            # cluster's ServiceAccount issuer, so the run needs no client
+            # secret of its own.
+            - name: kagent-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      audience: {{ $entry.tokenAudience | quote }}
+                      expirationSeconds: 3600
+            {{- end }}
+            - name: tmp
+              emptyDir: {}
+          {{- with $.Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

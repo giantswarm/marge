@@ -206,3 +206,46 @@ Environment of the CircleCI token, which is optional everywhere.
       key: {{ if .Values.marge.circleci.existingSecret }}{{ .Values.marge.circleci.existingSecretKey }}{{ else }}circleci-token{{ end }}
 {{- end }}
 {{- end }}
+
+{{/*
+The scheduled runs of this release, as a YAML list. One entry renders one
+CronJob and one ServiceAccount, so the CronJob template and the RBAC
+template read the same list.
+
+An entry of .Values.schedules takes the missing keys from
+.Values.scheduleDefaults. The deprecated .Values.schedule.daily and
+.Values.schedule.weekly are translated into an entry each, under the names
+their resources already carry.
+*/}}
+{{- define "marge.schedules" -}}
+{{- $entries := list }}
+{{- range $entry := .Values.schedules }}
+{{- $entries = append $entries (mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry) }}
+{{- end }}
+{{- if .Values.schedule.daily.enabled }}
+{{- $entries = append $entries (merge (dict "name" "daily-sweep" "allTeams" true) .Values.schedule.daily) }}
+{{- end }}
+{{- if .Values.schedule.weekly.enabled }}
+{{- $entries = append $entries (merge (dict "name" "weekly-rescue") .Values.schedule.weekly) }}
+{{- end }}
+{{- toYaml $entries }}
+{{- end }}
+
+{{/*
+Refuses a scheduled run the chart cannot render, and names the entry.
+*/}}
+{{- define "marge.checkSchedule" -}}
+{{- $entry := .entry }}
+{{- if not $entry.name }}
+{{- fail "every entry of schedules needs a name: it names the CronJob and its ServiceAccount." }}
+{{- end }}
+{{- if not $entry.schedule }}
+{{- fail (printf "schedule entry %s needs a cron expression in schedule." $entry.name) }}
+{{- end }}
+{{- if and (not $entry.team) (not $entry.allTeams) (not $entry.args) }}
+{{- fail (printf "schedule entry %s needs a team: the sweep it runs names one team, or args gives the whole command line." $entry.name) }}
+{{- end }}
+{{- if not (include "marge.hasAppCredential" .context) }}
+{{- fail (printf "schedule entry %s needs marge.github.app: set app.existingSecret, or app.id, app.installationId and app.privateKey. A scheduled run acts as the sweep App and never as a person." $entry.name) }}
+{{- end }}
+{{- end }}
