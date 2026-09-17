@@ -688,7 +688,7 @@ func TestGuard_dryRunWritesNothing(t *testing.T) {
 	f := greenFixture()
 	got := f.run(t, func(p *Processor) { p.DryRun = true })
 
-	require.Equal(t, pr.StatusSkipped, got.State, got.Detail)
+	require.Equal(t, pr.StatusEligible, got.State, got.Detail)
 	require.Contains(t, got.Detail, "would approve, merge (squash)")
 	require.Zero(t, f.approveCalls.Load()+f.mergeCalls.Load()+f.labelAdds.Load()+f.commentPosts.Load())
 	require.Empty(t, got.Label, "no label was written, so none is reported")
