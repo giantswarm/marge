@@ -17,9 +17,11 @@ muster:
   description: "Sweep a team's dependency and alignment PRs: list, sweep, remedy and mark, as the signed-in person."
   # -- Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off.
   toolGroup: ""
+  # -- Seconds muster waits on a connection to this server. The sweep reads the checks of every PR in a team's queue, which passes the CRD default of 30. The CRD caps the value at 300.
+  timeout: 120  # @schema minimum: 1 ; maximum: 300
   github:
-    # -- Issuer the grants are filed under. GitHub publishes no discovery document, so the endpoints below are pinned instead.
-    issuer: "https://github.com"
+    # -- Issuer the grants are filed under, and the identity muster files them under, so it must match the value the other GitHub-backed servers use. GitHub publishes no discovery document, so the endpoints below are pinned instead.
+    issuer: "https://github.com/login/oauth"
     # -- GitHub's authorization endpoint.
     authorizationEndpoint: "https://github.com/login/oauth/authorize"
     # -- GitHub's token endpoint.

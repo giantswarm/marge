@@ -228,7 +228,7 @@
                         },
                         "issuer": {
                             "type": "string",
-                            "description": "Issuer the grants are filed under. GitHub publishes no discovery document, so the endpoints below are pinned instead."
+                            "description": "Issuer the grants are filed under, and the identity muster files them under, so it must match the value the other GitHub-backed servers use. GitHub publishes no discovery document, so the endpoints below are pinned instead."
                         },
                         "scopes": {
                             "type": "string",
@@ -251,6 +251,12 @@
                 "register": {
                     "type": "boolean",
                     "description": "Register the MCP server with muster, so a person reaches it through the gateway as themselves. Needs the App's OAuth client credentials and a muster in the cluster."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Seconds muster waits on a connection to this server. The sweep reads the checks of every PR in a team's queue, which passes the CRD default of 30. The CRD caps the value at 300.",
+                    "maximum": 300,
+                    "minimum": 1
                 },
                 "toolGroup": {
                     "type": "string",
