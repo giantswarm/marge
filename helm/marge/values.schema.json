@@ -390,7 +390,7 @@
                         },
                         "enabled": {
                             "type": "boolean",
-                            "description": "Run the daily sweep. It sweeps every team whose policy file leaves the schedule enabled, and needs marge.github.app."
+                            "description": "Deprecated. Run the daily sweep of every team whose policy file leaves the schedule enabled. Use schedules instead."
                         },
                         "failedJobsHistoryLimit": {
                             "type": "integer",
@@ -543,10 +543,7 @@
                             "additionalProperties": false,
                             "properties": {
                                 "cpu": {
-                                    "type": [
-                                        "integer",
-                                        "string"
-                                    ]
+                                    "type": "integer"
                                 },
                                 "memory": {
                                     "type": "string"
@@ -558,10 +555,7 @@
                             "additionalProperties": false,
                             "properties": {
                                 "cpu": {
-                                    "type": [
-                                        "integer",
-                                        "string"
-                                    ]
+                                    "type": "string"
                                 },
                                 "memory": {
                                     "type": "string"
@@ -582,98 +576,7 @@
         },
         "schedules": {
             "type": "array",
-            "description": "Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension.",
-            "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                    "name",
-                    "schedule"
-                ],
-                "properties": {
-                    "actions": {
-                        "type": "string"
-                    },
-                    "activeDeadlineSeconds": {
-                        "type": "integer"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "dryRun": {
-                        "type": "boolean"
-                    },
-                    "failedJobsHistoryLimit": {
-                        "type": "integer"
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Names the CronJob and its ServiceAccount."
-                    },
-                    "resources": {
-                        "type": "object",
-                        "description": "Container resources of a scheduled run",
-                        "additionalProperties": false,
-                        "properties": {
-                            "limits": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "properties": {
-                                    "cpu": {
-                                        "type": [
-                                            "integer",
-                                            "string"
-                                        ]
-                                    },
-                                    "memory": {
-                                        "type": "string"
-                                    }
-                                }
-                            },
-                            "requests": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "properties": {
-                                    "cpu": {
-                                        "type": [
-                                            "integer",
-                                            "string"
-                                        ]
-                                    },
-                                    "memory": {
-                                        "type": "string"
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "schedule": {
-                        "type": "string",
-                        "description": "Cron expression of this run."
-                    },
-                    "successfulJobsHistoryLimit": {
-                        "type": "integer"
-                    },
-                    "suspend": {
-                        "type": "boolean",
-                        "description": "Suspend this run alone."
-                    },
-                    "team": {
-                        "type": "string",
-                        "description": "The team this run sweeps."
-                    },
-                    "timeZone": {
-                        "type": "string"
-                    },
-                    "tokenAudience": {
-                        "type": "string",
-                        "description": "Audience of the projected ServiceAccount token, mounted at /var/run/secrets/kagent. Left out, no token is mounted."
-                    }
-                }
-            }
+            "description": "Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit."
         },
         "securityContext": {
             "type": "object",
@@ -760,7 +663,7 @@
         },
         "suspendAll": {
             "type": "boolean",
-            "description": "Suspend every scheduled run without deleting its entry."
+            "description": "Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead."
         },
         "tolerations": {
             "type": "array",
