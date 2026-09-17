@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/marge/internal/patterns"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
 )
@@ -205,4 +206,22 @@ func TestOpenDraftPRReportsAnExistingBranch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, pull.GetNumber())
 	require.Nil(t, rec.pull, "no second pull request is opened")
+}
+
+// A group read from the markers of the PRs is the same shape the draft is
+// built from, so a skeleton needs no saved report.
+func TestGroupFromMarkersBuildsADraft(t *testing.T) {
+	group := fromGroup(&patterns.Group{
+		Signature: "d6c0555bf440",
+		Checks:    []string{"go-build"},
+		Excerpt:   "go: updates to go.mod needed",
+		Count:     2,
+		PRs:       []string{"giantswarm/marge#1", "giantswarm/backstage#2"},
+	})
+
+	require.Equal(t, "go-build-d6c055", ruleNameFor(group))
+	files := buildDraft("go-build-d6c055", group)
+	require.Len(t, files, 3)
+	require.Contains(t, files[1].body, "go: updates to go.mod needed")
+	require.Contains(t, draftPRBody("go-build-d6c055", group), "giantswarm/backstage#2")
 }

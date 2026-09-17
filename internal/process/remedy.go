@@ -35,7 +35,7 @@ func (p *Processor) applyRule(ctx context.Context, run *prRun) {
 
 	hit := p.Rules.Match(p.subject(ctx, run, state))
 	if hit == nil {
-		p.recordUnhandled(run)
+		p.recordUnhandled(ctx, run)
 		return
 	}
 	if p.DryRun {
@@ -238,7 +238,13 @@ func (p *Processor) appliedThisChange(ctx context.Context, run *prRun) map[remed
 // recordUnhandled notes a failure no rule recognised, with a signature that
 // groups the same failure across PRs. It reads only excerpts the rules
 // already fetched, so noticing a pattern costs no extra request.
-func (p *Processor) recordUnhandled(run *prRun) {
+//
+// The signature is written on the PR as an evidence marker as well. The run
+// ends and its grouping goes with it, so the marker is the only record that
+// survives: `marge rules draft` builds a skeleton from it, and counting the
+// PRs that carry one signature is what decides whether a pattern is worth a
+// rule.
+func (p *Processor) recordUnhandled(ctx context.Context, run *prRun) {
 	if len(run.failing) == 0 {
 		return
 	}
@@ -252,11 +258,46 @@ func (p *Processor) recordUnhandled(run *prRun) {
 			break
 		}
 	}
-	run.status.SetUnhandled(run.idx, &pr.Unhandled{
+	unhandled := &pr.Unhandled{
 		Signature: failureSignature(checks, excerpt),
 		Checks:    checks,
 		Excerpt:   excerpt,
+	}
+	if standing := p.standingUnhandled(ctx, run); standing != nil {
+		unhandled.Signature = standing.Signature
+		unhandled.Checks = standing.Checks
+		unhandled.Excerpt = standing.Excerpt
+	}
+	run.status.SetUnhandled(run.idx, unhandled)
+
+	p.postMarker(ctx, run, &pr.RescueMarker{
+		Kind:      pr.MarkerKindEvidence,
+		Outcome:   pr.MarkerOutcomeUnhandled,
+		Reason:    strings.Join(unhandled.Checks, ", "),
+		Signature: unhandled.Signature,
+		Checks:    unhandled.Checks,
+		Excerpt:   unhandled.Excerpt,
 	})
+}
+
+// standingUnhandled returns the unhandled marker already on the PR for the
+// change on the branch, or nil. A later run reads back the signature the
+// first one wrote, so one failure keeps one signature while the branch does
+// not move -- a log that is truncated or unreachable this time does not
+// split the group in two.
+func (p *Processor) standingUnhandled(ctx context.Context, run *prRun) *pr.Unhandled {
+	head := run.pull.GetHead().GetSHA()
+	for _, marker := range run.markers(ctx, p) {
+		if !marker.IsUnhandled() {
+			continue
+		}
+		marker.MarkStale(head, func() pr.Fingerprint { return run.fingerprint(ctx, p) })
+		if marker.Stale {
+			continue
+		}
+		return &pr.Unhandled{Signature: marker.Signature, Checks: marker.Checks, Excerpt: marker.Excerpt}
+	}
+	return nil
 }
 
 // signatureBytes is how much of an excerpt identifies a failure. A rule's

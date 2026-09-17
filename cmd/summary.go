@@ -34,6 +34,8 @@ func teamSummary(team string, result SweepResult) (string, bool) {
 	section(&b, "Blocked, security", result.SecurityFailures)
 	section(&b, "Blocked", result.ActionRequired)
 
+	unhandledSection(&b, result.Unhandled)
+
 	if counts.Skipped > 0 {
 		fmt.Fprintf(&b, "%s skipped by policy.\n", plural(counts.Skipped, "PR"))
 	}
@@ -44,6 +46,30 @@ func teamSummary(team string, result SweepResult) (string, bool) {
 		fmt.Fprintf(&b, "Rules unavailable (%s): %s. Every remedy was refused.\n", result.Rules.Source, result.Rules.Error)
 	}
 	return strings.TrimRight(b.String(), "\n"), true
+}
+
+// summarySignatureLimit bounds how many signatures the summary names. The
+// point of the line is the pattern worth a rule, not a catalogue of every
+// one-off failure.
+const summarySignatureLimit = 3
+
+// unhandledSection names the failures no rule recognised, the one on the
+// most PRs first. Each signature is what `marge rules draft <signature>`
+// takes, and the sweep leaves it on every PR it counts, so the line is a
+// pointer to markers that outlive the run rather than the only record of
+// them.
+func unhandledSection(b *strings.Builder, groups []SweepUnhandled) {
+	if len(groups) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\nUnrecognised failures (%d):\n", len(groups))
+	for i, group := range groups {
+		if i == summarySignatureLimit {
+			fmt.Fprintf(b, "• and %d more\n", len(groups)-summarySignatureLimit)
+			return
+		}
+		fmt.Fprintf(b, "• `%s` on %s: %s\n", group.Signature, plural(group.Count, "PR"), strings.Join(group.Checks, ", "))
+	}
 }
 
 // headline is the one-line count of what the run did and what it left. Every
