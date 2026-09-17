@@ -3,7 +3,12 @@ package pr
 // LabelPrefix is the namespace of the one classification label the sweep
 // keeps on every bot PR it touched. Labels are display only: no guard reads
 // them back.
-const LabelPrefix = "bot-prs-sweep/"
+const LabelPrefix = "marge/"
+
+// LegacyLabelPrefix is a second namespace the sweep recognises as its own:
+// a label carrying it is removed from every PR the sweep touches, so no PR
+// ends a sweep with two classifications.
+const LegacyLabelPrefix = "bot-prs-sweep/"
 
 // LabelClass returns the classification label suffix for a final state, or
 // "" for a transient state that never ends a sweep.

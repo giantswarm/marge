@@ -12,7 +12,7 @@ import (
 	"github.com/giantswarm/marge/internal/pr"
 )
 
-// labelColor is the colour of every bot-prs-sweep label the sweep creates.
+// labelColor is the colour of every classification label the sweep creates.
 const labelColor = "0e8a16"
 
 // labelCache remembers, per repository, that a label was already created
@@ -22,7 +22,7 @@ type labelCache struct {
 	labels  map[string]bool
 }
 
-// setLabel leaves exactly one bot-prs-sweep/<class> label on the PR. Every
+// setLabel leaves exactly one marge/<class> label on the PR. Every
 // error degrades to a note on the entry: a label is display only and may
 // never change a sweep outcome.
 func (p *Processor) setLabel(ctx context.Context, run *prRun, class string) {
@@ -33,7 +33,7 @@ func (p *Processor) setLabel(ctx context.Context, run *prRun, class string) {
 		switch {
 		case name == want:
 			present = true
-		case strings.HasPrefix(name, pr.LabelPrefix):
+		case strings.HasPrefix(name, pr.LabelPrefix), strings.HasPrefix(name, pr.LegacyLabelPrefix):
 			// go-github does not escape the label in the path; a slash in
 			// the name would otherwise split the route.
 			if _, err := p.Client.Issues.RemoveLabelForIssue(ctx, run.info.Owner, run.info.Repo, run.info.Number, url.PathEscape(name)); err != nil {
