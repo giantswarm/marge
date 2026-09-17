@@ -205,6 +205,7 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 						URL:       url,
 						Author:    issue.GetUser().GetLogin(),
 						CreatedAt: issue.GetCreatedAt().Time,
+						Labels:    labelNames(issue.Labels),
 					})
 				}
 
@@ -217,6 +218,20 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 	}
 
 	return found, nil
+}
+
+// labelNames is what the sweep carries out of a discovery besides the PR
+// itself: the label names, so a later step can read the classification a
+// previous sweep stored instead of computing it again.
+func labelNames(labels []*github.Label) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, label.GetName())
+	}
+	return names
 }
 
 func listRepoPRs(ctx context.Context, client *github.Client, repos []string, query string) (discovery, error) {
@@ -278,6 +293,7 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 						Author:    author,
 						CreatedAt: pull.GetCreatedAt().Time,
 						BaseRef:   pull.GetBase().GetRef(),
+						Labels:    labelNames(pull.Labels),
 					})
 				}
 

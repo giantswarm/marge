@@ -117,6 +117,10 @@ func listTool() mcp.Tool {
 			"The entries are grouped the way the sweep reports them -- merged, security_failures, action_required, stale, cancelled, waiting, obsolete, ci_unavailable, ci_no_verdict, skipped -- so \"what is waiting for us\" and \"what would a sweep do\" are the same question. "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale."),
 		scopeArguments(),
+		mcp.WithBoolean("refresh",
+			mcp.Description("Classify every PR again instead of reading the classification the last sweep stored in its marge/<class> label (default: false). "+
+				"The stored read costs one search per scope and reports a PR no sweep has labelled under unclassified; a refresh costs a check read per PR and reports the evidence, the update type, the policy and the prior-rescue state, which the stored read leaves out."),
+		),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -427,6 +431,13 @@ type SweepResult struct {
 	Remedied         []SweepPREntry `json:"remedied,omitempty"`
 	SecurityFailures []SweepPREntry `json:"security_failures,omitempty"`
 	ActionRequired   []SweepPREntry `json:"action_required,omitempty"`
+	// Eligible lists green PRs the run did not merge because the merge step
+	// was not among its actions. Every green PR of a list is one.
+	Eligible []SweepPREntry `json:"eligible,omitempty"`
+	// Unclassified lists PRs that carry no marge/<class> label, so no sweep
+	// has decided them yet. Only a read of the stored classification
+	// produces them: a run that classifies decides every PR it reads.
+	Unclassified []SweepPREntry `json:"unclassified,omitempty"`
 	// Stale lists failing PRs whose head is behind the base branch and whose
 	// every failing check is green on the base branch head: the failure was
 	// fixed on the base branch after the PR's last build. The remedy is a
@@ -555,6 +566,12 @@ type SweepSummary struct {
 	// Waiting counts PRs whose required checks have not all reported.
 	Waiting int `json:"waiting"`
 	Skipped int `json:"skipped"`
+	// Eligible counts green PRs left unmerged because the merge step was
+	// not among the run's actions.
+	Eligible int `json:"eligible"`
+	// Unclassified counts PRs no sweep has labelled. Only a read of the
+	// stored classification produces them.
+	Unclassified int `json:"unclassified"`
 }
 
 // SweepPREntry represents a single PR in the sweep results.
@@ -682,40 +699,63 @@ type SweepRescueInfo struct {
 	Rebased bool `json:"rebased"`
 }
 
-// run is the one engine call behind list, sweep and remedy. It resolves the
-// scope and its policy, searches the PRs, narrows them, loads the rule
-// catalogue and processes them, exactly as the sweep command does. What a
-// tool changes is the request it hands in, never the path it runs.
-func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error) {
+// scopedPRs is what a tool starts from: the client it acts with, the login
+// that client authenticates as, the PRs of the request's scope and the
+// repositories the discovery could not list.
+type scopedPRs struct {
+	client *github.Client
+	login  string
+	prs    []pr.PRInfo
+	found  discovery
+}
+
+// discover resolves the request's scope and finds the PRs it covers. It
+// records the resolved policies on the request, so the engine decides every
+// PR under the policy the scope resolved to.
+func (t toolset) discover(ctx context.Context, req *sweepRequest) (scopedPRs, error) {
 	client, err := t.newClient(ctx)
 	if err != nil {
-		return SweepResult{}, err
+		return scopedPRs{}, err
 	}
 
 	scope, err := req.resolveScope(ctx, client)
 	if err != nil {
-		return SweepResult{}, err
+		return scopedPRs{}, err
 	}
 	req.Opts.Policies = scope.Policies
 
 	login, err := gh.AuthenticatedLogin(ctx, client)
 	if err != nil {
-		return SweepResult{}, err
+		return scopedPRs{}, err
 	}
 
 	repos, err := scopeRepos(scope.Repos, req.Opts.PRs)
 	if err != nil {
-		return SweepResult{}, err
+		return scopedPRs{}, err
 	}
 
 	found, err := searchPRs(ctx, client, req.Opts.Query, login, repos)
 	if err != nil {
-		return SweepResult{}, fmt.Errorf("searching PRs: %w", err)
+		return scopedPRs{}, fmt.Errorf("searching PRs: %w", err)
 	}
 	prs, err := filterByPRs(filterByOrg(found.PRs, req.Opts.Org), req.Opts.PRs)
 	if err != nil {
+		return scopedPRs{}, err
+	}
+
+	return scopedPRs{client: client, login: login, prs: prs, found: found}, nil
+}
+
+// run is the one engine call behind list, sweep and remedy. It resolves the
+// scope and its policy, searches the PRs, narrows them, loads the rule
+// catalogue and processes them, exactly as the sweep command does. What a
+// tool changes is the request it hands in, never the path it runs.
+func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error) {
+	scoped, err := t.discover(ctx, &req)
+	if err != nil {
 		return SweepResult{}, err
 	}
+	client, login, prs, found := scoped.client, scoped.login, scoped.prs, scoped.found
 
 	catalogue, rulesReport := loadRules(ctx, client, RulesSource{})
 	if req.Rule != "" {
@@ -758,11 +798,47 @@ func (t toolset) handleList(ctx context.Context, request mcp.CallToolRequest) (*
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	sweepResult, err := t.run(ctx, req)
+	run := t.listStored
+	if request.GetBool("refresh", false) {
+		run = t.run
+	}
+	sweepResult, err := run(ctx, req)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return result(sweepResult)
+}
+
+// listStored reports the classification the last sweep stored on each PR
+// instead of deciding it again. The classification lives in the PR's
+// marge/<class> label, which the discovery already carries, so the whole
+// list costs the discovery and nothing more: no check read, no PR read.
+//
+// What the label cannot say, the entry leaves out. Several states share one
+// label, so the state is the class's representative; the evidence, the
+// update type, the resolved policy and any prior rescue attempt each need
+// the PR itself and stay empty. A PR no sweep has labelled has no stored
+// classification, so it is reported as unclassified rather than guessed at.
+func (t toolset) listStored(ctx context.Context, req sweepRequest) (SweepResult, error) {
+	scoped, err := t.discover(ctx, &req)
+	if err != nil {
+		return SweepResult{}, err
+	}
+
+	status := pr.NewPRStatus()
+	for _, info := range scoped.prs {
+		idx := status.Add(info)
+		status.SetClassification(idx, pr.KindOf(info.Author), "")
+		label, class := pr.StoredClass(info.Labels)
+		state, classified := pr.ClassState(class)
+		if !classified {
+			status.Update(idx, pr.StatusUnclassified, "no sweep has classified this PR")
+			continue
+		}
+		status.Update(idx, state, "stored by the last sweep")
+		status.SetLabel(idx, label)
+	}
+	return buildSweepResult(status, scoped.found.Failed, nil), nil
 }
 
 func (t toolset) handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -838,6 +914,8 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 			Obsolete:         counts.Obsolete,
 			Waiting:          counts.Waiting,
 			Skipped:          counts.Skipped,
+			Eligible:         counts.Eligible,
+			Unclassified:     counts.Unclassified,
 		},
 	}
 	for _, f := range failed {
@@ -935,6 +1013,14 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 			continue
 		}
 		result.ActionRequired = append(result.ActionRequired, toEntry(e))
+	}
+
+	for _, e := range status.EligibleEntries() {
+		result.Eligible = append(result.Eligible, toEntry(e))
+	}
+
+	for _, e := range status.UnclassifiedEntries() {
+		result.Unclassified = append(result.Unclassified, toEntry(e))
 	}
 
 	for _, e := range status.SkippedEntries() {
