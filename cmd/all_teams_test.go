@@ -172,3 +172,40 @@ func TestDailyActionsWriteNoCode(t *testing.T) {
 	}
 	require.Equal(t, apiOnly, remedy.Default().Names())
 }
+
+// TestHeadline_accountsForEveryPR is the rule the CronJob's log depends on:
+// the counts add up to the total. A line that drops a category reads as if
+// the sweep lost a PR, which is how a real gazelle run reported 12 PRs as
+// "3 merged, 3 blocked, 5 skipped".
+func TestHeadline_accountsForEveryPR(t *testing.T) {
+	counts := SweepSummary{
+		Total: 12, Merged: 3, Failed: 2, SecurityFailures: 1, Skipped: 5, Stale: 1,
+	}
+
+	line := headline(counts)
+	require.Contains(t, line, "3 merged")
+	require.Contains(t, line, "3 blocked")
+	require.Contains(t, line, "1 stale")
+	require.Contains(t, line, "5 skipped")
+	require.NotContains(t, line, "other", "every PR is in a named category")
+}
+
+// TestHeadline_namesTheRemainder keeps an outcome nobody added to the list
+// visible, instead of silently dropping it from the counts.
+func TestHeadline_namesTheRemainder(t *testing.T) {
+	require.Contains(t, headline(SweepSummary{Total: 12, Merged: 3}), "9 other")
+}
+
+// TestHeadline_everyCategoryIsNamed walks each count of SweepSummary and
+// fails when one of them is missing from the line, so a new outcome cannot
+// be added to the summary and forgotten here.
+func TestHeadline_everyCategoryIsNamed(t *testing.T) {
+	for _, part := range headlineParts(SweepSummary{}) {
+		require.NotEmpty(t, part.name)
+	}
+	counts := SweepSummary{
+		Total: 10, Merged: 1, Remedied: 1, Refreshed: 1, Retried: 1, Failed: 1,
+		Stale: 1, Cancelled: 1, Obsolete: 1, Waiting: 1, Skipped: 1,
+	}
+	require.NotContains(t, headline(counts), "other")
+}
