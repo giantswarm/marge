@@ -143,7 +143,7 @@ type StatusEntry struct {
 	// empty for a PR the sweep could not fetch.
 	Kind       Kind
 	UpdateType UpdateType
-	// Label is the bot-prs-sweep/<class> label that is on the PR after the
+	// Label is the marge/<class> label that is on the PR after the
 	// sweep; empty when none was written (dry run, or the write failed).
 	Label string
 	// Rescue is the most recent prior automated rescue attempt found on

@@ -112,7 +112,7 @@ names a key or a value the sweep does not know, stops the sweep instead of
 applying defaults the team never wrote. Every outcome records the policy it
 was decided under.
 
-Each PR gets one bot-prs-sweep/<class> label with its classification.
+Each PR gets one marge/<class> label with its classification.
 Green eligible PRs (by company default: patch, minor, digest, pin and
 lockfile updates, Align files, Herald) are approved and squash-merged;
 majors and unreadable updates are held for a person. A repository whose

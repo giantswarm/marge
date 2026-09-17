@@ -282,7 +282,7 @@ func scopeArguments() mcp.ToolOption {
 func sweepTool() mcp.Tool {
 	return mcp.NewTool("sweep",
 		mcp.WithDescription("Sweep bot PRs (Renovate, Align files, Herald, Dependabot): classify every open bot PR of a team or query scope, approve and squash-merge the eligible green ones, "+
-			"label each with bot-prs-sweep/<class>, and hold majors and unreadable updates for a person. A pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. "+
+			"label each with marge/<class>, and hold majors and unreadable updates for a person. A pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. "+
 			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, waiting, obsolete, ci_unavailable, ci_no_verdict and skipped lists, and repositories_failed for repositories that could not be listed. "+
 			"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
 			"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
@@ -567,7 +567,7 @@ type SweepPREntry struct {
 	Status string `json:"status"`
 	Detail string `json:"detail,omitempty"`
 	// Kind is the bot that authored the PR; UpdateType the size of the
-	// update it carries; Label the bot-prs-sweep/<class> label that is on
+	// update it carries; Label the marge/<class> label that is on
 	// the PR after the sweep, empty when nothing was written.
 	Kind       string `json:"kind,omitempty"`
 	UpdateType string `json:"update_type,omitempty"`

@@ -57,7 +57,7 @@ func TestBuildSweepResult_labelAndFailedRepositories(t *testing.T) {
 	idx := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 1})
 	status.Update(idx, pr.StatusMerged, "squash")
 	status.SetClassification(idx, pr.KindRenovate, pr.UpdatePatch)
-	status.SetLabel(idx, "bot-prs-sweep/merged")
+	status.SetLabel(idx, "marge/merged")
 	idx2 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 2})
 	status.Update(idx2, pr.StatusSkipped, "dry-run: would approve, merge (squash)")
 	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3})
@@ -66,7 +66,7 @@ func TestBuildSweepResult_labelAndFailedRepositories(t *testing.T) {
 	got := buildSweepResult(status, []repoFailure{{Repo: "o/broken", Err: "boom"}}, nil)
 
 	require.Len(t, got.Merged, 1)
-	require.Equal(t, "bot-prs-sweep/merged", got.Merged[0].Label)
+	require.Equal(t, "marge/merged", got.Merged[0].Label)
 	require.Equal(t, "renovate", got.Merged[0].Kind)
 	require.Equal(t, "patch", got.Merged[0].UpdateType)
 	require.Len(t, got.Skipped, 1)

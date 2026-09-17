@@ -255,7 +255,8 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("DELETE /repos/org/repo/issues/7/labels/{name...}", func(w http.ResponseWriter, r *http.Request) {
 		f.labelRemoves.Add(1)
 		name, _ := url.PathUnescape(r.PathValue("name"))
-		require.Equal(t, "bot-prs-sweep/pending", name, "the label name reaches GitHub unescaped")
+		require.True(t, name == pr.LabelPrefix+"pending" || name == pr.LegacyLabelPrefix+"pending",
+			"the label name reaches GitHub unescaped, got %q", name)
 		f.mu.Lock()
 		kept := f.labels[:0]
 		for _, l := range f.labels {
@@ -314,7 +315,7 @@ func TestGuard_requiredCheckMissingIsAWait(t *testing.T) {
 	require.Contains(t, got.Detail, "ci/circleci: release")
 	require.Zero(t, f.mergeCalls.Load())
 	require.Zero(t, f.approveCalls.Load())
-	require.Equal(t, []string{"bot-prs-sweep/pending"}, f.labelSet())
+	require.Equal(t, []string{"marge/pending"}, f.labelSet())
 }
 
 func TestGuard_requiredCheckPendingIsAWait(t *testing.T) {
@@ -416,7 +417,7 @@ func TestGuard_preexistingRedNeverShortensTheRequiredWait(t *testing.T) {
 			require.Contains(t, got.Detail, "go-build")
 			require.Zero(t, f.approveCalls.Load())
 			require.Zero(t, f.mergeCalls.Load())
-			require.Equal(t, []string{"bot-prs-sweep/pending"}, f.labelSet())
+			require.Equal(t, []string{"marge/pending"}, f.labelSet())
 		})
 	}
 }
@@ -447,7 +448,7 @@ func TestGuard_redRequiredCheckIsAFailure(t *testing.T) {
 
 	require.Equal(t, pr.StatusFailed, got.State, got.Detail)
 	require.Zero(t, f.mergeCalls.Load())
-	require.Equal(t, []string{"bot-prs-sweep/action-required"}, f.labelSet())
+	require.Equal(t, []string{"marge/action-required"}, f.labelSet())
 }
 
 // TestGuard_securityCheckNeverMerges: a failing security check is never
@@ -463,7 +464,7 @@ func TestGuard_securityCheckNeverMerges(t *testing.T) {
 	require.Equal(t, pr.StatusFailedSecurity, got.State, got.Detail)
 	require.Zero(t, f.mergeCalls.Load())
 	require.Zero(t, f.approveCalls.Load())
-	require.Equal(t, []string{"bot-prs-sweep/security"}, f.labelSet())
+	require.Equal(t, []string{"marge/security"}, f.labelSet())
 	require.Equal(t, int32(1), f.commentPosts.Load())
 	marker := pr.ParseRescueMarker(f.comments[0])
 	require.NotNil(t, marker)
@@ -484,7 +485,7 @@ func TestGuard_onlyTrustedBotsAreSwept(t *testing.T) {
 			require.Equal(t, pr.StatusUntrustedAuthor, got.State, got.Detail)
 			require.Zero(t, f.approveCalls.Load())
 			require.Zero(t, f.mergeCalls.Load())
-			require.Equal(t, []string{"bot-prs-sweep/skipped"}, f.labelSet())
+			require.Equal(t, []string{"marge/skipped"}, f.labelSet())
 		})
 	}
 }
@@ -500,7 +501,7 @@ func TestGuard_neverWritesBranchProtection(t *testing.T) {
 	require.Equal(t, int32(1), f.approveCalls.Load())
 	require.Equal(t, int32(1), f.mergeCalls.Load())
 	require.Zero(t, f.protectionWrites.Load())
-	require.Equal(t, []string{"bot-prs-sweep/merged"}, f.labelSet())
+	require.Equal(t, []string{"marge/merged"}, f.labelSet())
 }
 
 // TestGuard_autoMergeIsHandedOffGreen: GitHub performs the merge, and the
@@ -514,7 +515,7 @@ func TestGuard_autoMergeIsHandedOffGreen(t *testing.T) {
 	require.Equal(t, pr.StatusAutoMerge, got.State, got.Detail)
 	require.Equal(t, int32(1), f.approveCalls.Load())
 	require.Zero(t, f.mergeCalls.Load(), "GitHub merges it, not the sweep")
-	require.Equal(t, []string{"bot-prs-sweep/auto-merge"}, f.labelSet())
+	require.Equal(t, []string{"marge/auto-merge"}, f.labelSet())
 }
 
 // TestGuard_autoMergeFailingCheckIsClassifiedOnTheCheck: auto-merge never
@@ -529,7 +530,7 @@ func TestGuard_autoMergeFailingCheckIsClassifiedOnTheCheck(t *testing.T) {
 	require.NotEqual(t, pr.StatusAutoMerge, got.State, got.Detail)
 	require.Zero(t, f.approveCalls.Load())
 	require.Zero(t, f.mergeCalls.Load())
-	require.Equal(t, []string{"bot-prs-sweep/action-required"}, f.labelSet())
+	require.Equal(t, []string{"marge/action-required"}, f.labelSet())
 }
 
 // TestGuard_autoMergeMajorIsStillHeld keeps the policy above the hand-off: a
@@ -543,7 +544,7 @@ func TestGuard_autoMergeMajorIsStillHeld(t *testing.T) {
 
 	require.Equal(t, pr.StatusHeld, got.State, got.Detail)
 	require.Zero(t, f.approveCalls.Load())
-	require.Equal(t, []string{"bot-prs-sweep/action-required"}, f.labelSet())
+	require.Equal(t, []string{"marge/action-required"}, f.labelSet())
 }
 
 // TestGuard_autoMergeBehindBaseIsRefreshed: GitHub fires auto-merge only once
@@ -591,7 +592,7 @@ func TestGuard_eligibility(t *testing.T) {
 				require.Zero(t, f.mergeCalls.Load())
 				require.Zero(t, f.approveCalls.Load())
 				require.Contains(t, got.Detail, "held")
-				require.Equal(t, []string{"bot-prs-sweep/action-required"}, f.labelSet())
+				require.Equal(t, []string{"marge/action-required"}, f.labelSet())
 			} else {
 				require.Equal(t, int32(1), f.mergeCalls.Load())
 			}
@@ -610,7 +611,7 @@ func TestGuard_mergeRefusedForReviewIsAwaitingApproval(t *testing.T) {
 	require.Equal(t, pr.StatusAwaitingApproval, got.State, got.Detail)
 	require.Equal(t, int32(1), f.mergeCalls.Load())
 	require.Zero(t, f.protectionWrites.Load())
-	require.Equal(t, []string{"bot-prs-sweep/awaiting-approval"}, f.labelSet())
+	require.Equal(t, []string{"marge/awaiting-approval"}, f.labelSet())
 	require.Equal(t, int32(1), f.commentPosts.Load())
 	require.Contains(t, f.comments[0], "awaiting-approval")
 }
@@ -621,7 +622,7 @@ func TestGuard_mergeRefusedForChecksIsAWait(t *testing.T) {
 	got := f.run(t, nil)
 
 	require.Equal(t, pr.StatusWaitingChecks, got.State, got.Detail)
-	require.Equal(t, []string{"bot-prs-sweep/pending"}, f.labelSet())
+	require.Equal(t, []string{"marge/pending"}, f.labelSet())
 }
 
 // TestGuard_twoSweepsWriteOnce: the second sweep over an unchanged PR
@@ -644,20 +645,33 @@ func TestGuard_twoSweepsWriteOnce(t *testing.T) {
 	require.Equal(t, int32(1), f.labelAdds.Load(), "the label is written once")
 	require.Zero(t, f.labelRemoves.Load())
 	require.Equal(t, int32(1), f.commentPosts.Load(), "the marker is written once")
-	require.Equal(t, []string{"bot-prs-sweep/security"}, f.labelSet())
+	require.Equal(t, []string{"marge/security"}, f.labelSet())
 }
 
 // TestGuard_labelReplacedWhenClassChanges: one classification label per
 // PR, the previous one removed.
 func TestGuard_labelReplacedWhenClassChanges(t *testing.T) {
 	f := greenFixture()
+	f.labels = []string{"marge/pending", "renovate"}
+	got := f.run(t, nil)
+
+	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
+	require.Equal(t, int32(1), f.labelRemoves.Load())
+	require.ElementsMatch(t, []string{"renovate", "marge/merged"}, f.labelSet())
+	require.Equal(t, "marge/merged", got.Label)
+}
+
+// TestGuard_legacyLabelReplaced: a label from the earlier namespace is
+// removed, so the PR ends the sweep with the current one alone.
+func TestGuard_legacyLabelReplaced(t *testing.T) {
+	f := greenFixture()
 	f.labels = []string{"bot-prs-sweep/pending", "renovate"}
 	got := f.run(t, nil)
 
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
 	require.Equal(t, int32(1), f.labelRemoves.Load())
-	require.ElementsMatch(t, []string{"renovate", "bot-prs-sweep/merged"}, f.labelSet())
-	require.Equal(t, "bot-prs-sweep/merged", got.Label)
+	require.ElementsMatch(t, []string{"renovate", "marge/merged"}, f.labelSet())
+	require.Equal(t, "marge/merged", got.Label)
 }
 
 // TestGuard_dryRunWritesNothing: every outcome is decided and reported,
@@ -680,7 +694,7 @@ func TestGuard_classifyOnlyLabelsAndStops(t *testing.T) {
 
 	require.Equal(t, pr.StatusEligible, got.State, got.Detail)
 	require.Zero(t, f.approveCalls.Load()+f.mergeCalls.Load()+f.commentPosts.Load())
-	require.Equal(t, []string{"bot-prs-sweep/eligible"}, f.labelSet())
+	require.Equal(t, []string{"marge/eligible"}, f.labelSet())
 }
 
 // TestGuard_labelForbiddenNeverChangesTheOutcome: a label the caller may
