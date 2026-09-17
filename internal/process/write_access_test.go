@@ -219,7 +219,7 @@ func TestProcessPR_DryRunReportsMissingWriteAccess(t *testing.T) {
 	}
 	mux.HandleFunc("GET /repos/org/repo/pulls/1", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, `{"number":1,"title":"chore(deps): update all non-major dependencies","mergeable_state":"clean","user":{"login":"renovate[bot]"},
-			"head":{"sha":"aaa111","ref":"renovate/foo"},"base":{"sha":"bbb222","ref":"main"}}`)
+			"head":{"sha":"aaa111","ref":"renovate/foo","repo":{"full_name":"org/repo"}},"base":{"sha":"bbb222","ref":"main"}}`)
 	})
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)

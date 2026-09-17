@@ -262,8 +262,9 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		run.set(pr.StatusAlreadyMerged, "")
 		return
 	}
-	if pullReq.GetHead().GetRepo().GetFork() {
-		run.set(pr.StatusSkipped, "head branch lives in a fork")
+	if headRepo := pullReq.GetHead().GetRepo(); headRepo == nil ||
+		!strings.EqualFold(headRepo.GetFullName(), info.Owner+"/"+info.Repo) {
+		run.set(pr.StatusSkipped, "head branch lives in another repository")
 		return
 	}
 	if pullReq.GetMergeableState() == "dirty" {
@@ -288,10 +289,11 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		detail := "dry-run: would " + p.plannedWrites(run)
 		if p.Actions.Has(ActionApprove) {
 			if err := p.ensureWriteAccess(ctx, run.info.Owner, run.info.Repo); err != nil {
-				detail = withNote(detail, writeAccessDetail(err))
+				run.set(pr.StatusSkipped, withNote(detail, writeAccessDetail(err)))
+				return
 			}
 		}
-		run.set(pr.StatusSkipped, detail)
+		run.set(pr.StatusEligible, detail)
 		return
 	}
 
