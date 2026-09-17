@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measure what GET /repos answers for permissions.push under an installation
-# token, which is the field ensureWriteAccess refuses an approval on.
+# token, next to the permissions GitHub reports for the token itself.
 #
 # Run it once with Contents: write granted to the installation and once
 # without, then record both answers in docs/github-app.md.
@@ -78,7 +78,7 @@ curl -sS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+
     "https://api.github.com/installation/repositories" \
     | jq -r '.repositories[].full_name'
 echo
-echo "GET /repos/${repository} -> .permissions, which is what ensureWriteAccess reads:"
+echo "GET /repos/${repository} -> .permissions, which describes the authenticated user:"
 curl -sS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/${repository}" \
     | jq '{permissions: .permissions, push_present: (.permissions | has("push"))}'

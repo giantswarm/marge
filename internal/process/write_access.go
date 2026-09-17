@@ -24,6 +24,12 @@ var errNoWriteAccess = errors.New("no write access to the repository")
 // sweep, but only one of them means the permission set is wrong.
 var errWriteAccessUnknown = errors.New("repository carried no permissions.push field")
 
+// AppWriteAccess reports whether the GitHub App installation the sweep
+// authenticates as may write to the repository. A nil AppWriteAccess is a
+// sweep running under a person's token, where permissions.push on the
+// repository is the answer instead.
+type AppWriteAccess func(ctx context.Context, owner, repo string) (bool, error)
+
 // ensureWriteAccess returns nil when the authenticated actor holds write
 // access to the repository, errNoWriteAccess when GitHub reports it does not,
 // and errWriteAccessUnknown when GitHub reports no answer at all. A settled
@@ -36,15 +42,11 @@ func (p *Processor) ensureWriteAccess(ctx context.Context, owner, repo string) e
 	p.writeAccessMu.Unlock()
 
 	if !cached {
-		repository, _, err := p.Client.Repositories.Get(ctx, owner, repo)
+		var err error
+		allowed, err = p.readWriteAccess(ctx, owner, repo)
 		if err != nil {
-			return fmt.Errorf("write access check on %s: %w", key, err)
+			return err
 		}
-		permissions := repository.GetPermissions()
-		if permissions == nil || permissions.Push == nil {
-			return fmt.Errorf("%w: %s", errWriteAccessUnknown, key)
-		}
-		allowed = *permissions.Push
 
 		p.writeAccessMu.Lock()
 		if p.writeAccessCache == nil {
@@ -58,6 +60,33 @@ func (p *Processor) ensureWriteAccess(ctx context.Context, owner, repo string) e
 		return fmt.Errorf("%w: %s; a GitHub App needs contents: write for its approval to count", errNoWriteAccess, key)
 	}
 	return nil
+}
+
+// readWriteAccess asks the question the authenticated actor can answer.
+// permissions.push describes the authenticated user, and an installation
+// token has no user behind it: GitHub returns the field, and it is false
+// whatever the installation holds. Under the App the installation's own
+// contents permission decides.
+func (p *Processor) readWriteAccess(ctx context.Context, owner, repo string) (bool, error) {
+	key := owner + "/" + repo
+
+	if p.AppWriteAccess != nil {
+		allowed, err := p.AppWriteAccess(ctx, owner, repo)
+		if err != nil {
+			return false, fmt.Errorf("write access check on %s: %w", key, err)
+		}
+		return allowed, nil
+	}
+
+	repository, _, err := p.Client.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return false, fmt.Errorf("write access check on %s: %w", key, err)
+	}
+	permissions := repository.GetPermissions()
+	if permissions == nil || permissions.Push == nil {
+		return false, fmt.Errorf("%w: %s", errWriteAccessUnknown, key)
+	}
+	return *permissions.Push, nil
 }
 
 // writeAccessDetail renders an ensureWriteAccess failure for status output. A

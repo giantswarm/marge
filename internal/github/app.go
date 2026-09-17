@@ -170,10 +170,15 @@ func signingInput(header map[string]string, claims map[string]any) (string, erro
 	return encoded[0] + "." + encoded[1], nil
 }
 
-// installationToken is one minted token and the moment it stops working.
-type installationToken struct {
-	value   string
-	expires time.Time
+// InstallationToken is one minted token, the moment it stops working, and
+// the permissions GitHub reports for it. The permissions are the token's own
+// authority, which is the only trustworthy answer to what an installation may
+// do: GET /repos reports permissions for the authenticated user, and an
+// installation token has no user behind it.
+type InstallationToken struct {
+	Value       string
+	Expires     time.Time
+	Permissions map[string]string
 }
 
 // installationTokenRequest is the body of the mint. An empty Repositories
@@ -186,19 +191,19 @@ type installationTokenRequest struct {
 // MintToken returns an installation token for the named repositories. GitHub
 // scopes the token to those repositories alone: every other repository of the
 // installation answers 404 under it.
-func (a *App) MintToken(ctx context.Context, httpClient *http.Client, baseURL string, repos []string) (string, time.Time, error) {
+func (a *App) MintToken(ctx context.Context, httpClient *http.Client, baseURL string, repos []string) (InstallationToken, error) {
 	jwt, err := a.JWT(time.Now())
 	if err != nil {
-		return "", time.Time{}, err
+		return InstallationToken{}, err
 	}
 	body, err := json.Marshal(installationTokenRequest{Repositories: repos})
 	if err != nil {
-		return "", time.Time{}, err
+		return InstallationToken{}, err
 	}
 	url := fmt.Sprintf("%sapp/installations/%d/access_tokens", baseURL, a.InstallationID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", time.Time{}, err
+		return InstallationToken{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -206,23 +211,24 @@ func (a *App) MintToken(ctx context.Context, httpClient *http.Client, baseURL st
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("minting an installation token: %w", err)
+		return InstallationToken{}, fmt.Errorf("minting an installation token: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
-		return "", time.Time{}, fmt.Errorf("minting an installation token for %s: %s", scopeName(repos), resp.Status)
+		return InstallationToken{}, fmt.Errorf("minting an installation token for %s: %s", scopeName(repos), resp.Status)
 	}
 	var minted struct {
-		Token     string    `json:"token"`
-		ExpiresAt time.Time `json:"expires_at"`
+		Token       string            `json:"token"`
+		ExpiresAt   time.Time         `json:"expires_at"`
+		Permissions map[string]string `json:"permissions"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil {
-		return "", time.Time{}, fmt.Errorf("decoding the installation token: %w", err)
+		return InstallationToken{}, fmt.Errorf("decoding the installation token: %w", err)
 	}
 	if minted.Token == "" {
-		return "", time.Time{}, errors.New("GitHub returned an empty installation token")
+		return InstallationToken{}, errors.New("GitHub returned an empty installation token")
 	}
-	return minted.Token, minted.ExpiresAt, nil
+	return InstallationToken{Value: minted.Token, Expires: minted.ExpiresAt, Permissions: minted.Permissions}, nil
 }
 
 // scopeName names a token's scope for an error message.
@@ -248,7 +254,7 @@ type appTransport struct {
 	client *http.Client
 
 	mu     sync.Mutex
-	tokens map[string]installationToken
+	tokens map[string]InstallationToken
 }
 
 func (t *appTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -264,13 +270,13 @@ func (t *appTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.base.RoundTrip(authorized(req, "Bearer "+token))
+	return t.base.RoundTrip(authorized(req, "Bearer "+token.Value))
 }
 
 // token returns a live token for the scope, minting one when the scope has
 // none or when the one it has is about to expire. An empty name is the
 // installation-wide scope.
-func (t *appTransport) token(ctx context.Context, owner, name string) (string, error) {
+func (t *appTransport) token(ctx context.Context, owner, name string) (InstallationToken, error) {
 	key := owner + "/" + name
 	var repos []string
 	if name != "" {
@@ -280,19 +286,19 @@ func (t *appTransport) token(ctx context.Context, owner, name string) (string, e
 	t.mu.Lock()
 	held, ok := t.tokens[key]
 	t.mu.Unlock()
-	if ok && time.Until(held.expires) > tokenRenewal {
-		return held.value, nil
+	if ok && time.Until(held.Expires) > tokenRenewal {
+		return held, nil
 	}
 
-	value, expires, err := t.app.MintToken(ctx, t.client, t.baseURL, repos)
+	minted, err := t.app.MintToken(ctx, t.client, t.baseURL, repos)
 	if err != nil {
-		return "", err
+		return InstallationToken{}, err
 	}
 
 	t.mu.Lock()
-	t.tokens[key] = installationToken{value: value, expires: expires}
+	t.tokens[key] = minted
 	t.mu.Unlock()
-	return value, nil
+	return minted, nil
 }
 
 // authorized copies the request and sets the Authorization header on the

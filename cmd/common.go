@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
@@ -191,6 +192,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	proc := process.NewProcessor(client, opts.DryRun, opts.MergeAuto, login)
+	proc.AppWriteAccess = gh.AppWriteAccess(client)
 	proc.SecurityCheckPatterns = parseCSVList(opts.SecurityPatterns)
 	proc.Actions = opts.Actions
 	proc.CheckTimeout = opts.CheckTimeout

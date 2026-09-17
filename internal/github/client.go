@@ -85,7 +85,7 @@ func NewAppClient(app *App, baseURL string, httpClient *http.Client) (*github.Cl
 		base:    base,
 		baseURL: baseURL,
 		client:  &http.Client{Transport: base, Timeout: httpClient.Timeout},
-		tokens:  make(map[string]installationToken),
+		tokens:  make(map[string]InstallationToken),
 	}
 	return github.NewClient(
 		github.WithHTTPClient(&http.Client{Transport: transport, Timeout: httpClient.Timeout}),
@@ -113,4 +113,37 @@ func AuthenticatedLogin(ctx context.Context, client *github.Client) (string, err
 		return "", fmt.Errorf("getting the authenticated App: %w", err)
 	}
 	return registered.GetSlug() + "[bot]", nil
+}
+
+// contentsPermission is the installation permission that confers repository
+// write access. GitHub counts an App's approving review towards a required
+// review only when the installation holds it.
+const contentsPermission = "contents"
+
+// writePermission is the value contentsPermission carries when the
+// installation may write. The other values are "read" and absence.
+const writePermission = "write"
+
+// AppWriteAccess returns a check of whether the App installation behind the
+// client may write to a repository, or nil when the client authenticates with
+// a person's token. A nil result is the signal to keep reading
+// permissions.push from the repository, which is the only answer a user token
+// has.
+//
+// The check reads the permissions GitHub reports when it mints the token the
+// call would carry, so it describes that token and nothing else. The token is
+// already minted for every repository the sweep touches, so the check costs no
+// extra request.
+func AppWriteAccess(client *github.Client) func(ctx context.Context, owner, repo string) (bool, error) {
+	transport, ok := client.Client().Transport.(*appTransport)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, owner, repo string) (bool, error) {
+		token, err := transport.token(ctx, owner, repo)
+		if err != nil {
+			return false, err
+		}
+		return token.Permissions[contentsPermission] == writePermission, nil
+	}
 }
