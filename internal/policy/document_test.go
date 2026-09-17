@@ -32,7 +32,7 @@ func TestParseDocument_failsLoudly(t *testing.T) {
 			// the file without a word, and a team would read back a
 			// policy its file does not describe.
 			name:    "a second YAML document",
-			content: "schedule: enabled\n---\nschedule: disabled\n",
+			content: "modelConfig: a\n---\nmodelConfig: b\n",
 			want:    "more than one YAML document",
 		},
 		{
@@ -54,11 +54,6 @@ func TestParseDocument_failsLoudly(t *testing.T) {
 			name:    "an unreadable update can never be declared eligible",
 			content: "updateTypes:\n  renovate: [patch, unknown]\n",
 			want:    `unknown update type "unknown"`,
-		},
-		{
-			name:    "schedule is neither value",
-			content: "schedule: sometimes\n",
-			want:    `schedule: "sometimes" is neither enabled nor disabled`,
 		},
 		{
 			name:    "timeout is not a duration",
@@ -116,14 +111,13 @@ func TestParseDocument_failsLoudly(t *testing.T) {
 	}
 }
 
-// TestParseDocument_empty accepts a file that says nothing. Its existence
-// is the team's opt-in to the schedule and needs no key.
+// TestParseDocument_empty accepts a file that says nothing: every key is
+// optional and an absent key keeps the company default.
 func TestParseDocument_empty(t *testing.T) {
 	for _, content := range []string{"", "\n", "# only a comment\n"} {
 		doc, err := ParseDocument(TeamFile("bumblebee"), content)
 		require.NoError(t, err)
 		require.NotNil(t, doc)
-		require.Nil(t, doc.Schedule)
 		require.Nil(t, doc.Rescue)
 	}
 }

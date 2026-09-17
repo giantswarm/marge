@@ -57,14 +57,14 @@ func githubSource(t *testing.T, files map[string]string, status int) GitHubSourc
 
 // TestGitHubSource_read decodes a file the repository holds.
 func TestGitHubSource_read(t *testing.T) {
-	source := githubSource(t, map[string]string{DefaultFile: "schedule: enabled\n"}, 0)
+	source := githubSource(t, map[string]string{DefaultFile: "modelConfig: default-model-config\n"}, 0)
 
 	require.Equal(t, "giantswarm/github", source.String())
 
 	content, found, err := source.Read(t.Context(), DefaultFile)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "schedule: enabled\n", content)
+	require.Equal(t, "modelConfig: default-model-config\n", content)
 }
 
 // TestGitHubSource_notFoundIsNotAnError holds the rule the loader depends
@@ -86,27 +86,5 @@ func TestGitHubSource_readFailureIsAnError(t *testing.T) {
 
 	_, found, err := source.Read(t.Context(), DefaultFile)
 	require.ErrorContains(t, err, "reading "+DefaultFile)
-	require.False(t, found)
-}
-
-// TestGitHubSource_list decodes the directory listing the schedule reads the
-// opted-in teams out of.
-func TestGitHubSource_list(t *testing.T) {
-	source := githubSource(t, map[string]string{
-		DefaultFile:           "schedule: disabled\n",
-		TeamFile("bumblebee"): "schedule: enabled\n",
-	}, 0)
-
-	paths, found, err := source.List(t.Context(), PolicyDir)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.ElementsMatch(t, []string{DefaultFile, TeamFile("bumblebee")}, paths)
-}
-
-// TestGitHubSource_listNotFound reports an absent directory as not found,
-// the same way an absent file is.
-func TestGitHubSource_listNotFound(t *testing.T) {
-	_, found, err := githubSource(t, map[string]string{}, 0).List(t.Context(), PolicyDir)
-	require.NoError(t, err)
 	require.False(t, found)
 }

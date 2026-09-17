@@ -93,8 +93,8 @@ func directoryEntries(files map[string]string, dir string) []github.RepositoryCo
 // carries the policy its repository is swept under.
 func TestResolveScope_teamScope(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
-		"bot-prs-sweep/default.yaml":        "updateTypes:\n  renovate: [patch, minor]\nschedule: disabled\n",
-		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\nschedule: enabled\n",
+		"bot-prs-sweep/default.yaml":        "updateTypes:\n  renovate: [patch, minor]\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n- name: muster\n  botPRsSweep:\n    updateTypes: [patch]\n",
 	})
 
@@ -103,7 +103,6 @@ func TestResolveScope_teamScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"giantswarm/marge", "giantswarm/muster"}, scope.Repos)
 
-	require.True(t, scope.Policies.Base().Schedule)
 	require.Equal(t, "team-bumblebee", scope.Policies.Base().SlackChannel)
 	require.True(t, scope.Policies.For("giantswarm", "marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
 	require.False(t, scope.Policies.For("giantswarm", "muster").Eligible(pr.KindRenovate, pr.UpdateMinor))
@@ -112,7 +111,7 @@ func TestResolveScope_teamScope(t *testing.T) {
 }
 
 // TestResolveScope_noPolicyFile sweeps a team that has a repository list but
-// no policy file: the company defaults apply and the schedule stays off.
+// no policy file: the company defaults apply.
 func TestResolveScope_noPolicyFile(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
 		"repositories/team-shield.yaml": "- name: cluster-aws\n",
@@ -122,7 +121,6 @@ func TestResolveScope_noPolicyFile(t *testing.T) {
 	scope, err := RunOptions{Team: "shield"}.resolveScope(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []string{"giantswarm/cluster-aws"}, scope.Repos)
-	require.False(t, scope.Policies.Base().Schedule)
 	require.Equal(t, pr.CompanyDefaults(), scope.Policies.For("giantswarm", "cluster-aws"))
 	require.Equal(t, []string{"built-in company defaults"}, scope.Policies.Base().Sources)
 }
@@ -178,7 +176,7 @@ func TestResolveScope_queryScope(t *testing.T) {
 // the flags the CronJob writes on one side. A renamed flag would otherwise
 // fail the first time a CronJob runs, on the installation and not here.
 func TestSweepFlags_theChartPassesThese(t *testing.T) {
-	for _, name := range []string{"all-teams", "team", "actions", "no-tui", "dry-run", "post-summary"} {
+	for _, name := range []string{"team", "actions", "no-tui", "dry-run", "post-summary"} {
 		require.NotNil(t, sweepCmd.Flags().Lookup(name), "helm/marge/templates/cronjob.yaml passes --%s", name)
 	}
 }
@@ -216,7 +214,6 @@ func TestResolveSweepOptions(t *testing.T) {
 			require.Equal(t, []string{"two", "one"}, teams)
 			require.Empty(t, opts.Team, "no single team owns a run of several")
 		}},
-		{name: "all-teams refuses a named team", teams: []string{"t"}, setup: func() { sweepFlags.allTeams = true }, wantErr: "--all-teams reads every team's own scope"},
 		{name: "an explicit timeout is honoured", opts: RunOptions{Query: "q"}, setup: func() { sweepFlags.checkTimeout = 30 * time.Second }, check: func(t *testing.T, _ []string, opts RunOptions) {
 			require.Equal(t, 30*time.Second, opts.CheckTimeout)
 		}},
@@ -237,7 +234,7 @@ func TestResolveSweepOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reset()
-			t.Cleanup(func() { reset(); sweepFlags.allTeams = false })
+			t.Cleanup(reset)
 			sweepFlags.teams = tt.teams
 			if tt.setup != nil {
 				tt.setup()
