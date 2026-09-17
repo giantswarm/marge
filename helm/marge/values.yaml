@@ -1,33 +1,8 @@
 # Default values for marge.
 
 mcp:
-  # -- Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone, until a muster registers the server.
+  # -- Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone. Registering the server with a muster is the platform's job: an MCPServer that points at the Service URL, with the muster's own GitHub client.
   enabled: true
-
-muster:
-  # -- Register the MCP server with muster, so a person reaches it through the gateway as themselves. Needs the App's OAuth client credentials and a muster in the cluster.
-  register: false
-  # -- Name of the MCPServer resource. Defaults to the release fullname.
-  name: ""
-  # -- Namespace the MCPServer is created in. Defaults to the release namespace; set it when muster watches another one.
-  namespace: ""
-  # -- Prefix muster gives the tools of this server, so they are reachable as x_<prefix>_<tool>.
-  toolPrefix: "marge"
-  # -- Description muster shows for the server.
-  description: "Sweep a team's dependency and alignment PRs: list, sweep, remedy and mark, as the signed-in person."
-  # -- Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off.
-  toolGroup: ""
-  # -- Seconds muster waits on a connection to this server. The sweep reads the checks of every PR in a team's queue, which passes the CRD default of 30. The CRD caps the value at 300.
-  timeout: 120  # @schema minimum: 1 ; maximum: 300
-  github:
-    # -- Issuer the grants are filed under, and the identity muster files them under, so it must match the value the other GitHub-backed servers use. GitHub publishes no discovery document, so the endpoints below are pinned instead.
-    issuer: "https://github.com/login/oauth"
-    # -- GitHub's authorization endpoint.
-    authorizationEndpoint: "https://github.com/login/oauth/authorize"
-    # -- GitHub's token endpoint.
-    tokenEndpoint: "https://github.com/login/oauth/access_token"
-    # -- OAuth scopes requested at sign-in. A GitHub App's user-to-server token takes its rights from the App's permissions and the person's own, so no scope is requested.
-    scopes: ""
 
 # -- Number of marge replicas. The MCP transport is stateful per session, so keep it at 1 unless a client-affine load balancer sits in front.
 replicaCount: 1
@@ -133,17 +108,6 @@ marge:
       installationIdKey: "github-app-installation-id"
       # -- Key of the PEM private key inside the Secret
       privateKeyKey: "github-app-private-key"
-      oauth:
-        # -- OAuth client ID of the App. marge never reads it; it is held here so one place holds the App's credentials, and muster's GitHub connector references the same Secret.
-        clientId: ""
-        # -- OAuth client secret of the App. Do not reuse the shared github-oauth-client secret.
-        clientSecret: ""
-        # -- Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. Defaults to marge.github.app.existingSecret, so one App Secret that carries the client keys below needs no second name.
-        existingSecret: ""
-        # -- Key of the client ID inside the Secret
-        clientIdKey: "github-app-client-id"
-        # -- Key of the client secret inside the Secret
-        clientSecretKey: "github-app-client-secret"
   slack:
     # -- Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary.
     token: ""

@@ -48,18 +48,7 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| mcp.enabled | bool | `true` | Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone, until a muster registers the server. |
-| muster.register | bool | `false` | Register the MCP server with muster, so a person reaches it through the gateway as themselves. Needs the App's OAuth client credentials and a muster in the cluster. |
-| muster.name | string | `""` | Name of the MCPServer resource. Defaults to the release fullname. |
-| muster.namespace | string | `""` | Namespace the MCPServer is created in. Defaults to the release namespace; set it when muster watches another one. |
-| muster.toolPrefix | string | `"marge"` | Prefix muster gives the tools of this server, so they are reachable as x_<prefix>_<tool>. |
-| muster.description | string | `"Sweep a team's dependency and alignment PRs: list, sweep, remedy and mark, as the signed-in person."` | Description muster shows for the server. |
-| muster.toolGroup | string | `""` | Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off. |
-| muster.timeout | int | `120` | Seconds muster waits on a connection to this server. The sweep reads the checks of every PR in a team's queue, which passes the CRD default of 30. The CRD caps the value at 300. |
-| muster.github.issuer | string | `"https://github.com/login/oauth"` | Issuer the grants are filed under, and the identity muster files them under, so it must match the value the other GitHub-backed servers use. GitHub publishes no discovery document, so the endpoints below are pinned instead. |
-| muster.github.authorizationEndpoint | string | `"https://github.com/login/oauth/authorize"` | GitHub's authorization endpoint. |
-| muster.github.tokenEndpoint | string | `"https://github.com/login/oauth/access_token"` | GitHub's token endpoint. |
-| muster.github.scopes | string | `""` | OAuth scopes requested at sign-in. A GitHub App's user-to-server token takes its rights from the App's permissions and the person's own, so no scope is requested. |
+| mcp.enabled | bool | `true` | Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone. Registering the server with a muster is the platform's job: an MCPServer that points at the Service URL, with the muster's own GitHub client. |
 | replicaCount | int | `1` | Number of marge replicas. The MCP transport is stateful per session, so keep it at 1 unless a client-affine load balancer sits in front. |
 | image.registry | string | `"gsoci.azurecr.io"` | Registry of the marge image |
 | image.repository | string | `"giantswarm/marge"` | Repository of the marge image |
@@ -92,11 +81,6 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | marge.github.app.idKey | string | `"github-app-id"` | Key of the App ID inside the Secret |
 | marge.github.app.installationIdKey | string | `"github-app-installation-id"` | Key of the installation ID inside the Secret |
 | marge.github.app.privateKeyKey | string | `"github-app-private-key"` | Key of the PEM private key inside the Secret |
-| marge.github.app.oauth.clientId | string | `""` | OAuth client ID of the App. marge never reads it; it is held here so one place holds the App's credentials, and muster's GitHub connector references the same Secret. |
-| marge.github.app.oauth.clientSecret | string | `""` | OAuth client secret of the App. Do not reuse the shared github-oauth-client secret. |
-| marge.github.app.oauth.existingSecret | string | `""` | Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. Defaults to marge.github.app.existingSecret, so one App Secret that carries the client keys below needs no second name. |
-| marge.github.app.oauth.clientIdKey | string | `"github-app-client-id"` | Key of the client ID inside the Secret |
-| marge.github.app.oauth.clientSecretKey | string | `"github-app-client-secret"` | Key of the client secret inside the Secret |
 | marge.slack.token | string | `""` | Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary. |
 | marge.slack.existingSecret | string | `""` | Name of an existing Secret holding the Slack bot token. Takes precedence over token. |
 | marge.slack.existingSecretKey | string | `"slack-token"` | Key of the Slack bot token inside existingSecret |

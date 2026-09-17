@@ -43,18 +43,9 @@ make install
 
 ### On Kubernetes
 
-The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm/giantswarm-catalog) runs `marge serve` over the MCP Streamable HTTP transport behind a `ClusterIP` Service. With `muster.register=true` it also registers the server with [muster](https://github.com/giantswarm/muster), which then runs the GitHub sign-in for it and attaches each person's grant to their calls; the server pod holds no GitHub credential of its own. The registration uses the sweep App's **own** OAuth client (`marge.github.app.oauth.*`), never the shared `github-oauth-client`: a person acting through marge is bounded by the intersection of the App's permissions and their own only while the App is the OAuth client on that path. See [helm/marge/README.md](helm/marge/README.md) for every value.
+The `marge` Helm chart in the [giantswarm catalog](https://github.com/giantswarm/giantswarm-catalog) runs `marge serve` over the MCP Streamable HTTP transport behind a `ClusterIP` Service. The server pod holds no GitHub credential of its own: it acts with the bearer token each call carries. The chart does not register the server with [muster](https://github.com/giantswarm/muster). That is the platform's job, declared next to the muster's other servers: an `MCPServer` that points at the Service URL, `auth.type: oauth`, and the GitHub authorization server pinned with the client the muster's other GitHub-backed servers share. muster keeps one client and one grant per GitHub issuer, so a person signed in to one of them is signed in to marge, and marge acts with that person's own GitHub rights. The sweep App backs the scheduled runs only. See [helm/marge/README.md](helm/marge/README.md) for every value.
 
-```bash
-helm install marge oci://gsoci.azurecr.io/charts/giantswarm/marge --version 0.9.0 \
-  --set muster.register=true \
-  --set muster.namespace=agent-platform \
-  --set marge.github.app.oauth.existingSecret=marge-github-app
-```
-
-muster watches MCPServers in its own namespace only, so `muster.namespace` names it when marge runs elsewhere. The OAuth client Secret stays in marge's namespace, and muster's ServiceAccount needs `get` on Secrets there: list the namespace in muster's `rbac.additionalSecretNamespaces` on the platform side.
-
-A freshly reconciled server reports *Auth Required* until the person completes `core_auth_login` in muster, then *Connected*: pinning GitHub's endpoints does not bypass the connect-time probe. `grantScope: subject` files the grant under the person, so every later session reuses it without a second consent, until they sign out of this server.
+A freshly registered server reports *Auth Required* until the person completes `core_auth_login` in muster, then *Connected*. With `grantScope: subject` the grant is filed under the person, so every later session reuses it without a second consent, until they sign out of this server.
 
 ## Setup
 

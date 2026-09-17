@@ -98,7 +98,7 @@ Whether the chart writes its own token Secret: at least one inline credential
 is set and not overridden by an existing Secret.
 */}}
 {{- define "marge.writesTokenSecret" -}}
-{{- if or (include "marge.writesGitHubToken" .) (include "marge.writesCircleCIToken" .) (include "marge.writesAppCredential" .) (include "marge.writesOAuthCredential" .) (include "marge.writesSlackToken" .) -}}
+{{- if or (include "marge.writesGitHubToken" .) (include "marge.writesCircleCIToken" .) (include "marge.writesAppCredential" .) (include "marge.writesSlackToken" .) -}}
 true
 {{- end -}}
 {{- end }}
@@ -115,40 +115,8 @@ true
 {{- if and .Values.marge.github.app.privateKey (not .Values.marge.github.app.existingSecret) -}}true{{- end -}}
 {{- end }}
 
-{{- define "marge.writesOAuthCredential" -}}
-{{- if and .Values.marge.github.app.oauth.clientSecret (not .Values.marge.github.app.oauth.existingSecret) -}}true{{- end -}}
-{{- end }}
-
 {{- define "marge.writesSlackToken" -}}
 {{- if and .Values.marge.slack.token (not .Values.marge.slack.existingSecret) -}}true{{- end -}}
-{{- end }}
-
-{{/*
-Whether the App's OAuth client credentials are configured at all. Without
-them muster has no client to run the sign-in with. An existing App Secret
-counts: it holds the client alongside the private key unless the oauth block
-names another Secret.
-*/}}
-{{- define "marge.hasOAuthCredential" -}}
-{{- if or .Values.marge.github.app.oauth.existingSecret .Values.marge.github.app.oauth.clientSecret .Values.marge.github.app.existingSecret -}}
-true
-{{- end -}}
-{{- end }}
-
-{{/*
-Name of the Secret that holds the App's OAuth client credentials, which is
-what muster reads to run the sign-in. An explicit oauth.existingSecret wins;
-an inline client secret lives in the chart's own Secret; otherwise the client
-is read from the App Secret, next to the private key.
-*/}}
-{{- define "marge.oauthSecretName" -}}
-{{- if .Values.marge.github.app.oauth.existingSecret -}}
-{{- .Values.marge.github.app.oauth.existingSecret -}}
-{{- else if .Values.marge.github.app.oauth.clientSecret -}}
-{{- include "marge.tokenSecretName" . -}}
-{{- else -}}
-{{- default (include "marge.tokenSecretName" .) .Values.marge.github.app.existingSecret -}}
-{{- end -}}
 {{- end }}
 
 {{/*
