@@ -66,9 +66,7 @@ type Policy struct {
 	Sweep bool
 	// UpdateTypes lists the update types that merge when green, per bot PR
 	// kind. A kind that is absent merges nothing.
-	UpdateTypes map[Kind][]UpdateType
-	// Schedule reports whether the scheduled sweep runs for the team.
-	Schedule     bool
+	UpdateTypes  map[Kind][]UpdateType
 	Rescue       RescuePolicy
 	Concurrency  Concurrency
 	ModelConfig  string
@@ -82,7 +80,7 @@ type Policy struct {
 // patch and minor updates merge when green for Renovate and Dependabot,
 // Align files and Herald PRs carry no version change and always merge, a
 // major and an update whose size could not be read wait for a person. The
-// schedule and the rescues are off.
+// rescues are off.
 func CompanyDefaults() Policy {
 	return Policy{
 		Sweep: true,
@@ -92,7 +90,6 @@ func CompanyDefaults() Policy {
 			KindAlignFiles: {UpdateNone},
 			KindHerald:     {UpdateNone},
 		},
-		Schedule: false,
 		Rescue: RescuePolicy{
 			Enabled: false,
 			Timeout: 20 * time.Minute,

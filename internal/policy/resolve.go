@@ -94,9 +94,6 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 	for kind, types := range doc.updateTypes {
 		out.UpdateTypes[kind] = slices.Clone(types)
 	}
-	if doc.Schedule != nil {
-		out.Schedule = *doc.Schedule == scheduleEnabled
-	}
 	if r := doc.Rescue; r != nil {
 		if r.Enabled != nil {
 			out.Rescue.Enabled = *r.Enabled

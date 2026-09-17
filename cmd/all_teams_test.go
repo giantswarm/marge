@@ -31,56 +31,37 @@ func (p *recordingPoster) Post(_ context.Context, channel, text string) error {
 	return nil
 }
 
-// TestAllTeams_sweepsOnlyTheTeamsThatOptedIn is the acceptance criterion: a
-// team with no policy file and a team whose policy disables the schedule are
-// both skipped, and only the remaining team is swept.
-func TestAllTeams_sweepsOnlyTheTeamsThatOptedIn(t *testing.T) {
-	client := contentsMux(t, "giantswarm", "github", map[string]string{
-		"bot-prs-sweep/default.yaml":        "schedule: disabled\n",
-		"bot-prs-sweep/team-bumblebee.yaml": "schedule: enabled\nslackChannel: team-bumblebee\n",
-		"bot-prs-sweep/team-atlas.yaml":     "schedule: disabled\n",
-		"repositories/team-bumblebee.yaml":  "- name: marge\n",
-		"repositories/team-atlas.yaml":      "- name: atlas\n",
-		"repositories/team-phoenix.yaml":    "- name: phoenix\n",
-	})
+// TestTeamsRun_postsOnlyWithAPoster pins where a summary goes. A run
+// without --post-summary carries no poster, and a team channel then stays
+// quiet whatever the run changed.
+func TestTeamsRun_postsOnlyWithAPoster(t *testing.T) {
+	result := SweepResult{Summary: SweepSummary{Total: 2, Merged: 2}}
 
-	t.Setenv(teamFileRepoEnv, "")
-	var out bytes.Buffer
 	poster := &recordingPoster{}
-
-	outcomes, err := teamsRun{
-		Client: client,
-		Login:  "giantswarm-marge[bot]",
-		Rules:  RulesSource{Path: t.TempDir()},
-		Opts:   RunOptions{DryRun: true, Quiet: true, NoTUI: true},
-		Slack:  poster,
-		Out:    &out,
-	}.Run(t.Context())
+	posted, err := teamsRun{Slack: poster}.post(t.Context(), "bumblebee", "team-bumblebee", result)
 	require.NoError(t, err)
-	require.NoError(t, teamsError(outcomes))
+	require.True(t, posted)
+	require.Len(t, poster.posts, 1)
+	require.Equal(t, "team-bumblebee", poster.posts[0].channel)
+	require.Contains(t, poster.posts[0].text, "bumblebee")
 
-	byTeam := make(map[string]teamOutcome, len(outcomes))
-	for _, outcome := range outcomes {
-		byTeam[outcome.Team] = outcome
-	}
-	require.Len(t, byTeam, 2, "team-phoenix has no policy file and is not a team of the schedule")
-	require.NotContains(t, byTeam, "phoenix")
-	require.Equal(t, "the policy switches the schedule off", byTeam["atlas"].Skipped)
-	require.Empty(t, byTeam["bumblebee"].Skipped)
+	posted, err = teamsRun{}.post(t.Context(), "bumblebee", "team-bumblebee", result)
+	require.NoError(t, err)
+	require.False(t, posted, "a run with no poster posts nothing")
 
-	require.Contains(t, out.String(), "team atlas skipped")
-	require.Empty(t, poster.posts, "the run changed nothing, so the channel stays quiet")
+	posted, err = teamsRun{Slack: poster}.post(t.Context(), "bumblebee", "", result)
+	require.NoError(t, err)
+	require.False(t, posted, "a team whose policy names no channel posts nothing")
+	require.Len(t, poster.posts, 1)
 }
 
-// TestTeamsRun_namedTeamsRunWhateverTheScheduleSays is the acceptance
-// criterion of a manual run of several teams: the operator named them, so
-// each one is swept under its own policy, in the order given, and the
-// schedule key of a policy skips none of them.
-func TestTeamsRun_namedTeamsRunWhateverTheScheduleSays(t *testing.T) {
+// TestTeamsRun_sweepsTheNamedTeamsInOrder is the acceptance criterion of a
+// run of several teams: each one is swept under its own policy, in the
+// order given, and a team nobody named is not swept.
+func TestTeamsRun_sweepsTheNamedTeamsInOrder(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
-		"bot-prs-sweep/default.yaml":        "schedule: disabled\n",
-		"bot-prs-sweep/team-bumblebee.yaml": "schedule: enabled\nslackChannel: team-bumblebee\n",
-		"bot-prs-sweep/team-atlas.yaml":     "schedule: disabled\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
+		"bot-prs-sweep/team-atlas.yaml":     "slackChannel: team-atlas\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n",
 		"repositories/team-atlas.yaml":      "- name: atlas\n",
 		"repositories/team-phoenix.yaml":    "- name: phoenix\n",
@@ -132,14 +113,13 @@ func TestTeamsRun_namedTeamWithoutARepositoryListFailsAlone(t *testing.T) {
 	require.NoError(t, outcomes[1].Err, "atlas ran although the misspelt name could not")
 }
 
-// TestAllTeams_oneTeamsBrokenPolicyDoesNotStopTheRest holds the rule the
+// TestTeamsRun_oneTeamsBrokenPolicyDoesNotStopTheRest holds the rule the
 // daily run depends on: a policy nobody can read fails its own team alone,
 // and the pod still fails so the failure is visible.
-func TestAllTeams_oneTeamsBrokenPolicyDoesNotStopTheRest(t *testing.T) {
+func TestTeamsRun_oneTeamsBrokenPolicyDoesNotStopTheRest(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
-		"bot-prs-sweep/default.yaml":        "schedule: disabled\n",
-		"bot-prs-sweep/team-bumblebee.yaml": "schedule: enabled\n",
-		"bot-prs-sweep/team-atlas.yaml":     "schedule: enabled\nnotAKey: true\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
+		"bot-prs-sweep/team-atlas.yaml":     "notAKey: true\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n",
 		"repositories/team-atlas.yaml":      "- name: atlas\n",
 	})
@@ -152,6 +132,7 @@ func TestAllTeams_oneTeamsBrokenPolicyDoesNotStopTheRest(t *testing.T) {
 		Login:  "giantswarm-marge[bot]",
 		Rules:  RulesSource{Path: t.TempDir()},
 		Opts:   RunOptions{DryRun: true, Quiet: true, NoTUI: true},
+		Teams:  []string{"atlas", "bumblebee"},
 		Out:    &out,
 	}.Run(t.Context())
 	require.NoError(t, err)

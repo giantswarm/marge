@@ -21,7 +21,7 @@ import (
 var sweepOpts RunOptions
 
 var sweepFlags struct {
-	allTeams     bool
+	postSummary  bool
 	teams        []string
 	actions      string
 	output       string
@@ -37,7 +37,7 @@ var sweepFlags struct {
 const interactiveCheckTimeout = 5 * time.Minute
 
 func init() {
-	sweepCmd.Flags().BoolVar(&sweepFlags.allTeams, "all-teams", false, "Sweep every team whose policy file leaves the schedule enabled; this is what the daily schedule runs")
+	sweepCmd.Flags().BoolVar(&sweepFlags.postSummary, "post-summary", false, "Post each swept team's summary to the Slack channel its policy names. A scheduled run sets it; a sweep by hand stays out of the team channels")
 	sweepCmd.Flags().StringSliceVar(&sweepFlags.teams, "team", nil, "Sweep the repositories of this team under its own policy, both read from "+defaultTeamFileRepo+" (or $"+teamFileRepoEnv+"); repeatable, or comma-separated, to sweep several teams in one run")
 	sweepCmd.Flags().StringVar(&sweepOpts.Query, "query", "", "Sweep the bot PRs matching this GitHub search text, the way `marge [query]` does")
 	sweepCmd.Flags().StringVar(&sweepFlags.actions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
@@ -68,9 +68,6 @@ func resolveSweepOptions(opts *RunOptions) ([]string, error) {
 		return nil, err
 	}
 	switch {
-	case sweepFlags.allTeams && (len(teams) > 0 || opts.Query != "" || opts.Org != "" || opts.ReposFile != "" || len(opts.PRs) > 0):
-		return nil, errors.New("--all-teams reads every team's own scope: drop --team, --query, --org, --repos-file and --prs")
-	case sweepFlags.allTeams:
 	case len(teams) > 0 && opts.Query != "":
 		return nil, errors.New("--team and --query are mutually exclusive")
 	case len(teams) > 0 && (opts.Org != "" || opts.ReposFile != ""):
@@ -134,12 +131,10 @@ names, repeated or comma-separated, to sweep each of them under its own
 scope and policy and report them together; --query <text>
 runs marge's GitHub search the way "marge [query]" does, for personal
 repositories and organisations without a team file, under the company
-default policy; --all-teams sweeps every team that has a policy file, each
-under its own scope and policy, and is what the daily schedule runs. A team
-without a policy file and a team whose policy sets "schedule: disabled" are
-both skipped and named in the report. One team's unreadable policy fails
-that team alone. Only PRs authored by Renovate, Align files, Herald or
-Dependabot are touched, never a person's.
+default policy. A team without a policy file is skipped and named in the
+report, and one team's unreadable policy fails that team alone. Only PRs
+authored by Renovate, Align files, Herald or Dependabot are touched, never
+a person's.
 
 The policy is read from the default branch at the start of every sweep:
 bot-prs-sweep/default.yaml holds the company defaults, bot-prs-sweep/team-
@@ -215,15 +210,9 @@ marge never closes a PR itself.`,
 
 		source := RulesSource{Repo: sweepFlags.rulesRepo, Ref: sweepFlags.rulesRef, Path: sweepFlags.rulesPath}
 
-		if sweepFlags.allTeams {
+		if len(teams) > 1 || sweepFlags.postSummary {
 			return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
-				return runAllTeams(ctx, client, login, source, sweepOpts, sweepFlags.output == "json")
-			})
-		}
-
-		if len(teams) > 1 {
-			return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
-				return runTeams(ctx, client, login, source, sweepOpts, teams, sweepFlags.output == "json")
+				return runTeams(ctx, client, login, source, sweepOpts, teams, sweepFlags.postSummary, sweepFlags.output == "json")
 			})
 		}
 

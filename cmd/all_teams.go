@@ -27,8 +27,8 @@ type poster interface {
 // as well when the summary could not be posted.
 type teamOutcome struct {
 	Team string
-	// Skipped says why the team was not swept: it has no policy file, or
-	// its policy switches the schedule off. Empty when the team was swept.
+	// Skipped says why the team was not swept. Empty when the team was
+	// swept.
 	Skipped string
 	Result  SweepResult
 	Err     error
@@ -54,34 +54,17 @@ type teamsRun struct {
 	Out io.Writer
 }
 
-// scheduled reports that this run is the schedule's own: it reads the teams
-// from the policy files instead of a flag, and the schedule key of each
-// policy then decides which of those teams run. A run whose teams an
-// operator named sweeps exactly those.
-func (r teamsRun) scheduled() bool { return len(r.Teams) == 0 }
-
 // Run sweeps the teams of the run, in name order, and posts one summary per
 // team that changed something.
 //
-// The schedule's own run sweeps a team when it has a policy file and that
-// policy leaves the schedule enabled; every other team is skipped and named
-// in the report. A team whose files do not parse fails that team alone: one
-// team's broken policy must not stop the sweep for every other team.
+// A team whose files do not parse fails that team alone: one team's broken
+// policy must not stop the sweep for every other team.
 func (r teamsRun) Run(ctx context.Context) ([]teamOutcome, error) {
 	loader, err := policyLoader(r.Client)
 	if err != nil {
 		return nil, err
 	}
 	teams := r.Teams
-	if r.scheduled() {
-		teams, err = loader.Teams(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if len(teams) == 0 {
-			return nil, fmt.Errorf("no team has a policy file in %s/%s: nothing to sweep", loader.Source, policy.PolicyDir)
-		}
-	}
 
 	catalogue, rulesReport := loadRules(ctx, r.Client, r.Rules)
 	reportRules(r.Out, rulesReport)
@@ -106,9 +89,6 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 		return teamOutcome{Team: team, Err: err}
 	}
 	resolved := scope.Policies.Base()
-	if r.scheduled() && !resolved.Schedule {
-		return teamOutcome{Team: team, Skipped: "the policy switches the schedule off"}
-	}
 
 	opts := r.Opts
 	opts.Team = team
@@ -222,19 +202,17 @@ func loadSlack() poster {
 	return client
 }
 
-// runAllTeams is what `marge sweep --all-teams` and the daily CronJob run.
-// It sweeps every opted-in team and fails only after the last team has had
-// its turn.
-func runAllTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, asJSON bool) error {
-	return runTeamSweeps(ctx, client, login, source, opts, nil, loadSlack(), asJSON)
-}
-
 // runTeams is what `marge sweep --team` runs when it names more than one
-// team. Each team is swept under its own scope and policy, and the teams are
-// reported together. The summaries stay out of Slack: a sweep by hand posts
-// to no team channel, whether it names one team or five.
-func runTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, asJSON bool) error {
-	return runTeamSweeps(ctx, client, login, source, opts, teams, nil, asJSON)
+// team, and what one named team runs under --post-summary. Each team is
+// swept under its own scope and policy, and the teams are reported together.
+// A summary reaches the team's channel only when post says so: a sweep by
+// hand posts to no team channel, whether it names one team or five.
+func runTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, post, asJSON bool) error {
+	var slack poster
+	if post {
+		slack = loadSlack()
+	}
+	return runTeamSweeps(ctx, client, login, source, opts, teams, slack, asJSON)
 }
 
 // runTeamSweeps sweeps the teams and fails only after the last team has had

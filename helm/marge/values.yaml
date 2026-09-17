@@ -92,14 +92,16 @@ service:
   # -- Service port; the container listens on 8080
   port: 8080
 
-# -- Container resources
+# -- Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
 resources:
   limits:
     cpu: 500m
     memory: 256Mi
+    ephemeral-storage: 1Gi
   requests:
     cpu: 50m
     memory: 64Mi
+    ephemeral-storage: 50Mi
 
 # -- Node selector for the pod
 nodeSelector: {}  # @schema additionalProperties: true
@@ -157,57 +159,47 @@ marge:
     # -- Key of the CircleCI token inside existingSecret
     existingSecretKey: "token"
 
-schedule:
-  daily:
-    # -- Run the daily sweep. It sweeps every team whose policy file leaves the schedule enabled, and needs marge.github.app.
-    enabled: false
-    # -- Cron expression of the daily sweep, in the cluster's timezone unless timeZone is set.
-    schedule: "0 6 * * *"
-    # -- IANA timezone the cron expression is read in.
-    timeZone: "Europe/Berlin"
-    # -- Sweep steps the daily run performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch.
-    actions: "classify,approve,merge,refresh,retry,remedy,mark"
-    # -- Report every outcome without writing anything. Turn it on for the first runs on a new installation.
-    dryRun: false
-    # -- Seconds the daily run may take before Kubernetes stops it.
-    activeDeadlineSeconds: 3600
-    # -- Successful Jobs kept
-    successfulJobsHistoryLimit: 3
-    # -- Failed Jobs kept
-    failedJobsHistoryLimit: 3
-    # -- Container resources of the daily run
-    resources:
-      limits:
-        cpu: 1
-        memory: 512Mi
-      requests:
-        cpu: 100m
-        memory: 128Mi
-  weekly:
-    # -- Run the weekly rescue trigger. It stays off until the rescue run exists: the command it would run is not built yet, so args has no default and an enabled weekly CronJob without args fails to render.
-    enabled: false
-    # -- Cron expression of the weekly rescue trigger.
-    schedule: "0 5 * * 1"
-    # -- IANA timezone the cron expression is read in.
-    timeZone: "Europe/Berlin"
-    # -- Arguments the weekly run passes to the marge binary.
-    args: []
-    # -- Audience of the projected ServiceAccount token the weekly run presents to the agent platform gateway. Mounted at /var/run/secrets/kagent/token.
-    tokenAudience: "kagent"
-    # -- Seconds the weekly run may take before Kubernetes stops it.
-    activeDeadlineSeconds: 3600
-    # -- Successful Jobs kept
-    successfulJobsHistoryLimit: 3
-    # -- Failed Jobs kept
-    failedJobsHistoryLimit: 3
-    # -- Container resources of the weekly run
-    resources:
-      limits:
-        cpu: 1
-        memory: 512Mi
-      requests:
-        cpu: 100m
-        memory: 128Mi
+# -- Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead.
+suspendAll: false
+
+# -- Values every entry of schedules takes for the keys it does not set itself.
+scheduleDefaults:
+  # -- IANA timezone the cron expressions are read in.
+  timeZone: "Europe/Berlin"
+  # -- Sweep steps a scheduled sweep performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch.
+  actions: "classify,approve,merge,refresh,retry,remedy,mark"
+  # -- Report every outcome without writing anything. Turn it on for the first runs on a new installation.
+  dryRun: false
+  # -- Seconds a scheduled run may take before Kubernetes stops it.
+  activeDeadlineSeconds: 3600
+  # -- Successful Jobs kept
+  successfulJobsHistoryLimit: 3
+  # -- Failed Jobs kept
+  failedJobsHistoryLimit: 3
+  # -- Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
+  resources:
+    limits:
+      cpu: 1
+      memory: 512Mi
+      ephemeral-storage: 1Gi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+      ephemeral-storage: 50Mi
+
+# -- Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit.
+schedules: []
+  # - name: bumblebee-sweep     # names the CronJob and its ServiceAccount
+  #   team: bumblebee           # the team this run sweeps
+  #   schedule: "0 6 * * 1-5"
+  #   suspend: false
+  #   dryRun: false             # every other key defaults from scheduleDefaults
+  # - name: bumblebee-rescue    # args replaces the generated command line
+  #   team: bumblebee
+  #   schedule: "0 5 * * 1"
+  #   suspend: true
+  #   args: []
+  #   tokenAudience: "kagent"   # mounts a projected token at /var/run/secrets/kagent
 
 networkPolicy:
   # -- Create a NetworkPolicy: ingress to the MCP port from the selected namespaces, egress to DNS and HTTPS only (GitHub, CircleCI).

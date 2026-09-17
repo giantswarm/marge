@@ -129,14 +129,11 @@ A team declares its own appetite for sweeps in `giantswarm/github`, in files the
 | `bot-prs-sweep/team-<name>.yaml` | one team's deviations | that team, in CODEOWNERS: a new team file adds its own line, or the directory line leaves it with Bumblebee |
 | `botPRsSweep` on a repository entry of `repositories/team-<name>.yaml` | one repository's exception | that team |
 
-A team opts into the scheduled sweep with `schedule: enabled` in its own file, and pauses it again with `schedule: disabled` or by deleting the key. A team without a policy file, or one that never sets the key, is swept by hand from the CLI and never by the schedule.
-
-`marge sweep --all-teams` is what reads the key: it sweeps every team that has a policy file whose `schedule` is `enabled`, and skips the rest. That is what the daily CronJob of the [chart](helm/marge/README.md) runs. `marge sweep --team <name>` is a sweep by hand and runs whatever the key says, for one team or for the several the flag names.
+The policy files say what may merge, and nothing about when a team is swept. Each team has its own CronJob in the [chart](helm/marge/README.md), which sweeps that team on its own cadence and is suspended on its own. A team without a policy file is swept under the company defaults.
 
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
 slackChannel: standup-bumblebee
-schedule: enabled
 updateTypes:
   renovate: [patch, minor]
 rescue:
@@ -366,12 +363,11 @@ This makes the daily triage call obvious at a glance:
 
 Use [`marge mark`](#marge-mark-pr-url-flags) to write markers without knowing the format. Any tool that can comment on a PR can participate -- there is no coupling to a specific agent framework.
 
-### `marge sweep (--team <name>... | --query <text> | --all-teams) [flags]`
+### `marge sweep (--team <name>... | --query <text>) [flags]`
 
 Sweeps one scope without interactive grouping. Exactly one scope is given:
 
-- `--all-teams` sweeps every team that has a policy file, each under its own repositories and its own [policy](#sweep-policy). A team whose policy sets `schedule: disabled`, and a team with no policy file at all, are both skipped and named in the report. One team's unreadable policy fails that team alone; every other team still runs, and the command exits non-zero at the end. This is what the daily schedule runs.
-- `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in the team-file repository (`giantswarm/github` unless `MARGE_TEAM_FILE_REPO` names another `owner/repo`; each entry's `name` is read, and its `botPRsSweep` key when it has one) and sweeps their open bot PRs under the team's [policy](#sweep-policy). It takes several names, repeated or comma-separated: each team is swept under its own repositories and its own policy, and the teams are reported one after the other the way `--all-teams` reports them. A team the operator names is swept whatever its `schedule` key says, and one team's unreadable policy fails that team alone. Naming several teams refuses `--prs`, which narrows a single scope.
+- `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in the team-file repository (`giantswarm/github` unless `MARGE_TEAM_FILE_REPO` names another `owner/repo`; each entry's `name` is read, and its `botPRsSweep` key when it has one) and sweeps their open bot PRs under the team's [policy](#sweep-policy). It takes several names, repeated or comma-separated: each team is swept under its own repositories and its own policy, and the teams are reported one after the other. One team's unreadable policy fails that team alone; every other team still runs, and the command exits non-zero at the end. Naming several teams refuses `--prs`, which narrows a single scope.
 - `--query <text>` runs marge's GitHub search the way `marge [query]` does, for personal repositories and organisations without a team file; `--org` and `--repos-file` belong to this scope. The query scope has no team, so the company defaults apply on their own.
 
 A sweep does not wait for pending checks: a `Waiting for checks` PR is reported and the next sweep decides. `--check-timeout` opts into a wait.
@@ -380,8 +376,8 @@ The live table shows every PR's outcome, including the failure reason and any ai
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--all-teams` | | `false` | Sweep every team whose policy leaves the schedule enabled (schedule scope) |
 | `--team` | | | Team whose repositories are swept (team scope); repeatable, or comma-separated, for several teams |
+| `--post-summary` | | `false` | Post each swept team's summary to the Slack channel its policy names; a scheduled run sets it |
 | `--query` | | | GitHub search text (query scope) |
 | `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `remedy`, `mark` (see [Actions](#actions)) |
 | `--dry-run` | | `false` | Decide every outcome, write nothing |

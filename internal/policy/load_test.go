@@ -2,7 +2,6 @@ package policy
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,16 +21,6 @@ func (m mapSource) Read(_ context.Context, path string) (string, bool, error) {
 	return content, found, nil
 }
 
-func (m mapSource) List(_ context.Context, dir string) ([]string, bool, error) {
-	var paths []string
-	for path := range m {
-		if strings.HasPrefix(path, dir+"/") {
-			paths = append(paths, path)
-		}
-	}
-	return paths, len(paths) > 0, nil
-}
-
 func loader(t *testing.T, files map[string]string) Loader {
 	t.Helper()
 	return Loader{Source: mapSource(files), Owner: "giantswarm"}
@@ -42,7 +31,7 @@ func loader(t *testing.T, files map[string]string) Loader {
 func TestTeamScope(t *testing.T) {
 	l := loader(t, map[string]string{
 		DefaultFile:                   "updateTypes:\n  renovate: [patch, minor]\n",
-		TeamFile("bumblebee"):         "slackChannel: team-bumblebee\nschedule: enabled\nconcurrency:\n  perRepo: 2\n",
+		TeamFile("bumblebee"):         "slackChannel: team-bumblebee\nconcurrency:\n  perRepo: 2\n",
 		RepositoriesFile("bumblebee"): "- name: marge\n- name: muster\n  botPRsSweep:\n    updateTypes: [patch]\n",
 	})
 
@@ -53,7 +42,6 @@ func TestTeamScope(t *testing.T) {
 	base := scope.Policies.Base()
 	require.Equal(t, "team-bumblebee", base.SlackChannel)
 	require.Equal(t, 2, base.Concurrency.PerRepo)
-	require.True(t, base.Schedule, "the team file opts the team into the schedule")
 	require.Equal(t, []string{"built-in company defaults", DefaultFile, TeamFile("bumblebee")}, base.Sources)
 
 	require.True(t, scope.Policies.For("giantswarm", "marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
@@ -69,7 +57,6 @@ func TestTeamScope_noPolicyFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"giantswarm/cluster-aws"}, scope.Repos)
 	require.Equal(t, pr.CompanyDefaults(), scope.Policies.For("giantswarm", "cluster-aws"))
-	require.False(t, scope.Policies.Base().Schedule, "a team without a policy file is never swept by the schedule")
 }
 
 // TestTeamScope_unreadableRepository names the source and the access in the
@@ -143,29 +130,4 @@ func TestTeamScope_refusesATeamThatIsNotAName(t *testing.T) {
 			require.ErrorContains(t, err, "is not a team name")
 		})
 	}
-}
-
-// TestTeams returns the teams that have a policy file, which is what a team
-// writes to opt its scheduled sweep in. The company default file and a file
-// whose name is not a team name are not teams.
-func TestTeams(t *testing.T) {
-	loader := loader(t, map[string]string{
-		DefaultFile:               "schedule: disabled\n",
-		TeamFile("bumblebee"):     "schedule: enabled\n",
-		TeamFile("atlas"):         "schedule: disabled\n",
-		"bot-prs-sweep/README.md": "not a policy\n",
-	})
-
-	teams, err := loader.Teams(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, []string{"atlas", "bumblebee"}, teams)
-}
-
-// TestTeams_noPolicyDirectory names the access instead of reporting that no
-// team opted in: GitHub answers 404 both for an absent directory and for a
-// repository the token cannot read.
-func TestTeams_noPolicyDirectory(t *testing.T) {
-	_, err := loader(t, map[string]string{}).Teams(t.Context())
-	require.ErrorContains(t, err, "no policy directory")
-	require.ErrorContains(t, err, "giantswarm/github")
 }
