@@ -234,3 +234,25 @@ func TestColorizeStatus_cancelledAndRetriedAreNotRed(t *testing.T) {
 		t.Error("a build awaiting a retry and one re-running must look different")
 	}
 }
+
+// TestStatus_awaitingRebaseIsNotActionRequired keeps a conflict the sweep
+// caused itself out of the list a person reads. The bot rebases the PR.
+func TestStatus_awaitingRebaseIsNotActionRequired(t *testing.T) {
+	s := NewPRStatus()
+	idx := s.Add(PRInfo{Owner: "o", Repo: "r", Number: 7})
+	s.Update(idx, StatusAwaitingRebase, "conflicted by #6, merged in this run; the bot rebases it")
+
+	if got := s.ActionRequired(); len(got) != 0 {
+		t.Errorf("ActionRequired len = %d, want 0", len(got))
+	}
+	c := s.Summary()
+	if c.Failed != 0 || c.Waiting != 1 {
+		t.Errorf("Summary failed=%d waiting=%d, want 0 and 1", c.Failed, c.Waiting)
+	}
+	if got := s.WaitingEntries(); len(got) != 1 {
+		t.Errorf("WaitingEntries len = %d, want 1: the count and the list must agree", len(got))
+	}
+	if got := LabelClass(StatusAwaitingRebase); got != "pending" {
+		t.Errorf("LabelClass = %q, want %q", got, "pending")
+	}
+}

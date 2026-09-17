@@ -223,6 +223,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
 	})
 
+	// Second pass: the PRs a merge of this sweep made dirty, once the bot
+	// has rebased them.
+	proc.Revisit(ctx, status)
+
 	close(stopRefresh)
 	<-refreshStopped
 
