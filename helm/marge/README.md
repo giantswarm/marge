@@ -41,7 +41,8 @@ Set `marge.slack.token` and each run posts one summary to the channel the team's
 | muster.toolPrefix | string | `"marge"` | Prefix muster gives the tools of this server, so they are reachable as x_<prefix>_<tool>. |
 | muster.description | string | `"Sweep a team's dependency and alignment PRs: list, sweep, remedy and mark, as the signed-in person."` | Description muster shows for the server. |
 | muster.toolGroup | string | `""` | Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off. |
-| muster.github.issuer | string | `"https://github.com"` | Issuer the grants are filed under. GitHub publishes no discovery document, so the endpoints below are pinned instead. |
+| muster.timeout | int | `120` | Seconds muster waits on a connection to this server. The sweep reads the checks of every PR in a team's queue, which passes the CRD default of 30. The CRD caps the value at 300. |
+| muster.github.issuer | string | `"https://github.com/login/oauth"` | Issuer the grants are filed under, and the identity muster files them under, so it must match the value the other GitHub-backed servers use. GitHub publishes no discovery document, so the endpoints below are pinned instead. |
 | muster.github.authorizationEndpoint | string | `"https://github.com/login/oauth/authorize"` | GitHub's authorization endpoint. |
 | muster.github.tokenEndpoint | string | `"https://github.com/login/oauth/access_token"` | GitHub's token endpoint. |
 | muster.github.scopes | string | `""` | OAuth scopes requested at sign-in. A GitHub App's user-to-server token takes its rights from the App's permissions and the person's own, so no scope is requested. |

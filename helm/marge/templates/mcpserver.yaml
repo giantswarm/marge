@@ -40,6 +40,7 @@ spec:
   type: streamable-http
   description: {{ .Values.muster.description | quote }}
   toolPrefix: {{ .Values.muster.toolPrefix | quote }}
+  timeout: {{ .Values.muster.timeout }}
   url: http://{{ include "marge.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/mcp
   auth:
     type: oauth
