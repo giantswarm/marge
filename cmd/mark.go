@@ -20,6 +20,7 @@ var markOpts struct {
 	Outcome string
 	Reason  string
 	Tool    string
+	DryRun  bool
 }
 
 // validMarkOutcomes are the rescue outcomes a marker may record. "failed"
@@ -35,6 +36,7 @@ func init() {
 	markCmd.Flags().StringVar(&markOpts.Outcome, "outcome", "failed", "Rescue outcome: \"failed\" or \"blocked\"")
 	markCmd.Flags().StringVar(&markOpts.Reason, "reason", "", "Short explanation of why the rescue did not succeed")
 	markCmd.Flags().StringVar(&markOpts.Tool, "tool", "ai", "Name of the tool/agent that attempted the rescue (e.g. \"klaus\")")
+	markCmd.Flags().BoolVar(&markOpts.DryRun, "dry-run", false, "Show the marker that would be written without posting it")
 
 	rootCmd.AddCommand(markCmd)
 }
@@ -64,12 +66,16 @@ a convenience so callers do not need to know the marker format.`,
 			return err
 		}
 
-		marker, owner, repo, number, err := markRescue(ctx, client, args[0], markOpts.Outcome, markOpts.Reason, markOpts.Tool)
+		marker, owner, repo, number, err := markRescue(ctx, client, args[0], markOpts.Outcome, markOpts.Reason, markOpts.Tool, markOpts.DryRun)
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("Marked %s/%s#%d: rescue %s (%s)\n", owner, repo, number, marker.Outcome, pinned(marker))
+		verb := "Marked"
+		if markOpts.DryRun {
+			verb = "dry-run: would mark"
+		}
+		fmt.Printf("%s %s/%s#%d: rescue %s (%s)\n", verb, owner, repo, number, marker.Outcome, pinned(marker))
 		return nil
 	},
 }
@@ -88,14 +94,16 @@ func pinned(m *pr.RescueMarker) string {
 }
 
 // markRescue posts an ai-rescue marker comment on the PR and returns the
-// marker that was written. Shared by the CLI command and the MCP tool.
-func markRescue(ctx context.Context, client *github.Client, prURL, outcome, reason, tool string) (*pr.RescueMarker, string, string, int, error) {
+// marker that was written. Shared by the CLI command and the MCP tool. A dry
+// run builds the marker, head SHA and fingerprint included, and posts
+// nothing, so a caller sees exactly what the write would say.
+func markRescue(ctx context.Context, client *github.Client, prRef, outcome, reason, tool string, dryRun bool) (*pr.RescueMarker, string, string, int, error) {
 	outcome = strings.ToLower(strings.TrimSpace(outcome))
 	if !validMarkOutcomes[outcome] {
 		return nil, "", "", 0, fmt.Errorf("invalid outcome %q (must be \"failed\" or \"blocked\")", outcome)
 	}
 
-	owner, repo, number, err := pr.ParsePRURL(prURL)
+	owner, repo, number, err := pr.ParsePRRef(prRef)
 	if err != nil {
 		return nil, "", "", 0, err
 	}
@@ -112,6 +120,10 @@ func markRescue(ctx context.Context, client *github.Client, prURL, outcome, reas
 		HeadSHA:     pullReq.GetHead().GetSHA(),
 		At:          time.Now().UTC().Truncate(time.Second),
 		Fingerprint: process.FingerprintPR(ctx, client, owner, repo, pullReq),
+	}
+
+	if dryRun {
+		return marker, owner, repo, number, nil
 	}
 
 	body := marker.CommentBody()

@@ -53,9 +53,14 @@ type RunOptions struct {
 	// Rules is the rule catalogue, loaded from marge's own repository
 	// before the sweep starts. Nil refuses every remedy and leaves
 	// classification, approval and merging unchanged.
-	Rules            *rules.Catalogue
-	Org              string
-	ReposFile        string // repositories to scan instead of searching GitHub; see resolveScope
+	Rules     *rules.Catalogue
+	Org       string
+	ReposFile string // repositories to scan instead of searching GitHub; see resolveScope
+	// PRs narrows the sweep to the pull requests named here, each a PR URL
+	// or owner/repo#number. Empty sweeps every PR the scope found. The
+	// scope still decides which repositories are read and under which
+	// policy, so a PR outside it is refused rather than swept.
+	PRs              []string
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
@@ -351,6 +356,61 @@ func readReposFile(path string) ([]string, error) {
 		return nil, fmt.Errorf("repos file %s lists no repositories", path)
 	}
 	return repos, nil
+}
+
+// scopeRepos returns the repositories a run reads. A scope that names them
+// wins; otherwise the PR references name them, so a run narrowed to a few
+// PRs reads their repositories instead of searching all of GitHub. Neither
+// leaves the search unrestricted, which is what a bare query scope wants.
+func scopeRepos(scoped []string, refs []string) ([]string, error) {
+	if len(scoped) > 0 || len(refs) == 0 {
+		return scoped, nil
+	}
+	repos := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		owner, repo, _, err := pr.ParsePRRef(ref)
+		if err != nil {
+			return nil, err
+		}
+		repos = append(repos, owner+"/"+repo)
+	}
+	return mergeRepos(repos), nil
+}
+
+// filterByPRs keeps the PRs the caller named, in the order the scope found
+// them. Each reference is a PR URL or owner/repo#number. An empty selection
+// keeps every PR; a reference that names no PR of the scope is an error, so
+// a caller never believes a PR was swept because it was silently absent.
+func filterByPRs(prs []pr.PRInfo, refs []string) ([]pr.PRInfo, error) {
+	if len(refs) == 0 {
+		return prs, nil
+	}
+	selected := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		owner, repo, number, err := pr.ParsePRRef(ref)
+		if err != nil {
+			return nil, err
+		}
+		selected[pr.Key(owner, repo, number)] = true
+	}
+
+	var kept []pr.PRInfo
+	for _, info := range prs {
+		key := pr.Key(info.Owner, info.Repo, info.Number)
+		if selected[key] {
+			kept = append(kept, info)
+			delete(selected, key)
+		}
+	}
+	if len(selected) > 0 {
+		missing := make([]string, 0, len(selected))
+		for key := range selected {
+			missing = append(missing, key)
+		}
+		sort.Strings(missing)
+		return nil, fmt.Errorf("not an open bot PR of this scope: %s", strings.Join(missing, ", "))
+	}
+	return kept, nil
 }
 
 // filterByOrg keeps the PRs whose owner is org, compared case-insensitively

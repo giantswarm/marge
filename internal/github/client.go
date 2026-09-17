@@ -96,12 +96,12 @@ func NewAppClient(app *App, baseURL string, httpClient *http.Client) (*github.Cl
 // AuthenticatedLogin returns the login the client acts as. An installation
 // token has no user behind it, so GET /user answers 403 and the App's own
 // slug names the bot instead.
+//
+// The answer comes from the client, not from the environment: a process may
+// hold the App credential and still serve a call with a person's token, and
+// that call is the person's.
 func AuthenticatedLogin(ctx context.Context, client *github.Client) (string, error) {
-	app, err := LoadApp()
-	if err != nil {
-		return "", err
-	}
-	if app == nil {
+	if _, isApp := client.Client().Transport.(*appTransport); !isApp {
 		user, _, err := client.Users.Get(ctx, "")
 		if err != nil {
 			return "", fmt.Errorf("getting authenticated user: %w", err)

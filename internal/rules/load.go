@@ -242,3 +242,22 @@ func contentSHA(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
 }
+
+// Only returns the catalogue narrowed to the named rule, keeping the digest
+// and the source so the evidence still identifies where the rule came from.
+// The rule must still match the PR: narrowing removes the other rules from
+// the contest, it does not force an action onto a PR the rule does not
+// recognise, and it cannot reach past that action's guards.
+func (c *Catalogue) Only(name string) (*Catalogue, error) {
+	if c == nil {
+		return nil, fmt.Errorf("no rule catalogue was loaded, so rule %q cannot be selected", name)
+	}
+	for _, rule := range c.Rules {
+		if rule.Name == name {
+			narrowed := *c
+			narrowed.Rules = []*Rule{rule}
+			return &narrowed, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown rule %q in catalogue %s", name, c.Source)
+}

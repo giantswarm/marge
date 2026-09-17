@@ -45,6 +45,7 @@ func init() {
 	sweepCmd.Flags().BoolVarP(&sweepOpts.Watch, "watch", "w", false, "Keep polling for new PRs (every 60s)")
 	sweepCmd.Flags().StringVar(&sweepOpts.Org, "org", "", "Limit to repos owned by this org or user (query scope)")
 	sweepCmd.Flags().StringVar(&sweepOpts.ReposFile, "repos-file", "", "File with org/repo entries (one per line) to scan for bot PRs instead of searching GitHub (query scope)")
+	sweepCmd.Flags().StringSliceVar(&sweepOpts.PRs, "prs", nil, "Sweep only these pull requests of the scope, each a PR URL or owner/repo#number (repeatable, or comma-separated)")
 	sweepCmd.Flags().BoolVar(&sweepOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	sweepCmd.Flags().StringVar(&sweepFlags.output, "output", "table", "Output format: table or json")
 	sweepCmd.Flags().BoolVar(&sweepOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
@@ -60,14 +61,14 @@ func init() {
 // depend on them.
 func resolveSweepOptions(opts *RunOptions) error {
 	switch {
-	case sweepFlags.allTeams && (opts.Team != "" || opts.Query != "" || opts.Org != "" || opts.ReposFile != ""):
-		return errors.New("--all-teams reads every team's own scope: drop --team, --query, --org and --repos-file")
+	case sweepFlags.allTeams && (opts.Team != "" || opts.Query != "" || opts.Org != "" || opts.ReposFile != "" || len(opts.PRs) > 0):
+		return errors.New("--all-teams reads every team's own scope: drop --team, --query, --org, --repos-file and --prs")
 	case sweepFlags.allTeams:
 	case opts.Team != "" && opts.Query != "":
 		return errors.New("--team and --query are mutually exclusive")
 	case opts.Team != "" && (opts.Org != "" || opts.ReposFile != ""):
 		return errors.New("--org and --repos-file belong to the query scope; drop them with --team")
-	case opts.Team == "" && opts.Query == "" && opts.ReposFile == "" && opts.Org == "":
+	case opts.Team == "" && opts.Query == "" && opts.ReposFile == "" && opts.Org == "" && len(opts.PRs) == 0:
 		return errors.New("one of --team or --query is required")
 	}
 	actions, err := process.ParseActions(sweepFlags.actions)
@@ -196,11 +197,19 @@ marge never closes a PR itself.`,
 				reportRules(os.Stderr, rulesReport)
 			}
 
-			found, err := searchPRs(ctx, client, opts.Query, login, scope.Repos)
+			repos, err := scopeRepos(scope.Repos, opts.PRs)
+			if err != nil {
+				return err
+			}
+
+			found, err := searchPRs(ctx, client, opts.Query, login, repos)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
-			prs := filterByOrg(found.PRs, opts.Org)
+			prs, err := filterByPRs(filterByOrg(found.PRs, opts.Org), opts.PRs)
+			if err != nil {
+				return err
+			}
 
 			status, err := processOnceWithStatus(ctx, client, login, prs, opts)
 			if err != nil {

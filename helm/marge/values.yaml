@@ -4,6 +4,29 @@ mcp:
   # -- Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone, until a muster registers the server.
   enabled: true
 
+muster:
+  # -- Register the MCP server with muster, so a person reaches it through the gateway as themselves. Needs the App's OAuth client credentials and a muster in the cluster.
+  register: false
+  # -- Name of the MCPServer resource. Defaults to the release fullname.
+  name: ""
+  # -- Namespace the MCPServer is created in. Defaults to the release namespace; set it when muster watches another one.
+  namespace: ""
+  # -- Prefix muster gives the tools of this server, so they are reachable as x_<prefix>_<tool>.
+  toolPrefix: "marge"
+  # -- Description muster shows for the server.
+  description: "Sweep a team's dependency and alignment PRs: list, sweep, remedy and mark, as the signed-in person."
+  # -- Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off.
+  toolGroup: ""
+  github:
+    # -- Issuer the grants are filed under. GitHub publishes no discovery document, so the endpoints below are pinned instead.
+    issuer: "https://github.com"
+    # -- GitHub's authorization endpoint.
+    authorizationEndpoint: "https://github.com/login/oauth/authorize"
+    # -- GitHub's token endpoint.
+    tokenEndpoint: "https://github.com/login/oauth/access_token"
+    # -- OAuth scopes requested at sign-in. A GitHub App's user-to-server token takes its rights from the App's permissions and the person's own, so no scope is requested.
+    scopes: ""
+
 # -- Number of marge replicas. The MCP transport is stateful per session, so keep it at 1 unless a client-affine load balancer sits in front.
 replicaCount: 1
 

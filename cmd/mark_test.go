@@ -78,7 +78,7 @@ func TestMarkRescue_recordsFingerprint(t *testing.T) {
 		Filename: new("package.json"), Status: new("modified"), Changes: new(2), Patch: new(patch),
 	}}}
 
-	marker, owner, repo, number, err := markRescue(context.Background(), f.client(t), "https://github.com/org/repo/pull/44", "blocked", "peer typescript <6.1.0", "klaus")
+	marker, owner, repo, number, err := markRescue(context.Background(), f.client(t), "https://github.com/org/repo/pull/44", "blocked", "peer typescript <6.1.0", "klaus", false)
 	if err != nil {
 		t.Fatalf("markRescue: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestMarkRescue_recordsFingerprint(t *testing.T) {
 func TestMarkRescue_compareFailureFallsBackToChangeID(t *testing.T) {
 	f := &markFixture{compareFail: true}
 
-	marker, _, _, _, err := markRescue(context.Background(), f.client(t), "https://github.com/org/repo/pull/44", "failed", "", "klaus")
+	marker, _, _, _, err := markRescue(context.Background(), f.client(t), "https://github.com/org/repo/pull/44", "failed", "", "klaus", false)
 	if err != nil {
 		t.Fatalf("markRescue must not fail when the fingerprint cannot be computed: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestMarkRescue_compareFailureFallsBackToChangeID(t *testing.T) {
 }
 
 func TestMarkRescue_rejectsUnknownOutcome(t *testing.T) {
-	if _, _, _, _, err := markRescue(context.Background(), nil, "https://github.com/org/repo/pull/44", "gave-up", "", "klaus"); err == nil {
+	if _, _, _, _, err := markRescue(context.Background(), nil, "https://github.com/org/repo/pull/44", "gave-up", "", "klaus", false); err == nil {
 		t.Error("expected an error for an invalid outcome")
 	}
 }

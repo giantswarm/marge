@@ -63,58 +63,131 @@ Transports:
                    at /healthz and /readyz; this is what the Helm chart runs`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mcpServer := newMCPServer()
 		switch serveOpts.transport {
 		case transportStdio:
-			return server.ServeStdio(mcpServer)
+			return server.ServeStdio(newMCPServer(gh.NewClient))
 		case transportStreamableHTTP:
-			return serveHTTP(cmd.Context(), mcpServer, serveOpts.httpAddr, cmd.ErrOrStderr())
+			return serveHTTP(cmd.Context(), newMCPServer(gh.NewCallerClient), serveOpts.httpAddr, cmd.ErrOrStderr())
 		default:
 			return fmt.Errorf("unknown transport %q: use %s or %s", serveOpts.transport, transportStdio, transportStreamableHTTP)
 		}
 	},
 }
 
-// newMCPServer builds the MCP server with the sweep and mark tools; the
+// clientFactory returns the GitHub client one tool call acts with, and is
+// what separates the two transports. A stdio server was started by the
+// person using it, so it acts with that person's own credential; a served
+// one acts with the token its caller presented and with nothing else.
+type clientFactory func(context.Context) (*github.Client, error)
+
+// toolset holds what every tool handler needs. Each tool is an adapter: it
+// reads its arguments, builds one sweepRequest and hands it to run, which is
+// the same engine call the sweep command makes. No tool reaches past it and
+// no tool knows what kind of client it got.
+type toolset struct {
+	newClient clientFactory
+}
+
+// newMCPServer builds the MCP server and its tools over newClient; the
 // transport is chosen by the caller.
-func newMCPServer() *server.MCPServer {
+func newMCPServer(newClient clientFactory) *server.MCPServer {
 	mcpServer := server.NewMCPServer(
 		"marge",
 		version,
 		server.WithToolCapabilities(true),
 	)
 
-	mcpServer.AddTool(sweepTool(), handleSweep)
-
-	mcpServer.AddTool(
-		mcp.NewTool("mark",
-			mcp.WithDescription("Record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
-			mcp.WithString("pr_url",
-				mcp.Required(),
-				mcp.Description("Pull request URL (https://github.com/OWNER/REPO/pull/NUMBER)"),
-			),
-			mcp.WithString("outcome",
-				mcp.Description("Rescue outcome (default: \"failed\")"),
-				mcp.Enum("failed", "blocked"),
-			),
-			mcp.WithString("reason",
-				mcp.Description("Short explanation of why the rescue did not succeed"),
-			),
-			mcp.WithString("tool",
-				mcp.Description("Name of the tool/agent that attempted the rescue (default: \"ai\")"),
-			),
-		),
-		handleMark,
-	)
+	tools := toolset{newClient: newClient}
+	mcpServer.AddTool(listTool(), tools.handleList)
+	mcpServer.AddTool(sweepTool(), tools.handleSweep)
+	mcpServer.AddTool(remedyTool(), tools.handleRemedy)
+	mcpServer.AddTool(markTool(), tools.handleMark)
 
 	return mcpServer
+}
+
+// Every tool spells out all four annotations. mcp-go fills an unset hint
+// with the specification's default, so a hint left out ships as a claim.
+// openWorldHint is true throughout: every tool reads and writes GitHub,
+// which is outside this server.
+func listTool() mcp.Tool {
+	return mcp.NewTool("list",
+		mcp.WithDescription("Read-only. List the open bot PRs of a team or query scope with the classification, label, bot kind, update type, age, evidence and prior-rescue state of each, and the policy each was decided under. "+
+			"It is the sweep engine's classify step alone, on a dry run: nothing is approved, merged, refreshed, retried, remedied or labelled, and no comment is written. "+
+			"The entries are grouped the way the sweep reports them -- merged, security_failures, action_required, stale, cancelled, waiting, obsolete, ci_unavailable, ci_no_verdict, skipped -- so \"what is waiting for us\" and \"what would a sweep do\" are the same question. "+
+			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale."),
+		scopeArguments(),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
+	)
+}
+
+func remedyTool() mcp.Tool {
+	return mcp.NewTool("remedy",
+		mcp.WithDescription("WRITES (destructive): classify one PR and apply the catalogue rule that matches it, through the action that rule names and that action's own guards. "+
+			"This is the sweep engine's classify, remedy and mark steps on a single PR, so the guards, the refusals and the evidence comment are the sweep's. "+
+			"A rule can never do what its action forbids, and a named rule still has to match: naming one removes the other rules from the contest, it does not force an action onto a PR. "+
+			"Nothing matches means nothing is written, and the failure is reported under unhandled so it can earn a rule."),
+		mcp.WithString("pr_url",
+			mcp.Required(),
+			mcp.Description("The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER"),
+		),
+		mcp.WithString("rule",
+			mcp.Description("Apply this rule of the catalogue instead of letting every rule compete. The rule must still match the PR."),
+		),
+		mcp.WithString("team",
+			mcp.Description("Decide the PR under this team's policy, read from bot-prs-sweep/team-<name>.yaml in the team-file repository. Without it the company default policy applies."),
+		),
+		mcp.WithBoolean("dry_run",
+			mcp.Description("Report the rule that would apply and write nothing (default: false)"),
+		),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
+	)
+}
+
+func markTool() mcp.Tool {
+	return mcp.NewTool("mark",
+		mcp.WithDescription("WRITES: record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
+		mcp.WithString("pr_url",
+			mcp.Required(),
+			mcp.Description("The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER"),
+		),
+		mcp.WithString("outcome",
+			mcp.Description("Rescue outcome (default: \"failed\")"),
+			mcp.Enum("failed", "blocked"),
+		),
+		mcp.WithString("reason",
+			mcp.Description("Short explanation of why the rescue did not succeed"),
+		),
+		mcp.WithString("tool",
+			mcp.Description("Name of the tool/agent that attempted the rescue (default: \"ai\")"),
+		),
+		mcp.WithBoolean("dry_run",
+			mcp.Description("Return the marker that would be written, head SHA and fingerprint included, and post nothing (default: false)"),
+		),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
+	)
 }
 
 // httpHandler routes the MCP endpoint and the probe paths. Everything else
 // is a 404, so a misconfigured client gets a clear answer instead of an MCP
 // error.
 func httpHandler(mcpServer *server.MCPServer) (http.Handler, *server.StreamableHTTPServer) {
-	streamable := server.NewStreamableHTTPServer(mcpServer, server.WithEndpointPath(mcpEndpoint))
+	streamable := server.NewStreamableHTTPServer(mcpServer,
+		server.WithEndpointPath(mcpEndpoint),
+		// muster attaches the person's GitHub grant as a bearer on every
+		// JSON-RPC request. Carrying it on the context is what makes a
+		// served call the caller's own.
+		server.WithHTTPContextFunc(gh.ContextWithBearer),
+	)
 	ok := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
@@ -166,6 +239,44 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, addr string, lo
 	return nil
 }
 
+// scopeArguments are the arguments that say what a call covers. list and
+// sweep share them, so the two scopes -- a team, or a query -- mean the same
+// thing on every tool and on the CLI.
+func scopeArguments() mcp.ToolOption {
+	options := []mcp.ToolOption{
+		mcp.WithString("team",
+			mcp.Description("Cover the repositories of this team, read from repositories/team-<name>.yaml in the team-file repository (giantswarm/github, or $MARGE_TEAM_FILE_REPO), under that team's policy. Mutually exclusive with query, org, repos and repos_file."),
+		),
+		mcp.WithString("query",
+			mcp.Description("Narrow the scope the way `marge [query]` does. Without repos/repos_file the text becomes part of the GitHub search, "+
+				"so it can be free text matched against the PR (a dependency name such as \"typescript\") or search qualifiers (\"repo:my-org/my-repo\"). "+
+				"With repos or repos_file it keeps only the listed repositories whose org/repo contains the text (case-insensitive)."),
+		),
+		mcp.WithString("org",
+			mcp.Description("GitHub organization or user to limit the scope to"),
+		),
+		mcp.WithString("repos_file",
+			mcp.Description("Path to a file listing org/repo entries (one per line; blank lines and # comments are ignored) to scan for bot PRs instead of searching GitHub. "+
+				"When repos is given too, both lists are merged and duplicates dropped."),
+		),
+		mcp.WithArray("repos",
+			mcp.Description("Explicit list of repos (org/repo format) to scan for bot PRs instead of searching GitHub. "+
+				"When repos_file is given too, both lists are merged and duplicates dropped."),
+			mcp.WithStringItems(),
+		),
+		mcp.WithArray("prs",
+			mcp.Description("Cover only these pull requests of the scope, each a PR URL or OWNER/REPO#NUMBER. "+
+				"The scope still decides which repositories are read and under which policy, so a PR outside it is refused rather than acted on."),
+			mcp.WithStringItems(),
+		),
+	}
+	return func(tool *mcp.Tool) {
+		for _, option := range options {
+			option(tool)
+		}
+	}
+}
+
 // sweepTool declares the sweep tool and its arguments. parseSweepRequest
 // reads exactly these arguments; the serve tests keep the two in step.
 func sweepTool() mcp.Tool {
@@ -187,31 +298,12 @@ func sweepTool() mcp.Tool {
 			"it wants closing, not fixing, so it is not in action_required. A green PR still merges. "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
 			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
-		mcp.WithString("query",
-			mcp.Description("Narrow the sweep the way `marge [query]` does. Without repos/repos_file the text becomes part of the GitHub search, "+
-				"so it can be free text matched against the PR (a dependency name such as \"typescript\") or search qualifiers (\"repo:my-org/my-repo\"). "+
-				"With repos or repos_file it keeps only the listed repositories whose org/repo contains the text (case-insensitive)."),
-		),
-		mcp.WithString("org",
-			mcp.Description("GitHub organization or user to limit the sweep to"),
-		),
-		mcp.WithString("repos_file",
-			mcp.Description("Path to a file listing org/repo entries (one per line; blank lines and # comments are ignored) to scan for bot PRs instead of searching GitHub. "+
-				"When repos is given too, both lists are merged and duplicates dropped."),
-		),
-		mcp.WithArray("repos",
-			mcp.Description("Explicit list of repos (org/repo format) to scan for bot PRs instead of searching GitHub. "+
-				"When repos_file is given too, both lists are merged and duplicates dropped."),
-			mcp.WithStringItems(),
-		),
+		scopeArguments(),
 		mcp.WithBoolean("merge_auto",
 			mcp.Description("Also merge PRs that have auto-merge enabled (default: false)"),
 		),
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
-		),
-		mcp.WithString("team",
-			mcp.Description("Sweep the repositories of this team, read from repositories/team-<name>.yaml in the team-file repository (giantswarm/github, or $MARGE_TEAM_FILE_REPO). Mutually exclusive with query, org, repos and repos_file."),
 		),
 		mcp.WithString("actions",
 			mcp.Description("Comma-separated sweep steps to run, in fixed order: classify, approve, merge, refresh, retry, mark (default: all). refresh updates stale branches from their base; retry reruns the CircleCI workflow of auto-cancelled builds on the same head from its failed jobs, falling back to a single-build retry (needs CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); mark writes markers and evidence comments."),
@@ -219,6 +311,10 @@ func sweepTool() mcp.Tool {
 		mcp.WithString("security_patterns",
 			mcp.Description("Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related"),
 		),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 	)
 }
 
@@ -227,9 +323,11 @@ func sweepTool() mcp.Tool {
 // The repos_file argument lands in Opts.ReposFile, where the CLI flag of the
 // same meaning lives.
 type sweepRequest struct {
-	Query string
 	Repos []string
-	Opts  RunOptions
+	// Rule narrows the catalogue to one rule before matching. Empty runs
+	// the whole catalogue, which is what a sweep does.
+	Rule string
+	Opts RunOptions
 }
 
 // resolveScope returns what the sweep covers: the repositories of the
@@ -275,24 +373,40 @@ func parseSweepRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 	if err != nil {
 		return sweepRequest{}, err
 	}
-	req := sweepRequest{
-		Query: request.GetString("query", ""),
+	req := parseScope(request)
+	req.Opts.DryRun = request.GetBool("dry_run", false)
+	req.Opts.MergeAuto = request.GetBool("merge_auto", false)
+	req.Opts.Actions = actions
+	req.Opts.SecurityPatterns = request.GetString("security_patterns", "")
+	return req, req.validate()
+}
+
+// parseScope reads the arguments scopeArguments declares. Quiet is always
+// set: stdout is the MCP stdio transport, so no table, plain-text results or
+// progress chatter may be written; the JSON result carries the same data.
+func parseScope(request mcp.CallToolRequest) sweepRequest {
+	return sweepRequest{
 		Repos: request.GetStringSlice("repos", nil),
 		Opts: RunOptions{
-			DryRun:           request.GetBool("dry_run", false),
-			MergeAuto:        request.GetBool("merge_auto", false),
-			Quiet:            true,
-			Team:             request.GetString("team", ""),
-			Actions:          actions,
-			Org:              request.GetString("org", ""),
-			ReposFile:        request.GetString("repos_file", ""),
-			SecurityPatterns: request.GetString("security_patterns", ""),
+			Quiet:     true,
+			NoTUI:     true,
+			Query:     request.GetString("query", ""),
+			Team:      request.GetString("team", ""),
+			Org:       request.GetString("org", ""),
+			ReposFile: request.GetString("repos_file", ""),
+			PRs:       request.GetStringSlice("prs", nil),
 		},
 	}
-	if req.Opts.Team != "" && (req.Query != "" || len(req.Repos) > 0 || req.Opts.Org != "" || req.Opts.ReposFile != "") {
-		return sweepRequest{}, errors.New("team is mutually exclusive with query, org, repos and repos_file")
+}
+
+// validate holds the same rule the sweep command enforces on its flags: the
+// two scopes are exclusive, so a caller never believes a team's policy
+// applied to a query it also passed.
+func (r sweepRequest) validate() error {
+	if r.Opts.Team != "" && (r.Opts.Query != "" || len(r.Repos) > 0 || r.Opts.Org != "" || r.Opts.ReposFile != "") {
+		return errors.New("team is mutually exclusive with query, org, repos and repos_file")
 	}
-	return req, nil
+	return nil
 }
 
 // SweepResult is the structured JSON output returned by the sweep MCP tool.
@@ -562,50 +676,136 @@ type SweepRescueInfo struct {
 	Rebased bool `json:"rebased"`
 }
 
-func handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	req, err := parseSweepRequest(request)
+// run is the one engine call behind list, sweep and remedy. It resolves the
+// scope and its policy, searches the PRs, narrows them, loads the rule
+// catalogue and processes them, exactly as the sweep command does. What a
+// tool changes is the request it hands in, never the path it runs.
+func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error) {
+	client, err := t.newClient(ctx)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	client, err := gh.NewClient(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("creating GitHub client: %v", err)), nil
+		return SweepResult{}, err
 	}
 
 	scope, err := req.resolveScope(ctx, client)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return SweepResult{}, err
 	}
 	req.Opts.Policies = scope.Policies
 
 	login, err := gh.AuthenticatedLogin(ctx, client)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return SweepResult{}, err
 	}
 
-	found, err := searchPRs(ctx, client, req.Query, login, scope.Repos)
+	repos, err := scopeRepos(scope.Repos, req.Opts.PRs)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("searching PRs: %v", err)), nil
+		return SweepResult{}, err
 	}
-	prs := filterByOrg(found.PRs, req.Opts.Org)
+
+	found, err := searchPRs(ctx, client, req.Opts.Query, login, repos)
+	if err != nil {
+		return SweepResult{}, fmt.Errorf("searching PRs: %w", err)
+	}
+	prs, err := filterByPRs(filterByOrg(found.PRs, req.Opts.Org), req.Opts.PRs)
+	if err != nil {
+		return SweepResult{}, err
+	}
 
 	catalogue, rulesReport := loadRules(ctx, client, RulesSource{})
+	if req.Rule != "" {
+		catalogue, err = catalogue.Only(req.Rule)
+		if err != nil {
+			return SweepResult{}, err
+		}
+		rulesReport.Loaded = len(catalogue.Rules)
+	}
 	req.Opts.Rules = catalogue
 
 	status, err := processOnceWithStatus(ctx, client, login, prs, req.Opts)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("processing PRs: %v", err)), nil
+		return SweepResult{}, fmt.Errorf("processing PRs: %w", err)
 	}
+	return buildSweepResult(status, found.Failed, rulesReport), nil
+}
 
-	result := buildSweepResult(status, found.Failed, rulesReport)
-
-	jsonBytes, err := json.Marshal(result)
+// result renders a value as the tool's JSON payload.
+func result(value any) (*mcp.CallToolResult, error) {
+	jsonBytes, err := json.Marshal(value)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("marshaling results: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("marshaling result: %v", err)), nil
 	}
-
 	return mcp.NewToolResultText(string(jsonBytes)), nil
+}
+
+// listRequest is what one call of the list tool asks the engine for: the
+// classify step alone, on a dry run, so the call reads and writes nothing.
+func listRequest(request mcp.CallToolRequest) (sweepRequest, error) {
+	req := parseScope(request)
+	req.Opts.DryRun = true
+	req.Opts.NoTUI = true
+	req.Opts.Actions = process.ActionSet{process.ActionClassify: true}
+	return req, req.validate()
+}
+
+func (t toolset) handleList(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	req, err := listRequest(request)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	sweepResult, err := t.run(ctx, req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return result(sweepResult)
+}
+
+func (t toolset) handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	req, err := parseSweepRequest(request)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	sweepResult, err := t.run(ctx, req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return result(sweepResult)
+}
+
+// remedyRequest is what one call of the remedy tool asks the engine for: the
+// classify, remedy and mark steps on the one PR it names. mark comes with
+// remedy because the once-per-change guard reads the evidence marker.
+func remedyRequest(request mcp.CallToolRequest) (sweepRequest, error) {
+	prRef := request.GetString("pr_url", "")
+	owner, repo, _, err := pr.ParsePRRef(prRef)
+	if err != nil {
+		return sweepRequest{}, err
+	}
+	if owner == "" || repo == "" {
+		return sweepRequest{}, fmt.Errorf("not a pull request reference: %s", prRef)
+	}
+	return sweepRequest{
+		Rule: request.GetString("rule", ""),
+		Opts: RunOptions{
+			Quiet:   true,
+			NoTUI:   true,
+			DryRun:  request.GetBool("dry_run", false),
+			Team:    request.GetString("team", ""),
+			PRs:     []string{prRef},
+			Actions: process.ActionSet{process.ActionClassify: true, process.ActionRemedy: true, process.ActionMark: true},
+		},
+	}, nil
+}
+
+func (t toolset) handleRemedy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	req, err := remedyRequest(request)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	sweepResult, err := t.run(ctx, req)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return result(sweepResult)
 }
 
 func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *SweepRules) SweepResult {
@@ -733,23 +933,24 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 	return result
 }
 
-func handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	prURL := request.GetString("pr_url", "")
+func (t toolset) handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	prRef := request.GetString("pr_url", "")
 	outcome := request.GetString("outcome", "failed")
 	reason := request.GetString("reason", "")
 	tool := request.GetString("tool", "ai")
+	dryRun := request.GetBool("dry_run", false)
 
-	client, err := gh.NewClient(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("creating GitHub client: %v", err)), nil
-	}
-
-	marker, owner, repo, number, err := markRescue(ctx, client, prURL, outcome, reason, tool)
+	client, err := t.newClient(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	result := map[string]any{
+	marker, owner, repo, number, err := markRescue(ctx, client, prRef, outcome, reason, tool, dryRun)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	written := map[string]any{
 		"owner":    owner,
 		"repo":     repo,
 		"number":   number,
@@ -757,18 +958,15 @@ func handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTool
 		"tool":     marker.Tool,
 		"head_sha": marker.HeadSHA,
 		"at":       marker.At.Format(time.RFC3339),
+		"dry_run":  dryRun,
 	}
 	if marker.PatchID != "" {
-		result["patch_id"] = marker.PatchID
+		written["patch_id"] = marker.PatchID
 	}
 	if marker.ChangeID != "" {
-		result["change_id"] = marker.ChangeID
+		written["change_id"] = marker.ChangeID
 	}
-	jsonBytes, err := json.Marshal(result)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("marshaling result: %v", err)), nil
-	}
-	return mcp.NewToolResultText(string(jsonBytes)), nil
+	return result(written)
 }
 
 // groupUnhandled collects the unrecognised failures by signature, most
