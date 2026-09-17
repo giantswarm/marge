@@ -65,3 +65,20 @@ func bearerToken(header string) string {
 	}
 	return strings.TrimSpace(header[len(bearerPrefix):])
 }
+
+// RequireBearer refuses a request that carries no bearer token with 401 and a
+// Bearer challenge, before next sees it. Without the challenge muster's
+// connect-time probe, which carries no token, succeeds, and muster then serves
+// the endpoint as a shared unauthenticated server: no sign-in is ever offered
+// and every tool call fails for want of a caller. The 401 is what makes muster
+// hold the server at "Auth Required" until a person completes core_auth_login.
+func RequireBearer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bearerToken(r.Header.Get("Authorization")) == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="marge"`)
+			http.Error(w, ErrNoCallerToken.Error(), http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

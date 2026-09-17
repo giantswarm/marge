@@ -46,9 +46,29 @@ func TestHTTPHandler_probesAndInitialize(t *testing.T) {
 	}
 
 	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+mcpEndpoint, bytes.NewBufferString(init))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
+	newInitialize := func() *http.Request {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+mcpEndpoint, bytes.NewBufferString(init))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		return req
+	}
+
+	// muster's connect-time probe carries no token; the 401 is what holds the
+	// server at "Auth Required" until a person signs in.
+	resp, err = http.DefaultClient.Do(newInitialize())
+	if err != nil {
+		t.Fatalf("POST initialize without a token: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("initialize without a token = %d, want 401", resp.StatusCode)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); !strings.HasPrefix(got, "Bearer") {
+		t.Fatalf("WWW-Authenticate = %q, want a Bearer challenge", got)
+	}
+
+	req := newInitialize()
+	req.Header.Set("Authorization", "Bearer gho_test")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST initialize: %v", err)
