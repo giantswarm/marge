@@ -22,6 +22,7 @@ var sweepOpts RunOptions
 
 var sweepFlags struct {
 	allTeams     bool
+	teams        []string
 	actions      string
 	output       string
 	checkTimeout time.Duration
@@ -37,7 +38,7 @@ const interactiveCheckTimeout = 5 * time.Minute
 
 func init() {
 	sweepCmd.Flags().BoolVar(&sweepFlags.allTeams, "all-teams", false, "Sweep every team whose policy file leaves the schedule enabled; this is what the daily schedule runs")
-	sweepCmd.Flags().StringVar(&sweepOpts.Team, "team", "", "Sweep the repositories of this team under its own policy, both read from "+defaultTeamFileRepo+" (or $"+teamFileRepoEnv+")")
+	sweepCmd.Flags().StringSliceVar(&sweepFlags.teams, "team", nil, "Sweep the repositories of this team under its own policy, both read from "+defaultTeamFileRepo+" (or $"+teamFileRepoEnv+"); repeatable, or comma-separated, to sweep several teams in one run")
 	sweepCmd.Flags().StringVar(&sweepOpts.Query, "query", "", "Sweep the bot PRs matching this GitHub search text, the way `marge [query]` does")
 	sweepCmd.Flags().StringVar(&sweepFlags.actions, "actions", "", "Comma-separated sweep steps to run, in fixed order: "+strings.Join(process.ActionNames(), ", ")+" (default: all)")
 	sweepCmd.Flags().BoolVar(&sweepOpts.DryRun, "dry-run", false, "Show what would be done without making changes")
@@ -58,22 +59,33 @@ func init() {
 }
 
 // resolveSweepOptions validates the scope flags and fills the options that
-// depend on them.
-func resolveSweepOptions(opts *RunOptions) error {
+// depend on them. It returns the teams the run covers: empty outside the
+// team scope, and one entry, which it also writes to opts.Team, for a run
+// that sweeps a single team.
+func resolveSweepOptions(opts *RunOptions) ([]string, error) {
+	teams, err := sweepTeams(sweepFlags.teams)
+	if err != nil {
+		return nil, err
+	}
 	switch {
-	case sweepFlags.allTeams && (opts.Team != "" || opts.Query != "" || opts.Org != "" || opts.ReposFile != "" || len(opts.PRs) > 0):
-		return errors.New("--all-teams reads every team's own scope: drop --team, --query, --org, --repos-file and --prs")
+	case sweepFlags.allTeams && (len(teams) > 0 || opts.Query != "" || opts.Org != "" || opts.ReposFile != "" || len(opts.PRs) > 0):
+		return nil, errors.New("--all-teams reads every team's own scope: drop --team, --query, --org, --repos-file and --prs")
 	case sweepFlags.allTeams:
-	case opts.Team != "" && opts.Query != "":
-		return errors.New("--team and --query are mutually exclusive")
-	case opts.Team != "" && (opts.Org != "" || opts.ReposFile != ""):
-		return errors.New("--org and --repos-file belong to the query scope; drop them with --team")
-	case opts.Team == "" && opts.Query == "" && opts.ReposFile == "" && opts.Org == "" && len(opts.PRs) == 0:
-		return errors.New("one of --team or --query is required")
+	case len(teams) > 0 && opts.Query != "":
+		return nil, errors.New("--team and --query are mutually exclusive")
+	case len(teams) > 0 && (opts.Org != "" || opts.ReposFile != ""):
+		return nil, errors.New("--org and --repos-file belong to the query scope; drop them with --team")
+	case len(teams) > 1 && len(opts.PRs) > 0:
+		return nil, errors.New("--prs names pull requests of one scope: give a single --team")
+	case len(teams) == 0 && opts.Query == "" && opts.ReposFile == "" && opts.Org == "" && len(opts.PRs) == 0:
+		return nil, errors.New("one of --team or --query is required")
+	}
+	if len(teams) == 1 {
+		opts.Team = teams[0]
 	}
 	actions, err := process.ParseActions(sweepFlags.actions)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opts.Actions = actions
 	opts.CheckTimeout = sweepFlags.checkTimeout
@@ -83,9 +95,32 @@ func resolveSweepOptions(opts *RunOptions) error {
 		opts.NoTUI = true
 		opts.Quiet = true
 	default:
-		return fmt.Errorf("unknown output %q: use table or json", sweepFlags.output)
+		return nil, fmt.Errorf("unknown output %q: use table or json", sweepFlags.output)
 	}
-	return nil
+	return teams, nil
+}
+
+// sweepTeams cleans the names --team collected: it drops the blanks a
+// trailing comma leaves behind and keeps the first of two equal names, so
+// naming a team twice sweeps it once.
+func sweepTeams(names []string) ([]string, error) {
+	teams := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		teams = append(teams, name)
+	}
+	if len(names) > 0 && len(teams) == 0 {
+		return nil, errors.New("--team names no team")
+	}
+	return teams, nil
 }
 
 var sweepCmd = &cobra.Command{
@@ -94,7 +129,9 @@ var sweepCmd = &cobra.Command{
 	Long: `Sweep the open bot PRs of one scope and report every outcome.
 
 Three scopes exist and exactly one is given: --team <name> reads the team's
-repositories and the team's policy from giantswarm/github; --query <text>
+repositories and the team's policy from giantswarm/github, and takes several
+names, repeated or comma-separated, to sweep each of them under its own
+scope and policy and report them together; --query <text>
 runs marge's GitHub search the way "marge [query]" does, for personal
 repositories and organisations without a team file, under the company
 default policy; --all-teams sweeps every team that has a policy file, each
@@ -161,7 +198,8 @@ marge never closes a PR itself.`,
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
-		if err := resolveSweepOptions(&sweepOpts); err != nil {
+		teams, err := resolveSweepOptions(&sweepOpts)
+		if err != nil {
 			return err
 		}
 
@@ -180,6 +218,12 @@ marge never closes a PR itself.`,
 		if sweepFlags.allTeams {
 			return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
 				return runAllTeams(ctx, client, login, source, sweepOpts, sweepFlags.output == "json")
+			})
+		}
+
+		if len(teams) > 1 {
+			return watchLoop(ctx, sweepOpts.Watch, func(ctx context.Context) error {
+				return runTeams(ctx, client, login, source, sweepOpts, teams, sweepFlags.output == "json")
 			})
 		}
 
