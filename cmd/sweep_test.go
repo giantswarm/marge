@@ -174,6 +174,15 @@ func TestResolveScope_queryScope(t *testing.T) {
 // TestResolveSweepOptions guards the two scopes and the options that follow
 // from them: no wait for checks unless --check-timeout asks, and json
 // output implies a quiet run.
+// TestSweepFlags_theChartPassesThese keeps the flags of a scheduled run and
+// the flags the CronJob writes on one side. A renamed flag would otherwise
+// fail the first time a CronJob runs, on the installation and not here.
+func TestSweepFlags_theChartPassesThese(t *testing.T) {
+	for _, name := range []string{"all-teams", "team", "actions", "no-tui", "dry-run", "post-summary"} {
+		require.NotNil(t, sweepCmd.Flags().Lookup(name), "helm/marge/templates/cronjob.yaml passes --%s", name)
+	}
+}
+
 func TestResolveSweepOptions(t *testing.T) {
 	reset := func() {
 		sweepFlags.actions, sweepFlags.output, sweepFlags.checkTimeout = "", "table", 0

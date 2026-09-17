@@ -10,13 +10,27 @@ marge needs a GitHub token with the permissions listed in the [repository README
 
 ## The scheduled sweep
 
-`schedule.daily` runs `marge sweep --all-teams` as the sweep GitHub App. The run reads every team's policy from `giantswarm/github` at start and sweeps each team that has a policy file whose `schedule` key is `enabled`. It classifies, approves, merges, refreshes stale branches, retries cancelled builds and applies the catalogue's rules. Every one of those steps acts through the GitHub or CircleCI API: the daily run writes no code to any branch.
+`schedules` holds one entry per scheduled run, and each entry renders one CronJob. An entry names a team and a cron expression, so every team carries its own cadence, its own steps and its own suspension:
+
+```yaml
+schedules:
+  - name: bumblebee-sweep
+    team: bumblebee
+    schedule: "0 6 * * 1-5"
+  - name: atlas-sweep
+    team: atlas
+    schedule: "10 6 * * 1-5"
+```
+
+An entry takes the keys it does not set from `scheduleDefaults`. `suspend` pauses one run and `suspendAll` pauses every run, in both cases without deleting the entry. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit.
+
+A run sweeps one team: it classifies, approves, merges, refreshes stale branches, retries cancelled builds and applies the catalogue's rules. Every one of those steps acts through the GitHub or CircleCI API, so a scheduled run writes no code to any branch. The team's policy file in `giantswarm/github` says what may merge.
 
 The schedule acts as the App and never as a person. Set `marge.github.app` and the CronJob mints an installation token per repository, for one hour, and stores none. Without `marge.github.app` the chart refuses to render an enabled schedule. The App's credentials live in 1Password, in the `Team Bumblebee` vault, in the item `marge sweep GitHub App`; see [docs/github-app.md](https://github.com/giantswarm/marge/blob/main/docs/github-app.md).
 
-Set `marge.slack.token` and each run posts one summary to the channel the team's policy names. A run that changed nothing posts nothing.
+Set `marge.slack.token` and each run posts one summary to the channel the team's policy names. A run that changed nothing posts nothing. A scheduled run passes `--post-summary`, which a sweep by hand does not, so a manual sweep stays out of the team channels.
 
-`schedule.weekly` is the interim trigger of the weekly rescue run. It stays off: the command it runs does not exist yet, so an enabled weekly schedule without `schedule.weekly.args` fails to render.
+An entry that sets `args` passes them to the binary as the whole command line, and `tokenAudience` mounts a projected ServiceAccount token at `/var/run/secrets/kagent`. That pair is how the weekly rescue trigger will run. Keep such an entry suspended until the rescue command exists.
 
 **Homepage:** <https://github.com/giantswarm/marge>
 
@@ -89,23 +103,15 @@ Set `marge.slack.token` and each run posts one summary to the channel the team's
 | marge.circleci.token | string | `""` | CircleCI API token, optional: lets marge inspect private CircleCI projects and retry auto-cancelled builds. The chart writes it into a Secret; prefer existingSecret in production. |
 | marge.circleci.existingSecret | string | `""` | Name of an existing Secret holding the CircleCI token. Takes precedence over token. |
 | marge.circleci.existingSecretKey | string | `"token"` | Key of the CircleCI token inside existingSecret |
-| schedule.daily.enabled | bool | `false` | Run the daily sweep. It sweeps every team whose policy file leaves the schedule enabled, and needs marge.github.app. |
-| schedule.daily.schedule | string | `"0 6 * * *"` | Cron expression of the daily sweep, in the cluster's timezone unless timeZone is set. |
-| schedule.daily.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expression is read in. |
-| schedule.daily.actions | string | `"classify,approve,merge,refresh,retry,remedy,mark"` | Sweep steps the daily run performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch. |
-| schedule.daily.dryRun | bool | `false` | Report every outcome without writing anything. Turn it on for the first runs on a new installation. |
-| schedule.daily.activeDeadlineSeconds | int | `3600` | Seconds the daily run may take before Kubernetes stops it. |
-| schedule.daily.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
-| schedule.daily.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
-| schedule.daily.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of the daily run |
-| schedule.weekly.enabled | bool | `false` | Run the weekly rescue trigger. It stays off until the rescue run exists: the command it would run is not built yet, so args has no default and an enabled weekly CronJob without args fails to render. |
-| schedule.weekly.schedule | string | `"0 5 * * 1"` | Cron expression of the weekly rescue trigger. |
-| schedule.weekly.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expression is read in. |
-| schedule.weekly.args | list | `[]` | Arguments the weekly run passes to the marge binary. |
-| schedule.weekly.tokenAudience | string | `"kagent"` | Audience of the projected ServiceAccount token the weekly run presents to the agent platform gateway. Mounted at /var/run/secrets/kagent/token. |
-| schedule.weekly.activeDeadlineSeconds | int | `3600` | Seconds the weekly run may take before Kubernetes stops it. |
-| schedule.weekly.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
-| schedule.weekly.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
-| schedule.weekly.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of the weekly run |
+| suspendAll | bool | `false` | Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead. |
+| scheduleDefaults | object | `{"actions":"classify,approve,merge,refresh,retry,remedy,mark","activeDeadlineSeconds":3600,"dryRun":false,"failedJobsHistoryLimit":3,"resources":{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}},"successfulJobsHistoryLimit":3,"timeZone":"Europe/Berlin"}` | Values every entry of schedules takes for the keys it does not set itself. |
+| scheduleDefaults.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expressions are read in. |
+| scheduleDefaults.actions | string | `"classify,approve,merge,refresh,retry,remedy,mark"` | Sweep steps a scheduled sweep performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch. |
+| scheduleDefaults.dryRun | bool | `false` | Report every outcome without writing anything. Turn it on for the first runs on a new installation. |
+| scheduleDefaults.activeDeadlineSeconds | int | `3600` | Seconds a scheduled run may take before Kubernetes stops it. |
+| scheduleDefaults.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
+| scheduleDefaults.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
+| scheduleDefaults.resources | object | `{"limits":{"cpu":1,"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Container resources of a scheduled run |
+| schedules | list | `[]` | Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit. |
 | networkPolicy.enabled | bool | `true` | Create a NetworkPolicy: ingress to the MCP port from the selected namespaces, egress to DNS and HTTPS only (GitHub, CircleCI). |
 | networkPolicy.ingressNamespaceSelector | object | `{}` | Namespaces allowed to reach the MCP port; an empty selector allows every namespace of the cluster. |

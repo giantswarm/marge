@@ -206,3 +206,67 @@ Environment of the CircleCI token, which is optional everywhere.
       key: {{ if .Values.marge.circleci.existingSecret }}{{ .Values.marge.circleci.existingSecretKey }}{{ else }}circleci-token{{ end }}
 {{- end }}
 {{- end }}
+
+{{/*
+The scheduled runs of this release, as a YAML list. One entry renders one
+CronJob and one ServiceAccount, so the CronJob template and the RBAC
+template read the same list.
+
+An entry of .Values.schedules takes the missing keys from
+.Values.scheduleDefaults.
+*/}}
+{{- define "marge.schedules" -}}
+{{- $entries := list }}
+{{- $names := list }}
+{{- range $entry := .Values.schedules }}
+{{- if has $entry.name $names }}
+{{- fail (printf "two entries of schedules are named %s: the name is what tells two runs of one team apart, and it names their resources." $entry.name) }}
+{{- end }}
+{{- $names = append $names $entry.name }}
+{{- $entries = append $entries (mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry) }}
+{{- end }}
+{{- toYaml $entries }}
+{{- end }}
+
+{{/*
+Refuses a scheduled run the chart cannot render, and names the entry.
+*/}}
+{{- define "marge.checkSchedule" -}}
+{{- $entry := .entry }}
+{{- if not $entry.name }}
+{{- fail "every entry of schedules needs a name: it names the CronJob and its ServiceAccount." }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $entry.name) }}
+{{- fail (printf "schedule entry %s has a name that cannot name a resource: use lowercase letters, digits and dashes." $entry.name) }}
+{{- end }}
+{{- $full := printf "%s-%s" (include "marge.fullname" .context) $entry.name }}
+{{- if ne $full (include "marge.cronName" (dict "context" .context "component" $entry.name)) }}
+{{- fail (printf "schedule entry %s makes a resource name of %d characters, and a CronJob name holds 52: a cut name collides with the next entry." $entry.name (len $full)) }}
+{{- end }}
+{{- if not $entry.schedule }}
+{{- fail (printf "schedule entry %s needs a cron expression in schedule." $entry.name) }}
+{{- end }}
+{{- $known := list "name" "team" "schedule" "timeZone" "suspend" "actions" "dryRun" "args" "tokenAudience" "activeDeadlineSeconds" "successfulJobsHistoryLimit" "failedJobsHistoryLimit" "resources" }}
+{{- range $key, $_ := $entry }}
+{{- if not (has $key $known) }}
+{{- fail (printf "schedule entry %s sets %s, which is not a key of a scheduled run: %s." $entry.name $key (join ", " $known)) }}
+{{- end }}
+{{- end }}
+{{- if and (not $entry.team) (not $entry.args) }}
+{{- fail (printf "schedule entry %s needs a team: the sweep it runs names one team, or args gives the whole command line." $entry.name) }}
+{{- end }}
+{{- if not (include "marge.hasAppCredential" .context) }}
+{{- fail (printf "schedule entry %s needs marge.github.app: set app.existingSecret, or app.id, app.installationId and app.privateKey. A scheduled run acts as the sweep App and never as a person." $entry.name) }}
+{{- end }}
+{{- end }}
+
+{{/*
+Labels of one scheduled run. The team it sweeps is a label, so an alert on a
+failed run groups by team without reading the entry's name.
+*/}}
+{{- define "marge.scheduleLabels" -}}
+app.kubernetes.io/component: {{ .entry.name }}
+{{- with .entry.team }}
+marge.giantswarm.io/team: {{ . }}
+{{- end }}
+{{- end }}

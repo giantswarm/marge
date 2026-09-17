@@ -32,21 +32,20 @@ spec:
           protocol: TCP
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
-{{- range $component, $settings := dict "daily-sweep" $.Values.schedule.daily "weekly-rescue" $.Values.schedule.weekly }}
-{{- if $settings.enabled }}
+{{- range $entry := (include "marge.schedules" $ | fromYamlArray) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "marge.cronName" (dict "context" $ "component" $component) }}
+  name: {{ include "marge.cronName" (dict "context" $ "component" $entry.name) }}
   labels:
     {{- include "marge.labels" $ | nindent 4 }}
-    app.kubernetes.io/component: {{ $component }}
+    {{- include "marge.scheduleLabels" (dict "entry" $entry) | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
       {{- include "marge.selectorLabels" $ | nindent 6 }}
-      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/component: {{ $entry.name }}
   policyTypes:
     - Ingress
     - Egress
@@ -62,6 +61,5 @@ spec:
     - ports:
         - port: 443
           protocol: TCP
-{{- end }}
 {{- end }}
 {{- end }}

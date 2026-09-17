@@ -368,149 +368,71 @@
                 }
             }
         },
-        "schedule": {
+        "scheduleDefaults": {
             "type": "object",
+            "description": "Values every entry of schedules takes for the keys it does not set itself.",
             "additionalProperties": false,
             "properties": {
-                "daily": {
+                "actions": {
+                    "type": "string",
+                    "description": "Sweep steps a scheduled sweep performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch."
+                },
+                "activeDeadlineSeconds": {
+                    "type": "integer",
+                    "description": "Seconds a scheduled run may take before Kubernetes stops it."
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "description": "Report every outcome without writing anything. Turn it on for the first runs on a new installation."
+                },
+                "failedJobsHistoryLimit": {
+                    "type": "integer",
+                    "description": "Failed Jobs kept"
+                },
+                "resources": {
                     "type": "object",
+                    "description": "Container resources of a scheduled run",
                     "additionalProperties": false,
                     "properties": {
-                        "actions": {
-                            "type": "string",
-                            "description": "Sweep steps the daily run performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch."
-                        },
-                        "activeDeadlineSeconds": {
-                            "type": "integer",
-                            "description": "Seconds the daily run may take before Kubernetes stops it."
-                        },
-                        "dryRun": {
-                            "type": "boolean",
-                            "description": "Report every outcome without writing anything. Turn it on for the first runs on a new installation."
-                        },
-                        "enabled": {
-                            "type": "boolean",
-                            "description": "Run the daily sweep. It sweeps every team whose policy file leaves the schedule enabled, and needs marge.github.app."
-                        },
-                        "failedJobsHistoryLimit": {
-                            "type": "integer",
-                            "description": "Failed Jobs kept"
-                        },
-                        "resources": {
+                        "limits": {
                             "type": "object",
-                            "description": "Container resources of the daily run",
                             "additionalProperties": false,
                             "properties": {
-                                "limits": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "cpu": {
-                                            "type": "integer"
-                                        },
-                                        "memory": {
-                                            "type": "string"
-                                        }
-                                    }
+                                "cpu": {
+                                    "type": "integer"
                                 },
-                                "requests": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "cpu": {
-                                            "type": "string"
-                                        },
-                                        "memory": {
-                                            "type": "string"
-                                        }
-                                    }
+                                "memory": {
+                                    "type": "string"
                                 }
                             }
                         },
-                        "schedule": {
-                            "type": "string",
-                            "description": "Cron expression of the daily sweep, in the cluster's timezone unless timeZone is set."
-                        },
-                        "successfulJobsHistoryLimit": {
-                            "type": "integer",
-                            "description": "Successful Jobs kept"
-                        },
-                        "timeZone": {
-                            "type": "string",
-                            "description": "IANA timezone the cron expression is read in."
+                        "requests": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
                         }
                     }
                 },
-                "weekly": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "activeDeadlineSeconds": {
-                            "type": "integer",
-                            "description": "Seconds the weekly run may take before Kubernetes stops it."
-                        },
-                        "args": {
-                            "type": "array",
-                            "description": "Arguments the weekly run passes to the marge binary."
-                        },
-                        "enabled": {
-                            "type": "boolean",
-                            "description": "Run the weekly rescue trigger. It stays off until the rescue run exists: the command it would run is not built yet, so args has no default and an enabled weekly CronJob without args fails to render."
-                        },
-                        "failedJobsHistoryLimit": {
-                            "type": "integer",
-                            "description": "Failed Jobs kept"
-                        },
-                        "resources": {
-                            "type": "object",
-                            "description": "Container resources of the weekly run",
-                            "additionalProperties": false,
-                            "properties": {
-                                "limits": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "cpu": {
-                                            "type": "integer"
-                                        },
-                                        "memory": {
-                                            "type": "string"
-                                        }
-                                    }
-                                },
-                                "requests": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "cpu": {
-                                            "type": "string"
-                                        },
-                                        "memory": {
-                                            "type": "string"
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        "schedule": {
-                            "type": "string",
-                            "description": "Cron expression of the weekly rescue trigger."
-                        },
-                        "successfulJobsHistoryLimit": {
-                            "type": "integer",
-                            "description": "Successful Jobs kept"
-                        },
-                        "timeZone": {
-                            "type": "string",
-                            "description": "IANA timezone the cron expression is read in."
-                        },
-                        "tokenAudience": {
-                            "type": "string",
-                            "description": "Audience of the projected ServiceAccount token the weekly run presents to the agent platform gateway. Mounted at /var/run/secrets/kagent/token."
-                        }
-                    }
+                "successfulJobsHistoryLimit": {
+                    "type": "integer",
+                    "description": "Successful Jobs kept"
+                },
+                "timeZone": {
+                    "type": "string",
+                    "description": "IANA timezone the cron expressions are read in."
                 }
             }
+        },
+        "schedules": {
+            "type": "array",
+            "description": "Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit."
         },
         "securityContext": {
             "type": "object",
@@ -594,6 +516,10 @@
         },
         "subscriptionID": {
             "type": "string"
+        },
+        "suspendAll": {
+            "type": "boolean",
+            "description": "Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead."
         },
         "tolerations": {
             "type": "array",
