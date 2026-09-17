@@ -46,24 +46,49 @@ func teamSummary(team string, result SweepResult) (string, bool) {
 	return strings.TrimRight(b.String(), "\n"), true
 }
 
-// headline is the one-line count of what the run did and what it left.
+// headline is the one-line count of what the run did and what it left. Every
+// outcome a PR can end in is named, and a remainder is named as well, so the
+// counts always add up to the total. A line that drops a category reads as if
+// the sweep lost a PR.
 func headline(counts SweepSummary) string {
-	parts := []string{
-		countPart(counts.Merged, "merged"),
-		countPart(counts.Remedied, "remedied"),
-		countPart(counts.Refreshed, "refreshed"),
-		countPart(counts.Retried, "retried"),
-		countPart(counts.Failed+counts.SecurityFailures, "blocked"),
-		countPart(counts.Waiting, "waiting"),
-		countPart(counts.Skipped, "skipped"),
-	}
-	var named []string
-	for _, part := range parts {
-		if part != "" {
-			named = append(named, part)
+	named := make([]string, 0, len(headlineParts(counts)))
+	accounted := 0
+	for _, part := range headlineParts(counts) {
+		accounted += part.count
+		if text := countPart(part.count, part.name); text != "" {
+			named = append(named, text)
 		}
 	}
+	if other := counts.Total - accounted; other > 0 {
+		named = append(named, countPart(other, "other"))
+	}
 	return strings.Join(named, ", ")
+}
+
+// headlinePart is one outcome and how many PRs ended in it.
+type headlinePart struct {
+	count int
+	name  string
+}
+
+// headlineParts lists every disjoint outcome of SweepSummary. Failed and
+// SecurityFailures are counted together as blocked, which is how a reader
+// thinks of them.
+func headlineParts(counts SweepSummary) []headlinePart {
+	return []headlinePart{
+		{counts.Merged, "merged"},
+		{counts.Remedied, "remedied"},
+		{counts.Refreshed, "refreshed"},
+		{counts.Retried, "retried"},
+		{counts.Failed + counts.SecurityFailures, "blocked"},
+		{counts.Stale, "stale"},
+		{counts.Cancelled, "cancelled"},
+		{counts.Obsolete, "obsolete"},
+		{counts.CIUnavailable, "CI unavailable"},
+		{counts.CINoVerdict, "no CI verdict"},
+		{counts.Waiting, "waiting"},
+		{counts.Skipped, "skipped"},
+	}
 }
 
 func countPart(count int, name string) string {

@@ -124,22 +124,16 @@ func (r allTeamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team s
 // message had nowhere to go.
 func (r allTeamsRun) post(ctx context.Context, team, channel string, result SweepResult) (bool, error) {
 	text, changed := teamSummary(team, result)
-	if !changed || r.Slack == nil {
+	if !changed {
 		return false, nil
 	}
-	if strings.TrimSpace(channel) == "" {
-		_, _ = fmt.Fprintf(r.Out, "team %s changed %d PRs and its policy names no Slack channel\n", team, changedCount(result.Summary))
+	if r.Slack == nil || strings.TrimSpace(channel) == "" {
 		return false, nil
 	}
 	if err := r.Slack.Post(ctx, channel, text); err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-// changedCount counts the PRs the run moved on.
-func changedCount(counts SweepSummary) int {
-	return counts.Merged + counts.Remedied + counts.Refreshed + counts.Retried
 }
 
 // report prints one line per team, so the CronJob's log says what every team
@@ -185,8 +179,11 @@ func loadSlack() poster {
 func runAllTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, asJSON bool) error {
 	opts.Team = ""
 	opts.Query = ""
+	// The live table needs a terminal, so a scheduled run prints plain
+	// results instead. It stays quiet only for JSON, where stdout carries
+	// the result and nothing else.
 	opts.NoTUI = true
-	opts.Quiet = true
+	opts.Quiet = asJSON
 
 	run := allTeamsRun{
 		Client: client,
