@@ -36,7 +36,7 @@ the matching `marge/<class>` label:
 | `merged` | marge approved and squash-merged it | nobody |
 | `eligible` | the policy allows the merge; a dry run stops here | the next sweep |
 | `security_failures` | a failing check whose name matches the security list | a person |
-| `action_required` | a real failure on the code | a rescue |
+| `action_required` | a real failure on the code, or a PR the policy holds for a person (label `marge/held`) | a rescue, or a decision |
 | `stale` | every failing check is green on the base head | the `refresh` action |
 | `refreshed` | marge updated the branch from its base | the next sweep |
 | `cancelled` | CircleCI cancelled the build itself | the `retry` action |
@@ -45,7 +45,7 @@ the matching `marge/<class>` label:
 | `waiting` | a required check is pending or nobody reported it | the next sweep |
 | `ci_unavailable` | the Actions budget is spent | a person |
 | `ci_no_verdict` | the checks established nothing about the code | the remedy in the detail |
-| `skipped` | held for a person, untrusted author, or a policy refusal | a person |
+| `skipped` | untrusted author, a head branch in another repository, or the sweep switched off for the repository | a person |
 | `unclassified` | no sweep has labelled this PR yet | call `list` with `refresh: true` |
 | `repositories_failed` | the PRs of this repository could not be read | report it |
 

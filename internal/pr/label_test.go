@@ -19,6 +19,7 @@ func TestStoredClass_readsTheOneLabelASweepLeaves(t *testing.T) {
 		{"no label at all", nil, "", ""},
 		{"no label of the sweep", []string{"dependencies", "renovate"}, "", ""},
 		{"the current namespace", []string{"dependencies", "marge/action-required"}, "marge/action-required", "action-required"},
+		{"a held major is its own class", []string{"dependencies", "marge/held"}, "marge/held", "held"},
 		{"the legacy namespace", []string{"bot-prs-sweep/merged"}, "bot-prs-sweep/merged", "merged"},
 		{"the current namespace wins", []string{"bot-prs-sweep/merged", "marge/stale"}, "marge/stale", "stale"},
 		{"the bare prefix classifies nothing", []string{"marge/"}, "", ""},

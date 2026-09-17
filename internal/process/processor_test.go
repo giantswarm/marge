@@ -552,7 +552,7 @@ func TestGuard_autoMergeMajorIsStillHeld(t *testing.T) {
 
 	require.Equal(t, pr.StatusHeld, got.State, got.Detail)
 	require.Zero(t, f.approveCalls.Load())
-	require.Equal(t, []string{"marge/action-required"}, f.labelSet())
+	require.Equal(t, []string{"marge/held"}, f.labelSet())
 }
 
 // TestGuard_autoMergeBehindBaseIsRefreshed: GitHub fires auto-merge only once
@@ -600,7 +600,7 @@ func TestGuard_eligibility(t *testing.T) {
 				require.Zero(t, f.mergeCalls.Load())
 				require.Zero(t, f.approveCalls.Load())
 				require.Contains(t, got.Detail, "held")
-				require.Equal(t, []string{"marge/action-required"}, f.labelSet())
+				require.Equal(t, []string{"marge/held"}, f.labelSet())
 			} else {
 				require.Equal(t, int32(1), f.mergeCalls.Load())
 			}
