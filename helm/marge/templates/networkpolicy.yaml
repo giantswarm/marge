@@ -33,20 +33,19 @@ spec:
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 {{- range $entry := (include "marge.schedules" $ | fromYamlArray) }}
-{{- $component := $entry.name }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "marge.cronName" (dict "context" $ "component" $component) }}
+  name: {{ include "marge.cronName" (dict "context" $ "component" $entry.name) }}
   labels:
     {{- include "marge.labels" $ | nindent 4 }}
-    app.kubernetes.io/component: {{ $component }}
+    {{- include "marge.scheduleLabels" (dict "entry" $entry) | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
       {{- include "marge.selectorLabels" $ | nindent 6 }}
-      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/component: {{ $entry.name }}
   policyTypes:
     - Ingress
     - Egress

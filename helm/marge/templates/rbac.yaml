@@ -6,7 +6,7 @@ metadata:
   name: {{ include "marge.cronServiceAccountName" (dict "context" $ "component" $entry.name) }}
   labels:
     {{- include "marge.labels" $ | nindent 4 }}
-    app.kubernetes.io/component: {{ $entry.name }}
+    {{- include "marge.scheduleLabels" (dict "entry" $entry) | nindent 4 }}
   {{- with $.Values.serviceAccount.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
