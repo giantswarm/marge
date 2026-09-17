@@ -230,11 +230,16 @@ func runAllTeams(ctx context.Context, client *github.Client, login string, sourc
 }
 
 // runTeams is what `marge sweep --team` runs when it names more than one
-// team. Each team is swept under its own scope and policy, and the teams are
-// reported together. The summaries stay out of Slack: a sweep by hand posts
-// to no team channel, whether it names one team or five.
-func runTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, asJSON bool) error {
-	return runTeamSweeps(ctx, client, login, source, opts, teams, nil, asJSON)
+// team, and what one named team runs under --post-summary. Each team is
+// swept under its own scope and policy, and the teams are reported together.
+// A summary reaches the team's channel only when post says so: a sweep by
+// hand posts to no team channel, whether it names one team or five.
+func runTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, post, asJSON bool) error {
+	var slack poster
+	if post {
+		slack = loadSlack()
+	}
+	return runTeamSweeps(ctx, client, login, source, opts, teams, slack, asJSON)
 }
 
 // runTeamSweeps sweeps the teams and fails only after the last team has had

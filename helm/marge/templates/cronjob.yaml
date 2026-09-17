@@ -61,6 +61,9 @@ spec:
                 {{- end }}
                 - --actions={{ $entry.actions }}
                 - --no-tui
+                {{- if not $entry.allTeams }}
+                - --post-summary
+                {{- end }}
                 {{- if $entry.dryRun }}
                 - --dry-run
                 {{- end }}
