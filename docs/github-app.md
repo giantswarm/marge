@@ -137,8 +137,10 @@ and returns the zero value for every field of the block.
 `hack/measure-push-permission.sh` is the probe. It mints an installation token
 for one repository from the App private key and prints both the permissions
 GitHub reports on the mint and what `GET /repos/{owner}/{repo}` answers for
-`permissions.push`. Measured on 2026-09-17, App `4950078`, installation
-`161842404`, repository `giantswarm/marge`:
+`permissions.push`. Both states were measured on 2026-09-17, App `4950078`,
+installation `161842404`, repository `giantswarm/marge`.
+
+With the whole installation:
 
 ```text
 the token's permissions, as GitHub reports them on the mint:
@@ -158,18 +160,39 @@ GET /repos/giantswarm/marge -> .permissions:
 }
 ```
 
+With the token narrowed to `-p '{"pull_requests":"write","metadata":"read"}'`:
+
+```text
+the token's permissions, as GitHub reports them on the mint:
+{
+  "metadata": "read",
+  "pull_requests": "write"
+}
+
+GET /repos/giantswarm/marge -> .permissions:
+{
+  "permissions": {
+    "admin": false, "maintain": false, "push": false,
+    "triage": false, "pull": false
+  },
+  "push_present": true
+}
+```
+
 | Token permissions | Reported `permissions.push` | What `ensureWriteAccess` does |
 |---|---|---|
-| `Pull requests: write` + `Contents: write` | present, `false` (measured 2026-09-17) | allows: the mint reports `contents: write` |
-| `Pull requests: write` alone | *not measured yet* | refuses: the mint reports no `contents: write` |
+| `Pull requests: write` + `Contents: write` | present, `false` | allows: the mint reports `contents: write` |
+| `Pull requests: write` alone | present, `false` | refuses: the mint reports no `contents: write` |
+
+`permissions.push` reads the same in both rows, which is the whole point: the
+field cannot tell the two apart, and the mint permissions can.
 
 The column names the permissions of the **token**, not of the installation.
 The mint narrows a token to any subset of what the installation holds, which
-is how the second row is measured: pass `-p '{"pull_requests":"write"}'` to
-the probe. The installation keeps every permission it has, so the daily merge
-path is never at risk. Do not measure the second row by trimming the
-production App: its permissions are organization-wide, and removing
-`Contents: write` would stop the merge path for every team.
+is how the second row was measured. The installation keeps every permission it
+has, so the daily merge path is never at risk. Do not measure that row by
+trimming the production App: its permissions are organization-wide, and
+removing `Contents: write` would stop the merge path for every team.
 
 Two more results from the same test, both permanent:
 
