@@ -137,11 +137,21 @@ type appServer struct {
 	mintedScopes []string
 	seenTokens   []string
 	expiry       time.Time
+	// permissions is what the mint reports for the token it hands out. The
+	// default is the production installation's set, measured on 2026-09-17.
+	permissions map[string]string
 }
 
 func newAppServer(t *testing.T) *appServer {
 	t.Helper()
-	server := &appServer{expiry: time.Now().Add(time.Hour)}
+	server := &appServer{
+		expiry: time.Now().Add(time.Hour),
+		permissions: map[string]string{
+			"contents":      "write",
+			"pull_requests": "write",
+			"metadata":      "read",
+		},
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /app/installations/161842404/access_tokens", func(w http.ResponseWriter, r *http.Request) {
@@ -155,8 +165,9 @@ func newAppServer(t *testing.T) *appServer {
 
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"token":      "ghs_" + scope + "_" + string(rune('0'+count)),
-			"expires_at": server.expiry.Format(time.RFC3339),
+			"token":       "ghs_" + scope + "_" + string(rune('0'+count)),
+			"expires_at":  server.expiry.Format(time.RFC3339),
+			"permissions": server.permissions,
 		})
 	})
 	mux.HandleFunc("GET /repos/giantswarm/marge", func(w http.ResponseWriter, r *http.Request) {
@@ -273,4 +284,76 @@ func TestIsAppRequest(t *testing.T) {
 	require.True(t, isAppRequest("/app/installations/1/access_tokens"))
 	require.False(t, isAppRequest("/apps/giantswarm-marge"))
 	require.False(t, isAppRequest("/repos/giantswarm/marge"))
+}
+
+// TestAppWriteAccess_readsTheMintedPermissions holds the answer marge's
+// approval guard needs. GET /repos reports permissions.push: false under
+// every installation token, so the permissions GitHub reports on the mint are
+// the only description of what the token may do.
+func TestAppWriteAccess_readsTheMintedPermissions(t *testing.T) {
+	tests := []struct {
+		name        string
+		permissions map[string]string
+		want        bool
+	}{
+		{"contents: write", map[string]string{"contents": "write", "pull_requests": "write"}, true},
+		{"contents: read", map[string]string{"contents": "read", "pull_requests": "write"}, false},
+		{"no contents at all", map[string]string{"pull_requests": "write"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newAppServer(t)
+			server.permissions = tt.permissions
+			_, client := appClient(t, server)
+
+			check := AppWriteAccess(client)
+			require.NotNil(t, check, "an App client must answer the App question")
+
+			allowed, err := check(t.Context(), "giantswarm", "marge")
+			require.NoError(t, err)
+			require.Equal(t, tt.want, allowed)
+		})
+	}
+}
+
+// TestAppWriteAccess_reusesTheRepositoryToken keeps the check free: the sweep
+// already holds a token for the repository it is about to approve.
+func TestAppWriteAccess_reusesTheRepositoryToken(t *testing.T) {
+	server := newAppServer(t)
+	_, client := appClient(t, server)
+
+	_, _, err := client.Repositories.Get(t.Context(), "giantswarm", "marge")
+	require.NoError(t, err)
+
+	allowed, err := AppWriteAccess(client)(t.Context(), "giantswarm", "marge")
+	require.NoError(t, err)
+	require.True(t, allowed)
+	require.Equal(t, int32(1), server.mints.Load(), "the check must not mint a second token")
+}
+
+// TestAppWriteAccess_isNilForATokenClient leaves a person's run on the
+// permissions.push path, which is the only answer a user token has.
+func TestAppWriteAccess_isNilForATokenClient(t *testing.T) {
+	client, err := github.NewClient(github.WithAuthToken("ghp_example"))
+	require.NoError(t, err)
+	require.Nil(t, AppWriteAccess(client))
+}
+
+// TestAppWriteAccess_mintFailureIsNotADenial keeps a broken credential apart
+// from a proven refusal.
+func TestAppWriteAccess_mintFailureIsNotADenial(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /app/installations/161842404/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	key, _ := testKey(t)
+	client, err := NewAppClient(&App{ID: 4950078, InstallationID: 161842404, key: key}, server.URL+"/", server.Client())
+	require.NoError(t, err)
+
+	_, err = AppWriteAccess(client)(t.Context(), "giantswarm", "marge")
+	require.Error(t, err)
 }

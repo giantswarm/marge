@@ -1,6 +1,7 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -247,4 +250,75 @@ func TestProcessPR_DryRunReportsMissingWriteAccess(t *testing.T) {
 	if !strings.Contains(entry.Detail, "dry-run") || !strings.Contains(entry.Detail, "approve refused") {
 		t.Errorf("detail = %q, want it to name the dry run and the refusal", entry.Detail)
 	}
+}
+
+// TestEnsureWriteAccess_UnderTheApp holds the rule that keeps the App able to
+// approve: GitHub reports permissions.push: false for every installation
+// token, so the repository payload can never grant the App write access. The
+// installation's contents permission decides instead.
+func TestEnsureWriteAccess_UnderTheApp(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents bool
+		wantErr  error
+	}{
+		{"installation holds contents: write", true, nil},
+		{"installation holds no contents: write", false, errNoWriteAccess},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var repoReads atomic.Int32
+			server := httptest.NewServer(repoHandler(t, false, &repoReads))
+			defer server.Close()
+
+			p := &Processor{
+				Client:         newTestClient(t, server),
+				AppWriteAccess: func(context.Context, string, string) (bool, error) { return tt.contents, nil },
+			}
+
+			err := p.ensureWriteAccess(t.Context(), "org", "repo")
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.wantErr)
+			}
+			require.Zero(t, repoReads.Load(), "the App must not decide on permissions.push")
+		})
+	}
+}
+
+// TestEnsureWriteAccess_UnderTheAppReadsTheInstallationOnce keeps the memo on
+// the App path: one settled answer serves the rest of the sweep.
+func TestEnsureWriteAccess_UnderTheAppReadsTheInstallationOnce(t *testing.T) {
+	var checks atomic.Int32
+	p := &Processor{
+		AppWriteAccess: func(context.Context, string, string) (bool, error) {
+			checks.Add(1)
+			return true, nil
+		},
+	}
+
+	for range 3 {
+		require.NoError(t, p.ensureWriteAccess(t.Context(), "org", "repo"))
+	}
+	require.NoError(t, p.ensureWriteAccess(t.Context(), "org", "other"))
+
+	require.Equal(t, int32(2), checks.Load(), "one check per repository")
+}
+
+// TestEnsureWriteAccess_UnderTheAppLookupError keeps a failed mint apart from
+// a proven denial: the two need different repairs.
+func TestEnsureWriteAccess_UnderTheAppLookupError(t *testing.T) {
+	p := &Processor{
+		AppWriteAccess: func(context.Context, string, string) (bool, error) {
+			return false, errors.New("minting an installation token: 403 Forbidden")
+		},
+	}
+
+	err := p.ensureWriteAccess(t.Context(), "org", "repo")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errNoWriteAccess)
+	require.NotErrorIs(t, err, errWriteAccessUnknown)
+	require.Contains(t, writeAccessDetail(err), "write access check error: ")
 }

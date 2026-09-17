@@ -109,28 +109,63 @@ no new action, appeared in `latestOpinionatedReviews`. `reviewDecision` became
 reviewer's repository write access when it reads the reviews, and
 `Contents: write` is what confers that access.
 
-marge asserts this before it submits a review. `ensureWriteAccess` reads
-`GET /repos/{owner}/{repo}` once per repository per sweep and refuses the
-approval when `permissions.push` is `false`. A loud refusal beats a silent
-no-op. The check runs on the dry-run path too, so `--dry-run` names the
-refusal after a permission change instead of reporting a plain skip.
+marge asserts this before it submits a review. `ensureWriteAccess` settles the
+answer once per repository per sweep and refuses the approval when the actor
+may not write. A loud refusal beats a silent no-op. The check runs on the
+dry-run path too, so `--dry-run` names the refusal after a permission change
+instead of reporting a plain skip.
+
+The guard asks a different question of each actor, because only one of them
+can answer:
+
+- Under the App, it reads the `permissions` object GitHub returns when it
+  mints the installation token the call carries, and requires
+  `contents: write`. That object describes the token itself.
+- Under a person's token, it reads `permissions.push` from
+  `GET /repos/{owner}/{repo}`. An absent field is `write access unknown`, and
+  also refuses.
 
 ### `permissions.push` under an installation token
 
-`hack/measure-push-permission.sh` is the probe. It mints an installation
-token for one repository from the App private key and prints what
-`GET /repos/{owner}/{repo}` answers for `permissions.push`. Run it once with
-`Contents: write` granted to the installation and once without, on the
-roadmap#4349 repository, and record both answers here.
+`permissions.push` is present under an installation token, and it is always
+`false`. It can never be the signal.
 
-| Installation permissions | `permissions.push` | What `ensureWriteAccess` does |
+The field describes the **authenticated user's** access to the repository. An
+installation token has no user behind it, so GitHub resolves no permissions
+and returns the zero value for every field of the block.
+
+`hack/measure-push-permission.sh` is the probe. It mints an installation token
+for one repository from the App private key and prints both the permissions
+GitHub reports on the mint and what `GET /repos/{owner}/{repo}` answers for
+`permissions.push`. Measured on 2026-09-17, App `4950078`, installation
+`161842404`, repository `giantswarm/marge`:
+
+```text
+the token's permissions, as GitHub reports them on the mint:
+{
+  "checks": "read", "issues": "write", "actions": "write",
+  "contents": "write", "metadata": "read", "statuses": "read",
+  "pull_requests": "write", "administration": "write"
+}
+
+GET /repos/giantswarm/marge -> .permissions:
+{
+  "permissions": {
+    "admin": false, "maintain": false, "push": false,
+    "triage": false, "pull": false
+  },
+  "push_present": true
+}
+```
+
+| Installation permissions | Reported `permissions.push` | What `ensureWriteAccess` does |
 |---|---|---|
-| `Pull requests: write` + `Contents: write` | *not recorded yet* | *not recorded yet* |
-| `Pull requests: write` alone | *not recorded yet* | *not recorded yet* |
+| `Pull requests: write` + `Contents: write` | present, `false` (measured 2026-09-17) | allows: the mint reports `contents: write` |
+| `Pull requests: write` alone | present, `false` (not measured; see roadmap#4368) | refuses: the mint reports no `contents: write` |
 
-Until both rows are filled, two outcomes stay open: the field always reports
-`true`, which makes the guard a no-op, or the field is absent, which marge
-reports as `write access unknown` and treats as a refusal.
+The second row needs a scratch App on a throwaway repository. The production
+App's permissions are organization-wide, so removing `Contents: write` from it
+would stop the daily merge path for everybody.
 
 Two more results from the same test, both permanent:
 

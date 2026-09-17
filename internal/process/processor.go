@@ -48,6 +48,10 @@ type Processor struct {
 	// Actions selects the steps this sweep performs. Nil performs all.
 	Actions ActionSet
 
+	// AppWriteAccess answers the write-access guard when the sweep
+	// authenticates as the GitHub App. Nil is a person's token.
+	AppWriteAccess AppWriteAccess
+
 	// Rules is the catalogue loaded at the start of the sweep. Nil refuses
 	// every remedy and leaves classification, approval and merging as they
 	// are.
