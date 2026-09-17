@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -111,4 +112,22 @@ func TestList_refreshClassifiesAgain(t *testing.T) {
 // a caller cannot ask for the cheap path if the tool does not offer it.
 func TestListTool_declaresRefresh(t *testing.T) {
 	require.Contains(t, listTool().InputSchema.Properties, "refresh")
+}
+
+// TestListTool_describesTheDefaultItHas holds the description to what
+// handleList does: the default reads the stored label, the classify step is
+// what refresh: true runs, and unclassified is named as a gap in the labels
+// rather than as an empty queue.
+func TestListTool_describesTheDefaultItHas(t *testing.T) {
+	description := listTool().Description
+
+	require.Contains(t, description, "marge/<class> label")
+	require.Contains(t, description, "unclassified means no sweep has labelled that PR")
+
+	for _, sentence := range strings.Split(description, ". ") {
+		if strings.Contains(sentence, "classify step") {
+			require.Contains(t, sentence, "refresh: true",
+				"the classify step is what refresh: true runs, not what the default runs")
+		}
+	}
 }
