@@ -20,8 +20,10 @@ func LabelClass(s StatusState) string {
 		return "merged"
 	case StatusAutoMerge:
 		return "auto-merge"
-	case StatusFailed, StatusHeld:
+	case StatusFailed:
 		return "action-required"
+	case StatusHeld:
+		return "held"
 	case StatusFailedSecurity:
 		return "security"
 	case StatusBlockedCI, StatusNoVerdict:
@@ -73,6 +75,8 @@ func ClassState(class string) (StatusState, bool) {
 		return StatusAutoMerge, true
 	case "action-required":
 		return StatusFailed, true
+	case "held":
+		return StatusHeld, true
 	case "security":
 		return StatusFailedSecurity, true
 	case "ci-unavailable":
