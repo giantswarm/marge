@@ -262,8 +262,9 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		run.set(pr.StatusAlreadyMerged, "")
 		return
 	}
-	if pullReq.GetHead().GetRepo().GetFork() {
-		run.set(pr.StatusSkipped, "head branch lives in a fork")
+	if headRepo := pullReq.GetHead().GetRepo(); headRepo == nil ||
+		!strings.EqualFold(headRepo.GetFullName(), info.Owner+"/"+info.Repo) {
+		run.set(pr.StatusSkipped, "head branch lives in another repository")
 		return
 	}
 	if pullReq.GetMergeableState() == "dirty" {

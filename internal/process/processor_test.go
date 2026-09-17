@@ -29,7 +29,11 @@ type guardFixture struct {
 	body           string
 	mergeableState string
 	autoMerge      bool
-	fork           bool
+	// headRepo is the full name of the repository the head branch lives in;
+	// empty means the swept repository itself. forkedRepo marks the swept
+	// repository as a fork of an upstream one.
+	headRepo   string
+	forkedRepo bool
 	// headChecks maps a check name on the PR head to "success", "failure",
 	// "pending" or "neutral"; statusContexts lists the names reported as
 	// commit statuses instead of check runs.
@@ -126,6 +130,10 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			labels = append(labels, &github.Label{Name: l})
 		}
 		f.mu.Unlock()
+		headRepo := f.headRepo
+		if headRepo == "" {
+			headRepo = "org/repo"
+		}
 		pull := github.PullRequest{
 			Number:         new(7),
 			Title:          new(f.title),
@@ -133,8 +141,8 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			ChangedFiles:   new(1),
 			MergeableState: new(f.mergeableState),
 			User:           &github.User{Login: new(f.author)},
-			Head:           &github.PullRequestBranch{SHA: new(gfHead), Ref: new("renovate/all"), Repo: &github.Repository{Fork: new(f.fork)}},
-			Base:           &github.PullRequestBranch{SHA: new(gfBase), Ref: new("main")},
+			Head:           &github.PullRequestBranch{SHA: new(gfHead), Ref: new("renovate/all"), Repo: &github.Repository{FullName: new(headRepo), Fork: new(f.forkedRepo)}},
+			Base:           &github.PullRequestBranch{SHA: new(gfBase), Ref: new("main"), Repo: &github.Repository{FullName: new("org/repo"), Fork: new(f.forkedRepo)}},
 			Labels:         labels,
 		}
 		if f.autoMerge {
@@ -709,13 +717,22 @@ func TestGuard_labelForbiddenNeverChangesTheOutcome(t *testing.T) {
 	require.Empty(t, got.Label)
 }
 
-func TestGuard_forkIsSkipped(t *testing.T) {
+func TestGuard_crossRepositoryHeadIsSkipped(t *testing.T) {
 	f := greenFixture()
-	f.fork = true
+	f.headRepo = "outsider/repo"
 	got := f.run(t, nil)
 
 	require.Equal(t, pr.StatusSkipped, got.State, got.Detail)
+	require.Contains(t, got.Detail, "another repository")
 	require.Zero(t, f.approveCalls.Load()+f.mergeCalls.Load())
+}
+
+func TestGuard_forkedRepositoryOwnBranchIsSwept(t *testing.T) {
+	f := greenFixture()
+	f.forkedRepo = true
+	got := f.run(t, nil)
+
+	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
 }
 
 func TestParseActions(t *testing.T) {

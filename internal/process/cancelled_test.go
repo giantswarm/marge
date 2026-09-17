@@ -98,7 +98,7 @@ func (f *cancelledFixture) github(t *testing.T) *httptest.Server {
 			Title:          new("Update module github.com/giantswarm/mcp-oauth to v1.3.20"),
 			MergeableState: new("clean"),
 			User:           &github.User{Login: new("renovate[bot]")},
-			Head:           &github.PullRequestBranch{SHA: new(f.head), Ref: new("renovate/mcp-oauth")},
+			Head:           &github.PullRequestBranch{SHA: new(f.head), Ref: new("renovate/mcp-oauth"), Repo: &github.Repository{FullName: new("org/repo")}},
 			Base:           &github.PullRequestBranch{SHA: new(fxBase), Ref: new("main")},
 		})
 	})

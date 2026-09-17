@@ -46,7 +46,7 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 			Body:           new("| `actions/checkout` | action | minor | `v5.0.0` -> `v5.1.0` |"),
 			MergeableState: new(state),
 			User:           &github.User{Login: new("renovate[bot]")},
-			Head:           &github.PullRequestBranch{SHA: new(head), Ref: new(fmt.Sprintf("renovate/branch-%d", number))},
+			Head:           &github.PullRequestBranch{SHA: new(head), Ref: new(fmt.Sprintf("renovate/branch-%d", number)), Repo: &github.Repository{FullName: new("org/repo")}},
 			Base:           &github.PullRequestBranch{SHA: new(rbBase), Ref: new("main")},
 		}
 	}

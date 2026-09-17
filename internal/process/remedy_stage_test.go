@@ -36,7 +36,7 @@ func stageServer(t *testing.T) *httptest.Server {
 			Title:          new("chore(deps): update module golang.org/x/net to v0.46.0"),
 			MergeableState: new("clean"),
 			User:           &github.User{Login: new("renovate[bot]")},
-			Head:           &github.PullRequestBranch{SHA: new(stageHead), Ref: new("renovate/x-net")},
+			Head:           &github.PullRequestBranch{SHA: new(stageHead), Ref: new("renovate/x-net"), Repo: &github.Repository{FullName: new("org/repo")}},
 			Base:           &github.PullRequestBranch{SHA: new(stageBase), Ref: new("main")},
 		})
 	})

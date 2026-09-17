@@ -169,7 +169,7 @@ func (f *noVerdictFixture) run(t *testing.T) pr.StatusEntry {
 			Title:          new("Update module github.com/giantswarm/klausctl to v0.2.40"),
 			MergeableState: new("clean"),
 			User:           &github.User{Login: new("renovate[bot]")},
-			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/klausctl")},
+			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/klausctl"), Repo: &github.Repository{FullName: new("org/repo")}},
 			Base:           &github.PullRequestBranch{SHA: new(fxBase), Ref: new("main")},
 		})
 	})

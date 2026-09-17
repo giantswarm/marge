@@ -66,7 +66,7 @@ func (f *siblingFixture) run(t *testing.T) pr.StatusEntry {
 			Body:           new(body),
 			MergeableState: new(mergeable),
 			User:           &github.User{Login: new("renovate[bot]")},
-			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/actions-checkout-5.x")},
+			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/actions-checkout-5.x"), Repo: &github.Repository{FullName: new("org/repo")}},
 			Base:           &github.PullRequestBranch{SHA: new(fxBase), Ref: new("main")},
 		})
 	})

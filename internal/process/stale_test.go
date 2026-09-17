@@ -68,7 +68,7 @@ func (f *staleFixture) server(t *testing.T) *httptest.Server {
 			ChangedFiles:   new(f.changedFiles),
 			MergeableState: new("behind"),
 			User:           &github.User{Login: new("renovate[bot]")},
-			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/foo")},
+			Head:           &github.PullRequestBranch{SHA: new(fxHead), Ref: new("renovate/foo"), Repo: &github.Repository{FullName: new("org/repo")}},
 			Base:           &github.PullRequestBranch{SHA: new(fxBase), Ref: new("main")},
 		})
 	})
