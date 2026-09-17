@@ -2,6 +2,7 @@ package policy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +125,27 @@ func TestParseDocument_empty(t *testing.T) {
 		require.NotNil(t, doc)
 		require.Nil(t, doc.Schedule)
 		require.Nil(t, doc.Rescue)
+	}
+}
+
+// TestParseDocument_rescueTimeout pins the range of durations a policy file
+// may write, which bot-prs-sweep/policy.schema.json in giantswarm/github
+// mirrors as a pattern: every duration time.ParseDuration reads, above zero.
+func TestParseDocument_rescueTimeout(t *testing.T) {
+	accepted := map[string]time.Duration{
+		"20m":   20 * time.Minute,
+		"1.5h":  90 * time.Minute,
+		"0.5h":  30 * time.Minute,
+		"1h30m": 90 * time.Minute,
+		"90us":  90 * time.Microsecond,
+		"+20m":  20 * time.Minute,
+	}
+	for value, want := range accepted {
+		t.Run(value, func(t *testing.T) {
+			doc, err := ParseDocument(TeamFile("bumblebee"), "rescue:\n  timeout: \""+value+"\"\n")
+			require.NoError(t, err)
+			require.Equal(t, want, doc.Rescue.timeout)
+		})
 	}
 }
 
