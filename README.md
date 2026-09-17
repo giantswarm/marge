@@ -288,6 +288,16 @@ Neither rule suppresses a merge: a green PR still merges, whatever its siblings 
 
 marge never closes a PR itself. Two PRs can legitimately carry the same dependency name in one repository, for instance across the manifests of a monorepo, so the decision stays with a human. PRs found through a GitHub issue search carry no base branch, because the search API does not report one; those group as if they shared a branch. Sweeps driven by `--repos-file` or `repos` know the base branch and group by it.
 
+#### Conflicts a sweep caused itself
+
+Two bot PRs of one repository often edit the same file. The PRs of a repository are processed one at a time, so the first merge makes the second one `dirty`. The conflict is real, but it is not work for anybody: the bot rebases its own PR within about a minute, and the PR is mergeable again.
+
+marge reports such a PR as `Awaiting rebase` (label `marge/pending`), never as a conflict, and names the sibling that caused it: `conflicted by #6, merged in this run; the bot rebases it`. No rule of the catalogue acts on that state, so no rescue is started.
+
+The sweep then looks at the PR again in a second pass, after the rest of the run. It waits for the bot to rebase, up to three minutes for the whole pass, and processes each rebased PR as usual: green and eligible, it merges in the same run. Without that pass the PR would wait for the next sweep, which is a day later, and each further PR of the repository would wait behind it. A PR the bot has not rebased when the wait runs out keeps `Awaiting rebase` and the next sweep decides.
+
+A conflict on a PR of a repository this run did not merge into is unchanged: it is reported as `Conflict` and counted as action-required. A PR with GitHub auto-merge enabled needs none of this, because GitHub merges it when the rebase lands.
+
 #### Stale failures (already fixed on the base branch)
 
 A dependency PR is built once and then sits in the queue while the base branch moves on. When a fleet-wide fix lands on `main` -- a CVE bump that turned every open Go PR's vulnerability scan red, a linter pin, a CI infra repair -- the PR's last build stays red although the failure no longer exists. Without help, an operator (or a rescue agent) spends time diagnosing a failure that a branch refresh would have cleared.

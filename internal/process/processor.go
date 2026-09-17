@@ -45,6 +45,10 @@ type Processor struct {
 	// Zero uses the default (10s). Actual wait = base * attempt number.
 	MergeRetryWait time.Duration
 
+	// RebaseWait bounds the second pass over the PRs a merge of this sweep
+	// made dirty (see Revisit). Zero uses the default (3m).
+	RebaseWait time.Duration
+
 	// Actions selects the steps this sweep performs. Nil performs all.
 	Actions ActionSet
 
@@ -87,6 +91,7 @@ type Processor struct {
 
 	staleCache
 	accessCache
+	rebaseQueue
 	protectionCache
 	labelCache
 }
@@ -266,7 +271,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 			run.markObsolete(reason, detail)
 			return
 		}
-		run.set(pr.StatusConflict, "merge conflict")
+		p.setConflict(run, "merge conflict")
 		return
 	}
 	run.set(pr.StatusChecking, "")
@@ -971,6 +976,7 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 		})
 		if err == nil {
 			run.set(pr.StatusMerged, mergedDetail(run))
+			p.recordMerge(run.info)
 			if len(run.preexisting) > 0 {
 				p.postOnce(ctx, run, pr.MarkerKindEvidence, "merged-past-red-check", preexistingNote(run)+" (red on the base head too)")
 			}
@@ -986,7 +992,7 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			case isChecksRefusal(err):
 				run.set(pr.StatusWaitingChecks, ghErrorDetail("merge refused", err))
 			case strings.Contains(errMsg, "409") || strings.Contains(errMsg, "conflict"):
-				run.set(pr.StatusConflict, "merge conflict")
+				p.setConflict(run, "merge conflict")
 			default:
 				run.set(pr.StatusFailed, ghErrorDetail("merge error", err))
 			}
@@ -1016,7 +1022,7 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			return
 		}
 		if refreshed.GetMergeableState() == "dirty" {
-			run.set(pr.StatusConflict, "merge conflict on retry")
+			p.setConflict(run, "merge conflict on retry")
 			return
 		}
 		if refreshed.GetMergeableState() == "behind" {

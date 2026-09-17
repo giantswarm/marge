@@ -67,6 +67,11 @@ const (
 	// StatusEligible marks a green eligible PR the sweep did not merge
 	// because the merge action was not selected.
 	StatusEligible
+	// StatusAwaitingRebase marks a PR the sweep's own merge of a sibling PR
+	// of the same repository made dirty. The bot that opened it rebases it
+	// within about a minute, so the conflict is not work for a person. The
+	// second pass of the run looks at the PR again.
+	StatusAwaitingRebase
 	// StatusRemedied marks a PR a rule of the catalogue acted on. The
 	// action's evidence names the rule and what it did; the next sweep
 	// classifies the result.
@@ -128,6 +133,8 @@ func (s StatusState) String() string {
 		return "Held"
 	case StatusEligible:
 		return "Eligible"
+	case StatusAwaitingRebase:
+		return "Awaiting rebase"
 	case StatusRemedied:
 		return "Remedied"
 	case StatusUnclassified:
@@ -373,7 +380,7 @@ func (s *PRStatus) countsLocked() Counts {
 			c.Blocked++
 		case StatusNoVerdict:
 			c.NoVerdict++
-		case StatusWaitingChecks:
+		case StatusWaitingChecks, StatusAwaitingRebase:
 			c.Waiting++
 		case StatusStale:
 			c.Stale++
@@ -467,9 +474,12 @@ func (s *PRStatus) ActionRequired() []StatusEntry {
 }
 
 // WaitingEntries returns entries whose required checks have not all
-// reported. They are kept out of ActionRequired: the remedy is time.
+// reported, and entries waiting for the bot to rebase a conflict this sweep
+// caused. They are kept out of ActionRequired: the remedy is time.
 func (s *PRStatus) WaitingEntries() []StatusEntry {
-	return s.entriesInState(StatusWaitingChecks)
+	entries := s.entriesInStates(StatusWaitingChecks, StatusAwaitingRebase)
+	sortOldestFirst(entries)
+	return entries
 }
 
 // BlockedEntries returns entries whose CI could not run because a GitHub

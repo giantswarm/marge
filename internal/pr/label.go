@@ -28,7 +28,7 @@ func LabelClass(s StatusState) string {
 		return "ci-unavailable"
 	case StatusStale, StatusRefreshed:
 		return "stale"
-	case StatusCancelled, StatusRetried, StatusWaitingChecks:
+	case StatusCancelled, StatusRetried, StatusWaitingChecks, StatusAwaitingRebase:
 		return "pending"
 	case StatusConflict:
 		return "conflict"
