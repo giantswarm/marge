@@ -112,8 +112,11 @@ func newMCPServer(newClient clientFactory) *server.MCPServer {
 // which is outside this server.
 func listTool() mcp.Tool {
 	return mcp.NewTool("list",
-		mcp.WithDescription("Read-only. List the open bot PRs of a team or query scope with the classification, label, bot kind, update type, age, evidence and prior-rescue state of each, and the policy each was decided under. "+
-			"It is the sweep engine's classify step alone, on a dry run: nothing is approved, merged, refreshed, retried, remedied or labelled, and no comment is written. "+
+		mcp.WithDescription("Read-only. List the open bot PRs of a team or query scope with the classification, label, bot kind and age of each. "+
+			"By default it reads back the classification the last sweep stored in the PR's marge/<class> label, so it reports what the last sweep decided, not what a sweep would decide now. "+
+			"refresh: true decides every PR now instead: it is the sweep engine's classify step alone, on a dry run. "+
+			"Neither reading approves, merges, refreshes, retries, remedies or labels anything, and neither writes a comment. "+
+			"unclassified means no sweep has labelled that PR, not that the PR needs nothing: call again with refresh: true to classify it. "+
 			"The entries are grouped the way the sweep reports them -- merged, security_failures, action_required, stale, cancelled, waiting, obsolete, ci_unavailable, ci_no_verdict, skipped -- so \"what is waiting for us\" and \"what would a sweep do\" are the same question. "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale."),
 		scopeArguments(),
@@ -782,7 +785,8 @@ func result(value any) (*mcp.CallToolResult, error) {
 }
 
 // listRequest is what one call of the list tool asks the engine for: the
-// classify step alone, on a dry run, so the call reads and writes nothing.
+// classify step alone, on a dry run, so the call writes nothing. The stored
+// read runs no action and takes the scope from it alone.
 func listRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 	req := parseScope(request)
 	req.Opts.DryRun = true
