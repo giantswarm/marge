@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/go-github/v92/github"
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -273,4 +274,49 @@ func TestProcessOnceWithStatus_quietNoPRs(t *testing.T) {
 	if stdout != "" || stderr != "" {
 		t.Errorf("quiet run with no PRs wrote stdout=%q stderr=%q, want both empty", stdout, stderr)
 	}
+}
+
+// TestFilterByPRs holds what a PR subset means: the named PRs in the order
+// the scope found them, and an error naming any reference the scope does not
+// hold, so a caller never believes a PR was acted on because it was absent.
+func TestFilterByPRs(t *testing.T) {
+	found := []pr.PRInfo{
+		{Owner: "giantswarm", Repo: "marge", Number: 7},
+		{Owner: "giantswarm", Repo: "marge", Number: 8},
+		{Owner: "giantswarm", Repo: "muster", Number: 9},
+	}
+
+	tests := []struct {
+		name string
+		refs []string
+		want []int
+	}{
+		{"no reference keeps every PR", nil, []int{7, 8, 9}},
+		{"one reference", []string{"giantswarm/marge#8"}, []int{8}},
+		{"an URL", []string{"https://github.com/giantswarm/muster/pull/9"}, []int{9}},
+		{"the scope order is kept", []string{"giantswarm/muster#9", "giantswarm/marge#7"}, []int{7, 9}},
+		{"owner and repo are case-insensitive", []string{"GiantSwarm/Marge#7"}, []int{7}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := filterByPRs(found, tt.refs)
+			require.NoError(t, err)
+			numbers := make([]int, 0, len(got))
+			for _, info := range got {
+				numbers = append(numbers, info.Number)
+			}
+			require.Equal(t, tt.want, numbers)
+		})
+	}
+
+	t.Run("a PR outside the scope is refused", func(t *testing.T) {
+		_, err := filterByPRs(found, []string{"giantswarm/marge#7", "other/repo#1"})
+		require.ErrorContains(t, err, "other/repo#1")
+	})
+
+	t.Run("a reference that is not a PR is refused", func(t *testing.T) {
+		_, err := filterByPRs(found, []string{"giantswarm/marge"})
+		require.Error(t, err)
+	})
 }

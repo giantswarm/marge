@@ -99,3 +99,28 @@ func TestCatalogueAvailable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cat.Available())
 }
+
+// TestCatalogue_Only narrows the catalogue to one rule. The rule still has
+// to match: narrowing removes the other rules from the contest and nothing
+// more.
+func TestCatalogue_Only(t *testing.T) {
+	catalogue := &Catalogue{
+		Source: "giantswarm/marge@main:rules",
+		Digest: "a-digest",
+		Rules:  []*Rule{{Name: "first"}, {Name: "second"}},
+	}
+
+	narrowed, err := catalogue.Only("second")
+	require.NoError(t, err)
+	require.Len(t, narrowed.Rules, 1)
+	require.Equal(t, "second", narrowed.Rules[0].Name)
+	require.Equal(t, catalogue.Digest, narrowed.Digest, "the evidence still names the catalogue the rule came from")
+	require.Equal(t, catalogue.Source, narrowed.Source)
+	require.Len(t, catalogue.Rules, 2, "the catalogue it was narrowed from is unchanged")
+
+	_, err = catalogue.Only("absent")
+	require.ErrorContains(t, err, "unknown rule")
+
+	_, err = (*Catalogue)(nil).Only("first")
+	require.ErrorContains(t, err, "no rule catalogue")
+}

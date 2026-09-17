@@ -147,3 +147,33 @@ func ExtractDependencyName(title string) string {
 	}
 	return ""
 }
+
+// ParsePRRef reads one pull request reference in either spelling a caller
+// uses: the browser URL, or the "owner/repo#number" shorthand that reads
+// the way a sweep reports a PR.
+func ParsePRRef(ref string) (owner, repo string, number int, err error) {
+	ref = strings.TrimSpace(ref)
+	if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
+		return ParsePRURL(ref)
+	}
+	repoPart, numberPart, found := strings.Cut(ref, "#")
+	if !found {
+		return "", "", 0, fmt.Errorf("not a pull request reference: %s (want an URL or owner/repo#number)", ref)
+	}
+	owner, repo, found = strings.Cut(repoPart, "/")
+	if !found || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return "", "", 0, fmt.Errorf("not a pull request reference: %s (want an URL or owner/repo#number)", ref)
+	}
+	number, err = strconv.Atoi(numberPart)
+	if err != nil || number <= 0 {
+		return "", "", 0, fmt.Errorf("invalid PR number in %s", ref)
+	}
+	return owner, repo, number, nil
+}
+
+// Key is how one PR is named in a selection: "owner/repo#number", with the
+// repository lowercased because GitHub compares owner and repository names
+// case-insensitively.
+func Key(owner, repo string, number int) string {
+	return fmt.Sprintf("%s/%s#%d", strings.ToLower(owner), strings.ToLower(repo), number)
+}
