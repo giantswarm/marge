@@ -177,36 +177,48 @@ func TestResolveScope_queryScope(t *testing.T) {
 func TestResolveSweepOptions(t *testing.T) {
 	reset := func() {
 		sweepFlags.actions, sweepFlags.output, sweepFlags.checkTimeout = "", "table", 0
+		sweepFlags.teams = nil
 	}
 
 	tests := []struct {
 		name    string
+		teams   []string
 		opts    RunOptions
 		setup   func()
 		wantErr string
-		check   func(t *testing.T, opts RunOptions)
+		check   func(t *testing.T, teams []string, opts RunOptions)
 	}{
-		{name: "team and query are exclusive", opts: RunOptions{Team: "t", Query: "q"}, wantErr: "mutually exclusive"},
-		{name: "team refuses org", opts: RunOptions{Team: "t", Org: "o"}, wantErr: "belong to the query scope"},
-		{name: "team refuses repos file", opts: RunOptions{Team: "t", ReposFile: "f"}, wantErr: "belong to the query scope"},
+		{name: "team and query are exclusive", teams: []string{"t"}, opts: RunOptions{Query: "q"}, wantErr: "mutually exclusive"},
+		{name: "team refuses org", teams: []string{"t"}, opts: RunOptions{Org: "o"}, wantErr: "belong to the query scope"},
+		{name: "team refuses repos file", teams: []string{"t"}, opts: RunOptions{ReposFile: "f"}, wantErr: "belong to the query scope"},
+		{name: "several teams refuse named PRs", teams: []string{"one", "two"}, opts: RunOptions{PRs: []string{"giantswarm/marge#1"}}, wantErr: "give a single --team"},
 		{name: "one scope is required", opts: RunOptions{}, wantErr: "one of --team or --query is required"},
-		{name: "unknown action", opts: RunOptions{Team: "t"}, setup: func() { sweepFlags.actions = "rescue" }, wantErr: "unknown action"},
-		{name: "unknown output", opts: RunOptions{Team: "t"}, setup: func() { sweepFlags.output = "yaml" }, wantErr: "unknown output"},
-		{name: "team runs every action without a wait", opts: RunOptions{Team: "t"}, check: func(t *testing.T, opts RunOptions) {
+		{name: "a blank team names no team", teams: []string{" "}, wantErr: "--team names no team"},
+		{name: "unknown action", teams: []string{"t"}, setup: func() { sweepFlags.actions = "rescue" }, wantErr: "unknown action"},
+		{name: "unknown output", teams: []string{"t"}, setup: func() { sweepFlags.output = "yaml" }, wantErr: "unknown output"},
+		{name: "team runs every action without a wait", teams: []string{"t"}, check: func(t *testing.T, teams []string, opts RunOptions) {
+			require.Equal(t, []string{"t"}, teams)
+			require.Equal(t, "t", opts.Team, "one team is the single-team scope")
 			require.Zero(t, opts.CheckTimeout)
 			require.True(t, opts.Actions.Has(process.ActionMerge))
 			require.False(t, opts.Quiet)
 		}},
-		{name: "an explicit timeout is honoured", opts: RunOptions{Query: "q"}, setup: func() { sweepFlags.checkTimeout = 30 * time.Second }, check: func(t *testing.T, opts RunOptions) {
+		{name: "several teams are kept in order and deduplicated", teams: []string{"two", "one", "two", ""}, check: func(t *testing.T, teams []string, opts RunOptions) {
+			require.Equal(t, []string{"two", "one"}, teams)
+			require.Empty(t, opts.Team, "no single team owns a run of several")
+		}},
+		{name: "all-teams refuses a named team", teams: []string{"t"}, setup: func() { sweepFlags.allTeams = true }, wantErr: "--all-teams reads every team's own scope"},
+		{name: "an explicit timeout is honoured", opts: RunOptions{Query: "q"}, setup: func() { sweepFlags.checkTimeout = 30 * time.Second }, check: func(t *testing.T, _ []string, opts RunOptions) {
 			require.Equal(t, 30*time.Second, opts.CheckTimeout)
 		}},
-		{name: "query does not wait either", opts: RunOptions{Query: "q"}, check: func(t *testing.T, opts RunOptions) {
+		{name: "query does not wait either", opts: RunOptions{Query: "q"}, check: func(t *testing.T, _ []string, opts RunOptions) {
 			require.Zero(t, opts.CheckTimeout)
 		}},
-		{name: "org alone is the query scope", opts: RunOptions{Org: "o"}, check: func(t *testing.T, opts RunOptions) {
+		{name: "org alone is the query scope", opts: RunOptions{Org: "o"}, check: func(t *testing.T, teams []string, opts RunOptions) {
+			require.Empty(t, teams)
 			require.Zero(t, opts.CheckTimeout)
 		}},
-		{name: "json output is quiet", opts: RunOptions{Team: "t"}, setup: func() { sweepFlags.output = "json"; sweepFlags.actions = "classify,approve" }, check: func(t *testing.T, opts RunOptions) {
+		{name: "json output is quiet", teams: []string{"t"}, setup: func() { sweepFlags.output = "json"; sweepFlags.actions = "classify,approve" }, check: func(t *testing.T, _ []string, opts RunOptions) {
 			require.True(t, opts.Quiet)
 			require.True(t, opts.NoTUI)
 			require.True(t, opts.Actions.Has(process.ActionApprove))
@@ -216,20 +228,33 @@ func TestResolveSweepOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reset()
-			t.Cleanup(reset)
+			t.Cleanup(func() { reset(); sweepFlags.allTeams = false })
+			sweepFlags.teams = tt.teams
 			if tt.setup != nil {
 				tt.setup()
 			}
 			opts := tt.opts
-			err := resolveSweepOptions(&opts)
+			teams, err := resolveSweepOptions(&opts)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			tt.check(t, opts)
+			tt.check(t, teams, opts)
 		})
 	}
+}
+
+// TestSweepTeamFlagTakesSeveralNames holds what the flag promises: one
+// --team carries several names, repeated or comma-separated.
+func TestSweepTeamFlagTakesSeveralNames(t *testing.T) {
+	previous := sweepFlags.teams
+	t.Cleanup(func() { sweepFlags.teams = previous })
+
+	flags := sweepCmd.Flags()
+	require.NoError(t, flags.Set("team", "bumblebee,atlas"))
+	require.NoError(t, flags.Set("team", "phoenix"))
+	require.Equal(t, []string{"bumblebee", "atlas", "phoenix"}, sweepFlags.teams)
 }
 
 // TestSweepFlagHelpNamesEveryAction keeps the --actions help in step with

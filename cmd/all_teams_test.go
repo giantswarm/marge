@@ -48,7 +48,7 @@ func TestAllTeams_sweepsOnlyTheTeamsThatOptedIn(t *testing.T) {
 	var out bytes.Buffer
 	poster := &recordingPoster{}
 
-	outcomes, err := allTeamsRun{
+	outcomes, err := teamsRun{
 		Client: client,
 		Login:  "giantswarm-marge[bot]",
 		Rules:  RulesSource{Path: t.TempDir()},
@@ -57,7 +57,7 @@ func TestAllTeams_sweepsOnlyTheTeamsThatOptedIn(t *testing.T) {
 		Out:    &out,
 	}.Run(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, allTeamsError(outcomes))
+	require.NoError(t, teamsError(outcomes))
 
 	byTeam := make(map[string]teamOutcome, len(outcomes))
 	for _, outcome := range outcomes {
@@ -70,6 +70,66 @@ func TestAllTeams_sweepsOnlyTheTeamsThatOptedIn(t *testing.T) {
 
 	require.Contains(t, out.String(), "team atlas skipped")
 	require.Empty(t, poster.posts, "the run changed nothing, so the channel stays quiet")
+}
+
+// TestTeamsRun_namedTeamsRunWhateverTheScheduleSays is the acceptance
+// criterion of a manual run of several teams: the operator named them, so
+// each one is swept under its own policy, in the order given, and the
+// schedule key of a policy skips none of them.
+func TestTeamsRun_namedTeamsRunWhateverTheScheduleSays(t *testing.T) {
+	client := contentsMux(t, "giantswarm", "github", map[string]string{
+		"bot-prs-sweep/default.yaml":        "schedule: disabled\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "schedule: enabled\nslackChannel: team-bumblebee\n",
+		"bot-prs-sweep/team-atlas.yaml":     "schedule: disabled\n",
+		"repositories/team-bumblebee.yaml":  "- name: marge\n",
+		"repositories/team-atlas.yaml":      "- name: atlas\n",
+		"repositories/team-phoenix.yaml":    "- name: phoenix\n",
+	})
+
+	t.Setenv(teamFileRepoEnv, "")
+	var out bytes.Buffer
+
+	outcomes, err := teamsRun{
+		Client: client,
+		Login:  "giantswarm-marge[bot]",
+		Rules:  RulesSource{Path: t.TempDir()},
+		Opts:   RunOptions{DryRun: true, Quiet: true, NoTUI: true},
+		Teams:  []string{"atlas", "phoenix"},
+		Out:    &out,
+	}.Run(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, teamsError(outcomes))
+
+	require.Len(t, outcomes, 2)
+	require.Equal(t, "atlas", outcomes[0].Team)
+	require.Empty(t, outcomes[0].Skipped, "the operator named atlas, so its schedule key decides nothing")
+	require.Equal(t, "phoenix", outcomes[1].Team)
+	require.Empty(t, outcomes[1].Skipped, "phoenix has no policy file and is swept under the company defaults")
+	require.NotContains(t, out.String(), "bumblebee", "a team nobody named is not swept")
+}
+
+// TestTeamsRun_namedTeamWithoutARepositoryListFailsAlone keeps a typo in one
+// name from stopping the other teams of the same run.
+func TestTeamsRun_namedTeamWithoutARepositoryListFailsAlone(t *testing.T) {
+	client := contentsMux(t, "giantswarm", "github", map[string]string{
+		"repositories/team-atlas.yaml": "- name: atlas\n",
+	})
+
+	t.Setenv(teamFileRepoEnv, "")
+	var out bytes.Buffer
+
+	outcomes, err := teamsRun{
+		Client: client,
+		Login:  "giantswarm-marge[bot]",
+		Rules:  RulesSource{Path: t.TempDir()},
+		Opts:   RunOptions{DryRun: true, Quiet: true, NoTUI: true},
+		Teams:  []string{"atals", "atlas"},
+		Out:    &out,
+	}.Run(t.Context())
+	require.NoError(t, err)
+
+	require.ErrorContains(t, teamsError(outcomes), "team atals")
+	require.NoError(t, outcomes[1].Err, "atlas ran although the misspelt name could not")
 }
 
 // TestAllTeams_oneTeamsBrokenPolicyDoesNotStopTheRest holds the rule the
@@ -87,7 +147,7 @@ func TestAllTeams_oneTeamsBrokenPolicyDoesNotStopTheRest(t *testing.T) {
 	t.Setenv(teamFileRepoEnv, "")
 	var out bytes.Buffer
 
-	outcomes, err := allTeamsRun{
+	outcomes, err := teamsRun{
 		Client: client,
 		Login:  "giantswarm-marge[bot]",
 		Rules:  RulesSource{Path: t.TempDir()},
@@ -96,7 +156,7 @@ func TestAllTeams_oneTeamsBrokenPolicyDoesNotStopTheRest(t *testing.T) {
 	}.Run(t.Context())
 	require.NoError(t, err)
 
-	joined := allTeamsError(outcomes)
+	joined := teamsError(outcomes)
 	require.ErrorContains(t, joined, "team atlas")
 	require.ErrorContains(t, joined, "notAKey")
 
@@ -269,7 +329,7 @@ func TestReport_namesTheRefusedApproval(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	allTeamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: buildSweepResult(status, nil, nil)})
+	teamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: buildSweepResult(status, nil, nil)})
 
 	line := out.String()
 	require.Contains(t, line, "team bumblebee: 1 PRs")
@@ -290,7 +350,7 @@ func TestReport_namesEveryBlockedPR(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	allTeamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: result})
+	teamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: result})
 
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
 	require.Len(t, lines, 31, "the team line and one line per PR")
