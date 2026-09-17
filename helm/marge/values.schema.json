@@ -152,7 +152,7 @@
                                         },
                                         "existingSecret": {
                                             "type": "string",
-                                            "description": "Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values."
+                                            "description": "Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. Defaults to marge.github.app.existingSecret, so one App Secret that carries the client keys below needs no second name."
                                         }
                                     }
                                 },

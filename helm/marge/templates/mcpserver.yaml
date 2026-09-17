@@ -22,7 +22,7 @@ core_auth_login, and "Connected" after it.
 */ -}}
 {{- if and .Values.mcp.enabled .Values.muster.register }}
 {{- if not (include "marge.hasOAuthCredential" .) }}
-{{- fail "muster.register needs the App's OAuth client: set marge.github.app.oauth.clientId and clientSecret, or marge.github.app.oauth.existingSecret" }}
+{{- fail "muster.register needs the App's OAuth client: set marge.github.app.oauth.clientId and clientSecret, marge.github.app.oauth.existingSecret, or marge.github.app.existingSecret carrying the client keys" }}
 {{- end }}
 apiVersion: muster.giantswarm.io/v1alpha1
 kind: MCPServer

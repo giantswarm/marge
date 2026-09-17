@@ -94,7 +94,7 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | marge.github.app.privateKeyKey | string | `"github-app-private-key"` | Key of the PEM private key inside the Secret |
 | marge.github.app.oauth.clientId | string | `""` | OAuth client ID of the App. marge never reads it; it is held here so one place holds the App's credentials, and muster's GitHub connector references the same Secret. |
 | marge.github.app.oauth.clientSecret | string | `""` | OAuth client secret of the App. Do not reuse the shared github-oauth-client secret. |
-| marge.github.app.oauth.existingSecret | string | `""` | Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. |
+| marge.github.app.oauth.existingSecret | string | `""` | Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. Defaults to marge.github.app.existingSecret, so one App Secret that carries the client keys below needs no second name. |
 | marge.github.app.oauth.clientIdKey | string | `"github-app-client-id"` | Key of the client ID inside the Secret |
 | marge.github.app.oauth.clientSecretKey | string | `"github-app-client-secret"` | Key of the client secret inside the Secret |
 | marge.slack.token | string | `""` | Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary. |
