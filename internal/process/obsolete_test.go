@@ -179,8 +179,8 @@ func TestSuperseded_greenPRStillMerges(t *testing.T) {
 	}
 	got := f.run(t)
 
-	if got.State != pr.StatusSkipped {
-		t.Fatalf("state = %v (%s), want StatusSkipped in dry run: a green PR takes the merge path", got.State, got.Detail)
+	if got.State != pr.StatusEligible {
+		t.Fatalf("state = %v (%s), want StatusEligible in dry run: a green PR takes the merge path", got.State, got.Detail)
 	}
 }
 
@@ -266,8 +266,8 @@ func TestNoOp_greenPRPaysNoDiffRequest(t *testing.T) {
 	f := &siblingFixture{title: "chore(deps): update actions/checkout action to v5.1.0", patch: commentOnlyPatch}
 	got := f.run(t)
 
-	if got.State != pr.StatusSkipped {
-		t.Fatalf("state = %v (%s), want StatusSkipped in dry run", got.State, got.Detail)
+	if got.State != pr.StatusEligible {
+		t.Fatalf("state = %v (%s), want StatusEligible in dry run", got.State, got.Detail)
 	}
 	if f.compareCalls.Load() != 0 {
 		t.Errorf("compare called %d times for a green PR, want 0", f.compareCalls.Load())
