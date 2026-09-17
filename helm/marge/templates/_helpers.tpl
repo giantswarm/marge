@@ -52,6 +52,30 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Selector labels of the MCP server, which is the Deployment and the Service.
+The CronJob pods carry the same common labels, so the server's own selector
+names its component as well and never reaches them.
+*/}}
+{{- define "marge.serverSelectorLabels" -}}
+{{ include "marge.selectorLabels" . }}
+app.kubernetes.io/component: mcp
+{{- end }}
+
+{{/*
+Name of one scheduled sweep. Takes a dict of "context" and "component".
+*/}}
+{{- define "marge.cronName" -}}
+{{- printf "%s-%s" (include "marge.fullname" .context) .component | trunc 52 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Name of the ServiceAccount of one scheduled sweep.
+*/}}
+{{- define "marge.cronServiceAccountName" -}}
+{{- include "marge.cronName" . }}
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "marge.serviceAccountName" -}}
@@ -70,11 +94,97 @@ Name of the Secret the chart writes for inline tokens.
 {{- end }}
 
 {{/*
-Whether the chart writes its own token Secret: at least one inline token is set
-and not overridden by an existing Secret.
+Whether the chart writes its own token Secret: at least one inline credential
+is set and not overridden by an existing Secret.
 */}}
 {{- define "marge.writesTokenSecret" -}}
-{{- if or (and .Values.marge.github.token (not .Values.marge.github.existingSecret)) (and .Values.marge.circleci.token (not .Values.marge.circleci.existingSecret)) -}}
+{{- if or (include "marge.writesGitHubToken" .) (include "marge.writesCircleCIToken" .) (include "marge.writesAppCredential" .) (include "marge.writesOAuthCredential" .) (include "marge.writesSlackToken" .) -}}
 true
 {{- end -}}
+{{- end }}
+
+{{- define "marge.writesGitHubToken" -}}
+{{- if and .Values.marge.github.token (not .Values.marge.github.existingSecret) -}}true{{- end -}}
+{{- end }}
+
+{{- define "marge.writesCircleCIToken" -}}
+{{- if and .Values.marge.circleci.token (not .Values.marge.circleci.existingSecret) -}}true{{- end -}}
+{{- end }}
+
+{{- define "marge.writesAppCredential" -}}
+{{- if and .Values.marge.github.app.privateKey (not .Values.marge.github.app.existingSecret) -}}true{{- end -}}
+{{- end }}
+
+{{- define "marge.writesOAuthCredential" -}}
+{{- if and .Values.marge.github.app.oauth.clientSecret (not .Values.marge.github.app.oauth.existingSecret) -}}true{{- end -}}
+{{- end }}
+
+{{- define "marge.writesSlackToken" -}}
+{{- if and .Values.marge.slack.token (not .Values.marge.slack.existingSecret) -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Name of the Secret that holds the App credential, and the keys inside it.
+The App path is what the schedule runs as, so its Secret is resolved once
+here and read by both CronJobs.
+*/}}
+{{- define "marge.appSecretName" -}}
+{{- default (include "marge.tokenSecretName" .) .Values.marge.github.app.existingSecret }}
+{{- end }}
+
+{{/*
+Whether the App credential is configured at all. Without it a scheduled
+sweep has no identity to act as.
+*/}}
+{{- define "marge.hasAppCredential" -}}
+{{- if or .Values.marge.github.app.existingSecret .Values.marge.github.app.privateKey -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+Environment of the App credential. The private key is a file and never an
+environment variable: a PEM in the environment shows up in every process
+listing of the pod.
+*/}}
+{{- define "marge.appEnv" -}}
+- name: MARGE_GITHUB_APP_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "marge.appSecretName" . }}
+      key: {{ .Values.marge.github.app.idKey }}
+- name: MARGE_GITHUB_APP_INSTALLATION_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "marge.appSecretName" . }}
+      key: {{ .Values.marge.github.app.installationIdKey }}
+- name: MARGE_GITHUB_APP_PRIVATE_KEY_FILE
+  value: /etc/marge/github-app/private-key.pem
+{{- end }}
+
+{{/*
+Environment of the Slack bot token. Renders nothing when no token is
+configured, and the run then posts no summary.
+*/}}
+{{- define "marge.slackEnv" -}}
+{{- if or .Values.marge.slack.existingSecret .Values.marge.slack.token -}}
+- name: MARGE_SLACK_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ default (include "marge.tokenSecretName" .) .Values.marge.slack.existingSecret }}
+      key: {{ .Values.marge.slack.existingSecretKey }}
+{{- end }}
+{{- end }}
+
+{{/*
+Environment of the CircleCI token, which is optional everywhere.
+*/}}
+{{- define "marge.circleciEnv" -}}
+{{- if or .Values.marge.circleci.existingSecret .Values.marge.circleci.token -}}
+- name: CIRCLECI_CLI_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ default (include "marge.tokenSecretName" .) .Values.marge.circleci.existingSecret }}
+      key: {{ if .Values.marge.circleci.existingSecret }}{{ .Values.marge.circleci.existingSecretKey }}{{ else }}circleci-token{{ end }}
+{{- end }}
 {{- end }}

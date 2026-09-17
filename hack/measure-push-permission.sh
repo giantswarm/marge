@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Measure what GET /repos answers for permissions.push under an installation
+# token, which is the field ensureWriteAccess refuses an approval on.
+#
+# Run it once with Contents: write granted to the installation and once
+# without, then record both answers in docs/github-app.md.
+#
+# It prints the App ID, the repository, the token's scope and the permission
+# block. It never prints the private key or the minted token.
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'USAGE'
+usage: measure-push-permission.sh -k <private-key.pem> -a <app-id> -i <installation-id> -r <owner/repo>
+
+  -k  path of the App's PEM private key
+  -a  numeric App ID (4950078 for GiantSwarm Marge)
+  -i  numeric installation ID (161842404 for the giantswarm organization)
+  -r  the repository to probe, as owner/repo
+USAGE
+    exit 2
+}
+
+key_path=""
+app_id=""
+installation_id=""
+repository=""
+
+while getopts "k:a:i:r:h" opt; do
+    case "${opt}" in
+        k) key_path="${OPTARG}" ;;
+        a) app_id="${OPTARG}" ;;
+        i) installation_id="${OPTARG}" ;;
+        r) repository="${OPTARG}" ;;
+        *) usage ;;
+    esac
+done
+
+[[ -n "${key_path}" && -n "${app_id}" && -n "${installation_id}" && -n "${repository}" ]] || usage
+[[ -r "${key_path}" ]] || { echo "cannot read ${key_path}" >&2; exit 1; }
+
+owner="${repository%%/*}"
+name="${repository##*/}"
+[[ "${owner}" != "${repository}" && -n "${name}" ]] || { echo "-r takes owner/repo" >&2; usage; }
+
+base64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+now="$(date +%s)"
+header="$(printf '{"alg":"RS256","typ":"JWT"}' | base64url)"
+claims="$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((now - 30))" "$((now + 540))" "${app_id}" | base64url)"
+signature="$(printf '%s.%s' "${header}" "${claims}" \
+    | openssl dgst -sha256 -sign "${key_path}" -binary \
+    | base64url)"
+app_jwt="${header}.${claims}.${signature}"
+
+mint="$(curl -sS -X POST \
+    -H "Authorization: Bearer ${app_jwt}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/json" \
+    -d "$(printf '{"repositories":["%s"]}' "${name}")" \
+    "https://api.github.com/app/installations/${installation_id}/access_tokens")"
+
+token="$(printf '%s' "${mint}" | jq -r '.token // empty')"
+if [[ -z "${token}" ]]; then
+    echo "the mint returned no token:" >&2
+    printf '%s\n' "${mint}" | jq 'del(.token)' >&2
+    exit 1
+fi
+
+echo "App ${app_id}, installation ${installation_id}, repository ${repository}"
+echo "token expires at $(printf '%s' "${mint}" | jq -r '.expires_at')"
+echo
+echo "the token's permissions, as GitHub reports them on the mint:"
+printf '%s\n' "${mint}" | jq '.permissions'
+echo
+echo "the token's repository scope:"
+curl -sS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/installation/repositories" \
+    | jq -r '.repositories[].full_name'
+echo
+echo "GET /repos/${repository} -> .permissions, which is what ensureWriteAccess reads:"
+curl -sS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repository}" \
+    | jq '{permissions: .permissions, push_present: (.permissions | has("push"))}'

@@ -73,11 +73,10 @@ and merge the eligible green ones.`,
 			return err
 		}
 
-		me, _, err := client.Users.Get(ctx, "")
+		login, err := gh.AuthenticatedLogin(ctx, client)
 		if err != nil {
-			return fmt.Errorf("getting authenticated user: %w", err)
+			return err
 		}
-		login := me.GetLogin()
 
 		query := ""
 		if len(args) > 0 {

@@ -510,6 +510,12 @@ func (s *PRStatus) RetriedEntries() []StatusEntry {
 	return s.entriesInState(StatusRetried)
 }
 
+// RemediedEntries returns the entries a rule of the catalogue acted on in
+// this run.
+func (s *PRStatus) RemediedEntries() []StatusEntry {
+	return s.entriesInState(StatusRemedied)
+}
+
 func (s *PRStatus) entriesInState(state StatusState) []StatusEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/go-github/v92/github"
@@ -16,9 +17,18 @@ import (
 // carries the per-repository exceptions.
 const DefaultFile = "bot-prs-sweep/default.yaml"
 
+// TeamFilePrefix and teamFileSuffix bracket a team name in the path of its
+// policy file, and are what Teams reads a team name back out of.
+const TeamFilePrefix = "bot-prs-sweep/team-"
+
+const teamFileSuffix = ".yaml"
+
+// PolicyDir holds the company defaults and every team's policy file.
+const PolicyDir = "bot-prs-sweep"
+
 // TeamFile returns the path of a team's policy file.
 func TeamFile(team string) string {
-	return fmt.Sprintf("bot-prs-sweep/team-%s.yaml", team)
+	return TeamFilePrefix + team + teamFileSuffix
 }
 
 // RepositoriesFile returns the path of a team's repository list.
@@ -49,6 +59,9 @@ func validateTeam(team string) error {
 type Source interface {
 	fmt.Stringer
 	Read(ctx context.Context, path string) (content string, found bool, err error)
+	// List returns the paths of the files directly under dir, and reports
+	// found false for a directory the source does not hold.
+	List(ctx context.Context, dir string) (paths []string, found bool, err error)
 }
 
 // Loader resolves a sweep's scope and policy from the files of one Source.
@@ -86,6 +99,54 @@ func (g GitHubSource) Read(ctx context.Context, path string) (string, bool, erro
 		return "", false, fmt.Errorf("decoding %s: %w", path, err)
 	}
 	return content, true, nil
+}
+
+// List returns the paths of the files in dir on the repository's default
+// branch. A directory that is not there, like a repository the token cannot
+// read, answers 404 and is reported as not found.
+func (g GitHubSource) List(ctx context.Context, dir string) ([]string, bool, error) {
+	_, entries, resp, err := g.Client.Repositories.GetContents(ctx, g.Owner, g.Repo, dir, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("listing %s: %w", dir, err)
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.GetType() != "file" {
+			continue
+		}
+		paths = append(paths, entry.GetPath())
+	}
+	return paths, true, nil
+}
+
+// Teams returns every team that has a policy file, sorted. A team opts its
+// scheduled sweep in by writing that file, so this is the list the schedule
+// starts from; the schedule key of each file then decides which of them run.
+func (l Loader) Teams(ctx context.Context) ([]string, error) {
+	paths, found, err := l.Source.List(ctx, PolicyDir)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("no policy directory: %s has no %s, or it cannot be read", l.Source, PolicyDir)
+	}
+	var teams []string
+	for _, path := range paths {
+		name, ok := strings.CutPrefix(path, TeamFilePrefix)
+		if !ok {
+			continue
+		}
+		name, ok = strings.CutSuffix(name, teamFileSuffix)
+		if !ok || validateTeam(name) != nil {
+			continue
+		}
+		teams = append(teams, name)
+	}
+	slices.Sort(teams)
+	return teams, nil
 }
 
 // Scope is what one sweep resolves before it starts: the repositories it

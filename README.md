@@ -64,6 +64,8 @@ If you are logged in with `gh auth login`, no further setup is needed. Otherwise
 export GITHUB_TOKEN="ghp_..."
 ```
 
+A scheduled run uses none of these. It authenticates as the sweep GitHub App and mints an installation token per repository; see [docs/github-app.md](docs/github-app.md).
+
 **Classic token:** needs the `repo` scope.
 
 **Fine-grained token:** select the repositories you want marge to manage, then grant these permissions:
@@ -123,7 +125,7 @@ A team declares its own appetite for sweeps in `giantswarm/github`, in files the
 
 A team opts into the scheduled sweep with `schedule: enabled` in its own file, and pauses it again with `schedule: disabled` or by deleting the key. A team without a policy file, or one that never sets the key, is swept by hand from the CLI and never by the schedule.
 
-marge holds no scheduler yet. `schedule` is resolved and reported on every outcome, and nothing in marge acts on it: `marge sweep --team <name>` is a sweep by hand and runs whatever the key says. The scheduler that reads it arrives with the rescue work.
+`marge sweep --all-teams` is what reads the key: it sweeps every team that has a policy file whose `schedule` is `enabled`, and skips the rest. That is what the daily CronJob of the [chart](helm/marge/README.md) runs. `marge sweep --team <name>` is a sweep by hand and runs whatever the key says.
 
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
@@ -348,10 +350,11 @@ This makes the daily triage call obvious at a glance:
 
 Use [`marge mark`](#marge-mark-pr-url-flags) to write markers without knowing the format. Any tool that can comment on a PR can participate -- there is no coupling to a specific agent framework.
 
-### `marge sweep (--team <name> | --query <text>) [flags]`
+### `marge sweep (--team <name> | --query <text> | --all-teams) [flags]`
 
 Sweeps one scope without interactive grouping. Exactly one scope is given:
 
+- `--all-teams` sweeps every team that has a policy file, each under its own repositories and its own [policy](#sweep-policy). A team whose policy sets `schedule: disabled`, and a team with no policy file at all, are both skipped and named in the report. One team's unreadable policy fails that team alone; every other team still runs, and the command exits non-zero at the end. This is what the daily schedule runs.
 - `--team <name>` reads the team's repositories from `repositories/team-<name>.yaml` in the team-file repository (`giantswarm/github` unless `MARGE_TEAM_FILE_REPO` names another `owner/repo`; each entry's `name` is read, and its `botPRsSweep` key when it has one) and sweeps their open bot PRs under the team's [policy](#sweep-policy).
 - `--query <text>` runs marge's GitHub search the way `marge [query]` does, for personal repositories and organisations without a team file; `--org` and `--repos-file` belong to this scope. The query scope has no team, so the company defaults apply on their own.
 
@@ -361,6 +364,7 @@ The live table shows every PR's outcome, including the failure reason and any ai
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
+| `--all-teams` | | `false` | Sweep every team whose policy leaves the schedule enabled (schedule scope) |
 | `--team` | | | Team whose repositories are swept (team scope) |
 | `--query` | | | GitHub search text (query scope) |
 | `--actions` | | _(all)_ | Comma-separated sweep steps to run, in fixed order: `classify`, `approve`, `merge`, `refresh`, `retry`, `remedy`, `mark` (see [Actions](#actions)) |
