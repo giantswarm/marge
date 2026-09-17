@@ -34,6 +34,15 @@ type RescueMarker struct {
 	At      time.Time `json:"at,omitempty"`
 	Fingerprint
 
+	// Signature, Checks and Excerpt describe a failure no rule of the
+	// catalogue recognised. They are set on a marker whose Outcome is
+	// MarkerOutcomeUnhandled, and carry what `marge rules draft` needs to
+	// build a skeleton from the PR alone. Signature groups the same failure
+	// across PRs.
+	Signature string   `json:"signature,omitempty"`
+	Checks    []string `json:"checks,omitempty"`
+	Excerpt   string   `json:"excerpt,omitempty"`
+
 	// Stale and Rebased are computed by MarkStale, never serialized into
 	// the marker. Rebased is set when the head moved but the change did not.
 	Stale   bool `json:"-"`
@@ -47,6 +56,22 @@ var rescueMarkerRE = regexp.MustCompile(`(?s)<!--\s*ai-rescue:\s*(\{.*?\})\s*-->
 // fingerprint like a rescue marker so a later sweep can tell whether the
 // same evidence already stands for the current change.
 const MarkerKindEvidence = "evidence"
+
+// MarkerOutcomeUnhandled is the outcome of an evidence marker that records
+// a failure no rule recognised. It names no action, because none ran: the
+// marker is the only record that the failure happened, and the sweep's
+// process keeps none.
+const MarkerOutcomeUnhandled = "unhandled"
+
+// UnhandledPhrase is the literal the unhandled marker's human line carries,
+// so a search over PR comments finds every PR that holds one.
+const UnhandledPhrase = "unrecognised failure"
+
+// IsUnhandled reports whether the marker records a failure no rule
+// recognised, with the signature that groups it across PRs.
+func (m *RescueMarker) IsUnhandled() bool {
+	return m.IsEvidence() && m.Outcome == MarkerOutcomeUnhandled && m.Signature != ""
+}
 
 // IsEvidence reports whether the marker is sweep evidence rather than the
 // record of a rescue attempt.
@@ -109,7 +134,10 @@ func (m *RescueMarker) CommentBody() string {
 		tool = "ai"
 	}
 	human := fmt.Sprintf("**AI rescue %s** (%s)", m.Outcome, tool)
-	if m.IsEvidence() {
+	switch {
+	case m.IsUnhandled():
+		human = fmt.Sprintf("**Sweep: %s** (%s), signature %s", UnhandledPhrase, tool, m.Signature)
+	case m.IsEvidence():
 		human = fmt.Sprintf("**Sweep: %s** (%s)", m.Outcome, tool)
 	}
 	if m.Reason != "" {

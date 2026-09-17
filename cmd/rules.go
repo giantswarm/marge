@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/spf13/cobra"
 
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/logs"
+	"github.com/giantswarm/marge/internal/patterns"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
 )
@@ -156,6 +158,7 @@ func loadCatalogueForCLI(ctx context.Context) (*rules.Catalogue, error) {
 
 var draftFlags struct {
 	from string
+	org  string
 	name string
 	repo string
 	base string
@@ -163,7 +166,8 @@ var draftFlags struct {
 }
 
 func init() {
-	rulesDraftCmd.Flags().StringVar(&draftFlags.from, "from", "-", "Sweep report to read the signature from; - reads standard input")
+	rulesDraftCmd.Flags().StringVar(&draftFlags.from, "from", "", "Sweep report to read the signature from; - reads standard input. Unset reads the markers the sweep left on the pull requests")
+	rulesDraftCmd.Flags().StringVar(&draftFlags.org, "org", rules.DefaultOwner, "Organization whose pull requests carry the markers, read when --from is unset")
 	rulesDraftCmd.Flags().StringVar(&draftFlags.name, "name", "", "Name of the rule to draft (default: derived from the failing checks)")
 	rulesDraftCmd.Flags().StringVar(&draftFlags.repo, "repo", rules.DefaultOwner+"/"+rules.DefaultRepo, "Repository to open the draft pull request against, as owner/name")
 	rulesDraftCmd.Flags().StringVar(&draftFlags.base, "base", rules.DefaultRef, "Branch the draft pull request is opened against")
@@ -174,9 +178,13 @@ func init() {
 var rulesDraftCmd = &cobra.Command{
 	Use:   "draft <signature>",
 	Short: "Draft a rule and its scenarios from an unrecognised failure",
-	Long: `Read one unhandled signature out of a sweep report (marge sweep --output json)
-and write a rule skeleton with a pair of scenarios built from the PRs that
-carry it, then open a draft pull request carrying the same files.
+	Long: `Read one unhandled signature and write a rule skeleton with a pair of
+scenarios built from the PRs that carry it, then open a draft pull request
+carrying the same files.
+
+The signature comes from the markers the sweep leaves on the pull requests it
+could not handle, which is what this command reads by default. --from reads a
+saved sweep report (marge sweep --output json) instead.
 
 The skeleton leaves the action blank on purpose: it does not validate until a
 person names one, so promoting a pattern is editing a draft rather than
@@ -189,11 +197,7 @@ on the repository. --no-pr writes the files and stops, and prints the git and
 gh commands instead.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		report, err := readSweepReport(draftFlags.from)
-		if err != nil {
-			return err
-		}
-		group, err := findSignature(report, args[0])
+		group, err := signatureGroup(cmd.Context(), args[0])
 		if err != nil {
 			return err
 		}
@@ -234,6 +238,45 @@ gh commands instead.`,
 		fmt.Printf("push your edits to %s\n", draftBranch(name))
 		return nil
 	},
+}
+
+// signatureGroup finds one signature, in the sweep report --from names or,
+// with no --from, in the markers the sweep left on the pull requests of the
+// organization.
+func signatureGroup(ctx context.Context, signature string) (*SweepUnhandled, error) {
+	if draftFlags.from != "" {
+		report, err := readSweepReport(draftFlags.from)
+		if err != nil {
+			return nil, err
+		}
+		return findSignature(report, signature)
+	}
+
+	client, err := gh.NewClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	search := patterns.Search{Client: client, Org: draftFlags.org}
+	group, err := search.Signature(ctx, signature)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil {
+		return nil, fmt.Errorf("no pull request of %s carries signature %q; run `marge rules signatures` for the ones that were seen", draftFlags.org, signature)
+	}
+	return fromGroup(group), nil
+}
+
+// fromGroup is the group as the draft reads it. The two shapes say the same
+// thing, one read from a run and one read from the pull requests.
+func fromGroup(group *patterns.Group) *SweepUnhandled {
+	return &SweepUnhandled{
+		Signature: group.Signature,
+		Checks:    group.Checks,
+		Count:     group.Count,
+		PRs:       group.PRs,
+		Excerpt:   group.Excerpt,
+	}
 }
 
 func readSweepReport(from string) (*SweepResult, error) {
@@ -494,4 +537,56 @@ A rule skeleton for %s and the pair of scenarios its fixtures need, built from t
 
 Name the action, write the log pattern against the recorded excerpt, and give the refusing scenario a real excerpt of a neighbouring failure. Push to `+"`%s`"+`.
 `, group.Signature, group.Count, strings.Join(group.PRs, ", "), name, draftBranch(name))
+}
+
+var signaturesFlags struct {
+	org   string
+	days  int
+	limit int
+}
+
+func init() {
+	rulesSignaturesCmd.Flags().StringVar(&signaturesFlags.org, "org", rules.DefaultOwner, "Organization whose pull requests carry the markers")
+	rulesSignaturesCmd.Flags().IntVar(&signaturesFlags.days, "days", 7, "How many days back to read; 0 reads everything the search returns")
+	rulesSignaturesCmd.Flags().IntVar(&signaturesFlags.limit, "limit", 10, "How many signatures to print; 0 prints all of them")
+	rulesCmd.AddCommand(rulesSignaturesCmd)
+}
+
+var rulesSignaturesCmd = &cobra.Command{
+	Use:   "signatures",
+	Short: "Count the failures no rule recognised, by signature",
+	Long: `Read the markers the sweep left on the pull requests it could not handle and
+count them by signature, the one on the most pull requests first.
+
+A signature here is what "marge rules draft" takes. The count is what says
+whether a pattern is worth a rule: one pull request is an accident, eleven
+over five repositories is a rule waiting to be written.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		client, err := gh.NewClient(cmd.Context())
+		if err != nil {
+			return err
+		}
+		search := patterns.Search{Client: client, Org: signaturesFlags.org}
+		if signaturesFlags.days > 0 {
+			search.Since = time.Now().AddDate(0, 0, -signaturesFlags.days)
+		}
+		groups, err := search.Top(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if len(groups) == 0 {
+			fmt.Println("no unrecognised failure carries a marker in that window")
+			return nil
+		}
+		for i, group := range groups {
+			if signaturesFlags.limit > 0 && i == signaturesFlags.limit {
+				fmt.Printf("and %d more\n", len(groups)-signaturesFlags.limit)
+				break
+			}
+			fmt.Printf("%s  %3d PR(s)  %s\n", group.Signature, group.Count, strings.Join(group.Checks, ", "))
+			fmt.Printf("            %s\n", strings.Join(group.PRs, " "))
+		}
+		return nil
+	},
 }

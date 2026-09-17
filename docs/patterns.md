@@ -50,10 +50,12 @@ are those rows with a log signal attached, which is what the engine needs to
 act on one.
 
 A failure no rule recognises is grouped by signature in the sweep report
-under `unhandled`. `marge rules draft <signature>` writes a rule skeleton and
-a pair of scenarios from the PRs that carry it, then opens a draft pull
-request on `rule/<name>`. The skeleton leaves the action blank, so it does
-not validate until a person names one.
+under `unhandled`, and left on the PR as a marker carrying that signature.
+`marge rules signatures` counts the markers by signature, and `marge rules
+draft <signature>` writes a rule skeleton and a pair of scenarios from the
+PRs that carry it, then opens a draft pull request on `rule/<name>`. The
+skeleton leaves the action blank, so it does not validate until a person
+names one.
 
 ## Patterns that need a person
 

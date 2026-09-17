@@ -17,13 +17,21 @@ const markerTool = "marge"
 // or a matching fingerprint. Renovate force-pushes on every rebase, so the
 // fingerprint, not the SHA, decides whether evidence is still current.
 func (p *Processor) postOnce(ctx context.Context, run *prRun, kind, outcome, reason string) {
+	p.postMarker(ctx, run, &pr.RescueMarker{Kind: kind, Outcome: outcome, Reason: reason})
+}
+
+// postMarker writes marker unless an equivalent one already stands, and
+// fills in the fields every marker carries: the tool, the head, the time and
+// the fingerprint. The caller sets the kind, the outcome and whatever the
+// outcome describes.
+func (p *Processor) postMarker(ctx context.Context, run *prRun, marker *pr.RescueMarker) {
 	if p.DryRun || !p.Actions.Has(ActionMark) {
 		return
 	}
 	head := run.pull.GetHead().GetSHA()
 	current := run.fingerprint(ctx, p)
 	for _, existing := range run.markers(ctx, p) {
-		if existing.Kind != kind || existing.Outcome != outcome {
+		if existing.Kind != marker.Kind || existing.Outcome != marker.Outcome {
 			continue
 		}
 		existing.MarkStale(head, func() pr.Fingerprint { return current })
@@ -32,15 +40,10 @@ func (p *Processor) postOnce(ctx context.Context, run *prRun, kind, outcome, rea
 		}
 	}
 
-	marker := &pr.RescueMarker{
-		Tool:        markerTool,
-		Kind:        kind,
-		Outcome:     outcome,
-		Reason:      reason,
-		HeadSHA:     head,
-		At:          time.Now().UTC().Truncate(time.Second),
-		Fingerprint: current,
-	}
+	marker.Tool = markerTool
+	marker.HeadSHA = head
+	marker.At = time.Now().UTC().Truncate(time.Second)
+	marker.Fingerprint = current
 	_, _, err := p.Client.Issues.CreateComment(ctx, run.info.Owner, run.info.Repo, run.info.Number, github.IssueCommentRequest{Body: marker.CommentBody()})
 	if err != nil {
 		run.note("marker not written: " + ghErrorDetail("", err))
