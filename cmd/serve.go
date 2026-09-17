@@ -610,7 +610,6 @@ type SweepPolicyInfo struct {
 	// UpdateTypes lists the update types that merge when green, per bot PR
 	// kind.
 	UpdateTypes  map[string][]string `json:"update_types"`
-	Schedule     bool                `json:"schedule"`
 	Rescue       SweepRescuePolicy   `json:"rescue"`
 	Concurrency  SweepConcurrency    `json:"concurrency"`
 	ModelConfig  string              `json:"model_config,omitempty"`
@@ -662,7 +661,6 @@ func policyInfo(resolved *pr.Policy) *SweepPolicyInfo {
 	info := &SweepPolicyInfo{
 		Sweep:       resolved.Sweep,
 		UpdateTypes: types,
-		Schedule:    resolved.Schedule,
 		Rescue: SweepRescuePolicy{
 			Enabled:            resolved.Rescue.Enabled,
 			Weekly:             resolved.Rescue.Weekly,

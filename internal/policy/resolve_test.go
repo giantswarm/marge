@@ -18,7 +18,6 @@ updateTypes:
   dependabot: [patch, minor, digest, pin, lockfile]
   align-files: [none]
   herald: [none]
-schedule: disabled
 rescue:
   enabled: false
   timeout: 20m
@@ -35,7 +34,6 @@ modelConfig: default-model-config
 func TestResolve_defaultTeamAndException(t *testing.T) {
 	teamFile := `
 slackChannel: team-bumblebee
-schedule: enabled
 rescue:
   enabled: true
   timeout: 30m
@@ -77,7 +75,6 @@ updateTypes:
 	// A repository without an exception is swept under the team policy.
 	plain := set.For("giantswarm", "marge")
 	require.True(t, plain.Sweep)
-	require.True(t, plain.Schedule)
 	require.Equal(t, "team-bumblebee", plain.SlackChannel)
 	require.Equal(t, "default-model-config", plain.ModelConfig)
 	require.Equal(t, 8, plain.Concurrency.PerTeam)
@@ -145,27 +142,10 @@ func TestResolve_noFiles(t *testing.T) {
 	resolved := set.For("giantswarm", "marge")
 
 	require.Equal(t, pr.CompanyDefaults(), resolved)
-	require.False(t, resolved.Schedule, "a team without a policy file is never swept by the schedule")
 	require.False(t, resolved.Rescue.Enabled)
 	require.True(t, resolved.Eligible(pr.KindRenovate, pr.UpdatePatch))
 	require.False(t, resolved.Eligible(pr.KindRenovate, pr.UpdateMajor))
 	require.Equal(t, []string{"built-in company defaults"}, resolved.Sources)
-}
-
-// TestResolve_scheduleKey proves a team's only switch: the schedule runs
-// where the team file says so and nowhere else.
-func TestResolve_scheduleKey(t *testing.T) {
-	running, err := ParseDocument(TeamFile("shield"), "schedule: enabled\n")
-	require.NoError(t, err)
-	set, err := NewSet([]File{{Path: TeamFile("shield"), Doc: running}}, nil)
-	require.NoError(t, err)
-	require.True(t, set.For("giantswarm", "any").Schedule)
-
-	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
-	require.NoError(t, err)
-	set, err = NewSet([]File{{Path: TeamFile("shield"), Doc: silent}}, nil)
-	require.NoError(t, err)
-	require.False(t, set.For("giantswarm", "any").Schedule, "a team file that says nothing keeps the company default")
 }
 
 // TestResolve_exceptionOnlyNarrows refuses an exception that widens what
@@ -253,7 +233,7 @@ func TestResolve_emptyUpdateTypeListNarrowsToNothing(t *testing.T) {
 	require.NoError(t, err)
 
 	// An absent key on the team file keeps what the default file said.
-	silent, err := ParseDocument(TeamFile("shield"), "schedule: enabled\n")
+	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
 	require.NoError(t, err)
 	set, err := NewSet([]File{{Path: DefaultFile, Doc: defaults}, {Path: TeamFile("shield"), Doc: silent}}, nil)
 	require.NoError(t, err)

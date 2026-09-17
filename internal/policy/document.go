@@ -38,7 +38,6 @@ import (
 // the names and no error a caller has to discard.
 type Document struct {
 	UpdateTypes  map[string][]string  `yaml:"updateTypes"`
-	Schedule     *string              `yaml:"schedule"`
 	Rescue       *RescueDocument      `yaml:"rescue"`
 	Concurrency  *ConcurrencyDocument `yaml:"concurrency"`
 	ModelConfig  *string              `yaml:"modelConfig"`
@@ -103,13 +102,6 @@ const (
 	maxInFlight = 20
 )
 
-// The two values the schedule key takes. A team switches its scheduled
-// sweep on in its own policy file, and off again without deleting the file.
-const (
-	scheduleEnabled  = "enabled"
-	scheduleDisabled = "disabled"
-)
-
 // knownKinds maps the bot PR kind names a policy file may use to the kinds
 // the sweep classifies PRs into.
 var knownKinds = map[string]pr.Kind{
@@ -163,9 +155,6 @@ func (d *Document) resolve() error {
 			return fmt.Errorf("updateTypes.%s: %w", kind, err)
 		}
 		d.updateTypes[known] = types
-	}
-	if d.Schedule != nil && *d.Schedule != scheduleEnabled && *d.Schedule != scheduleDisabled {
-		return fmt.Errorf("schedule: %q is neither %s nor %s", *d.Schedule, scheduleEnabled, scheduleDisabled)
 	}
 	if err := d.Rescue.resolve(); err != nil {
 		return err
