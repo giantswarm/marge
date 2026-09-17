@@ -32,8 +32,8 @@ spec:
           protocol: TCP
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
-{{- range $component, $settings := dict "daily-sweep" $.Values.schedule.daily "weekly-rescue" $.Values.schedule.weekly }}
-{{- if $settings.enabled }}
+{{- range $entry := (include "marge.schedules" $ | fromYamlArray) }}
+{{- $component := $entry.name }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -62,6 +62,5 @@ spec:
     - ports:
         - port: 443
           protocol: TCP
-{{- end }}
 {{- end }}
 {{- end }}
