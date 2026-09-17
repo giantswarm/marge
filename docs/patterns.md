@@ -5,6 +5,10 @@ This document carries the sweep's knowledge of bot PR failures. Rules under
 ones a person or an agent still decides, and the hazards that make a wrong
 decision easy.
 
+The condensed form a model reads when no rule matched is
+[`skills/marge-rescue`](../skills/marge-rescue/SKILL.md). A pattern promoted
+to a rule loses its hint there in the same pull request.
+
 Every row of the runbook extraction is a rule under `rules/`, a row on this
 page citing its runbook row, or one of the thirteen named below. That is the
 condition for retiring the runbook.
@@ -71,8 +75,8 @@ which the sweep does not have. They become rules when those actions exist.
 | A `TEAM-NAME` placeholder in `Chart.yaml` | Replace it with the team from `CODEOWNERS` | 42 |
 | A staticcheck SA1019 deprecation after a bump | Rename the call site | 62 |
 | `github.Ptr` rejected by the `inline` analyzer | Replace it with the `new` builtin | 73 |
-| Transitive CVEs with a clean upgrade path | `go get` the parents, tidy, push | 23, 98 |
-| A CVE with no fixed release | A time-boxed `.nancy-ignore` entry with a justification | 51, 81 |
+| Transitive CVEs with a clean upgrade path | nancy-fixer's: `go get` the parents, tidy, push | 23, 98 |
+| A CVE with no fixed release | nancy-fixer's: a time-boxed `.nancy-ignore` entry with a justification | 51, 81 |
 | A custom Makefile target referencing a file the alignment migration deleted | Drop the file from the target on `teams-alignment-branch`; `Makefile.custom.mk` is the repository's own | 24 |
 | A chart icon the `abs` validator rejects (`C0004: IconDomainIsValid`) | `giantswarm-validator-ignored-checks: C0004` in `.abs/main.yaml` | 28 |
 | ATS refusing an unknown cluster type in its pre-run | Add a minimal `.ats/main.yaml` | 50 |
@@ -81,7 +85,8 @@ which the sweep does not have. They become rules when those actions exist.
 The CVE rows are listed for completeness only. nancy-fixer already performs
 the bump and the time-boxed ignore, and the shared `fix-vulnerabilities`
 workflow opens the PR. marge sweeps those PRs as a bot PR kind and never
-re-implements the remedy (PRD decision 3).
+re-implements the remedy (PRD decision 3). Naming nancy-fixer in the remedy
+is what keeps those rows out of the rescue skill's hints.
 
 ### Fixed on the default branch first
 
