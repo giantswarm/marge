@@ -136,8 +136,15 @@ func (r allTeamsRun) post(ctx context.Context, team, channel string, result Swee
 	return true, nil
 }
 
+// logPRLimit bounds how many pull requests one section of one team names in
+// the log. A team with fifty blocked PRs must not push the next team's
+// summary out of the window an operator reads.
+const logPRLimit = 10
+
 // report prints one line per team, so the CronJob's log says what every team
-// got without the reader opening Slack.
+// got without the reader opening Slack, and then the reason behind each PR
+// the run did not move on. A count alone cannot tell a blocked PR from an
+// approval the write-access guard refused, and those need different repairs.
 func (r allTeamsRun) report(outcome teamOutcome) {
 	switch {
 	case outcome.Err != nil:
@@ -147,7 +154,43 @@ func (r allTeamsRun) report(outcome teamOutcome) {
 	default:
 		_, _ = fmt.Fprintf(r.Out, "team %s: %d PRs, %s, summary posted: %t\n",
 			outcome.Team, outcome.Result.Summary.Total, headline(outcome.Result.Summary), outcome.Posted)
+		r.reportReasons(outcome.Result)
 	}
+}
+
+// reportReasons prints why the run left each PR where it is, and which
+// repositories it could not read.
+func (r allTeamsRun) reportReasons(result SweepResult) {
+	blocked := make([]SweepPREntry, 0, len(result.SecurityFailures)+len(result.ActionRequired))
+	blocked = append(blocked, result.SecurityFailures...)
+	blocked = append(blocked, result.ActionRequired...)
+
+	reportEntries(r.Out, "blocked", blocked)
+	reportEntries(r.Out, "skipped", result.Skipped)
+	for _, failure := range result.RepositoriesFailed {
+		_, _ = fmt.Fprintf(r.Out, "  repository %s could not be listed: %s\n", failure.Repo, failure.Error)
+	}
+}
+
+// reportEntries names each pull request of one section with the detail that
+// explains its outcome, up to logPRLimit of them.
+func reportEntries(w io.Writer, label string, entries []SweepPREntry) {
+	for i, entry := range entries {
+		if i == logPRLimit {
+			_, _ = fmt.Fprintf(w, "  and %d more %s\n", len(entries)-logPRLimit, label)
+			return
+		}
+		_, _ = fmt.Fprintf(w, "  %s %s/%s#%d: %s\n", label, entry.Owner, entry.Repo, entry.Number, logDetail(entry))
+	}
+}
+
+// logDetail is the reason an entry carries, or a stand-in when it carries
+// none, so a line never reads as if the reason were lost.
+func logDetail(entry SweepPREntry) string {
+	if detail := strings.TrimSpace(entry.Detail); detail != "" {
+		return detail
+	}
+	return entry.Status
 }
 
 // allTeamsError joins the errors of the teams that failed, so the CronJob's

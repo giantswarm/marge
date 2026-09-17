@@ -3,10 +3,16 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
 )
 
@@ -208,4 +214,83 @@ func TestHeadline_everyCategoryIsNamed(t *testing.T) {
 		Stale: 1, Cancelled: 1, Obsolete: 1, Waiting: 1, Skipped: 1,
 	}
 	require.NotContains(t, headline(counts), "other")
+}
+
+// refusingRepoMux serves one renovate PR whose repository grants no write
+// access, which is what a GitHub App without contents: write meets.
+func refusingRepoMux(t *testing.T) *github.Client {
+	t.Helper()
+	writeJSON := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/org/repo", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `{"name":"repo","permissions":{"admin":false,"push":false,"pull":true}}`)
+	})
+	mux.HandleFunc("GET /repos/org/repo/pulls/1", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `{"number":1,"title":"chore(deps): update all non-major dependencies","mergeable_state":"clean","user":{"login":"renovate[bot]"},
+			"head":{"sha":"aaa111","ref":"renovate/foo"},"base":{"sha":"bbb222","ref":"main"}}`)
+	})
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("GET /repos/org/repo/commits/refs/pull/1/head/status", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `{"state":"success","statuses":[{"context":"go-build","state":"success"}]}`)
+	})
+	mux.HandleFunc("GET /repos/org/repo/commits/refs/pull/1/head/check-runs", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `{"total_count":0,"check_runs":[]}`)
+	})
+	mux.HandleFunc("GET /repos/org/repo/issues/1/comments", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `[]`)
+	})
+	mux.HandleFunc("GET /repos/org/repo/pulls/1/reviews", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `[]`)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	baseURL := server.URL + "/"
+	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
+	require.NoError(t, err)
+	return client
+}
+
+// TestReport_namesTheRefusedApproval is the acceptance criterion the gazelle
+// run failed: the write-access guard refused every approval and the log said
+// "3 blocked" and nothing else. The log must name the repository and the
+// reason, so a permission trim is visible without anyone re-running the sweep
+// with --output json.
+func TestReport_namesTheRefusedApproval(t *testing.T) {
+	client := refusingRepoMux(t)
+
+	status, err := processOnceWithStatus(t.Context(), client, "giantswarm-marge[bot]",
+		[]pr.PRInfo{{Owner: "org", Repo: "repo", Number: 1}},
+		RunOptions{Quiet: true, NoTUI: true})
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	allTeamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: buildSweepResult(status, nil, nil)})
+
+	line := out.String()
+	require.Contains(t, line, "team bumblebee: 1 PRs")
+	require.Contains(t, line, "blocked org/repo#1")
+	require.Contains(t, line, "approve refused")
+	require.Contains(t, line, "no write access to the repository")
+}
+
+// TestReport_boundsALongSection keeps one team's bad day from pushing the
+// next team's summary out of the log.
+func TestReport_boundsALongSection(t *testing.T) {
+	result := SweepResult{Summary: SweepSummary{Total: 30, Failed: 30}}
+	for i := range 30 {
+		result.ActionRequired = append(result.ActionRequired, SweepPREntry{
+			Owner: "giantswarm", Repo: "marge", Number: i, Detail: "unit tests failed",
+		})
+	}
+
+	var out bytes.Buffer
+	allTeamsRun{Out: &out}.report(teamOutcome{Team: "bumblebee", Result: result})
+
+	require.Contains(t, out.String(), "and 20 more blocked")
+	require.Equal(t, 12, strings.Count(out.String(), "\n"), "the team line, 10 PRs and the remainder")
 }
