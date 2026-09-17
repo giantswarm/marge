@@ -92,14 +92,16 @@ service:
   # -- Service port; the container listens on 8080
   port: 8080
 
-# -- Container resources
+# -- Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
 resources:
   limits:
     cpu: 500m
     memory: 256Mi
+    ephemeral-storage: 1Gi
   requests:
     cpu: 50m
     memory: 64Mi
+    ephemeral-storage: 50Mi
 
 # -- Node selector for the pod
 nodeSelector: {}  # @schema additionalProperties: true
@@ -174,14 +176,16 @@ scheduleDefaults:
   successfulJobsHistoryLimit: 3
   # -- Failed Jobs kept
   failedJobsHistoryLimit: 3
-  # -- Container resources of a scheduled run
+  # -- Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
   resources:
     limits:
       cpu: 1
       memory: 512Mi
+      ephemeral-storage: 1Gi
     requests:
       cpu: 100m
       memory: 128Mi
+      ephemeral-storage: 50Mi
 
 # -- Scheduled runs, one CronJob each. An entry sweeps one team, so every team carries its own cadence and its own suspension. Needs marge.github.app. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit.
 schedules: []

@@ -339,7 +339,7 @@
         },
         "resources": {
             "type": "object",
-            "description": "Container resources",
+            "description": "Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.",
             "additionalProperties": false,
             "properties": {
                 "limits": {
@@ -347,6 +347,9 @@
                     "additionalProperties": false,
                     "properties": {
                         "cpu": {
+                            "type": "string"
+                        },
+                        "ephemeral-storage": {
                             "type": "string"
                         },
                         "memory": {
@@ -359,6 +362,9 @@
                     "additionalProperties": false,
                     "properties": {
                         "cpu": {
+                            "type": "string"
+                        },
+                        "ephemeral-storage": {
                             "type": "string"
                         },
                         "memory": {
@@ -391,7 +397,7 @@
                 },
                 "resources": {
                     "type": "object",
-                    "description": "Container resources of a scheduled run",
+                    "description": "Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.",
                     "additionalProperties": false,
                     "properties": {
                         "limits": {
@@ -400,6 +406,9 @@
                             "properties": {
                                 "cpu": {
                                     "type": "integer"
+                                },
+                                "ephemeral-storage": {
+                                    "type": "string"
                                 },
                                 "memory": {
                                     "type": "string"
@@ -411,6 +420,9 @@
                             "additionalProperties": false,
                             "properties": {
                                 "cpu": {
+                                    "type": "string"
+                                },
+                                "ephemeral-storage": {
                                     "type": "string"
                                 },
                                 "memory": {
