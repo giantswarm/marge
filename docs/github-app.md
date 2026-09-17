@@ -273,13 +273,30 @@ The manifest's `redirect_url` is where GitHub sends the one-time creation
 code. It is not an OAuth callback URL, and it is deliberately a localhost
 address.
 
-### Open: the OAuth callback URLs
+### The OAuth callback URLs
 
-The App carries no callback URL yet, so the interactive path cannot run. Each
-muster that hosts marge's MCP server adds one URL of the shape
-`https://<muster public URL>/oauth/proxy/callback` to the App's settings. A
-callback URL is added at any time and needs no new registration. This is done
-with the MCP mode (roadmap#4357).
+Every muster that hosts marge's MCP server adds one callback URL to the App's
+settings, of the shape `https://<muster public URL>/oauth/proxy/callback`.
+That is the OAuth `redirect_uri` muster sends when a person signs in, and
+GitHub matches it exactly: scheme, host, port if there is one, and the path,
+with no trailing slash. A callback URL is added at any time and needs no new
+registration, and a GitHub App holds several, so one entry per muster.
+
+Registered today:
+
+| muster | Callback URL |
+|--------|--------------|
+| gazelle | `https://muster.gazelle.awsprod.gigantic.io/oauth/proxy/callback` |
+
+A local agentlab adds its own, read from that lab's muster `publicUrl` rather
+than assumed: the lab's edge may carry a port, which is then part of the
+registered value.
+
+The App offers no setting for user-token expiry, so the lifetime of a person's
+grant is whatever GitHub issues. Read it from the token response at the first
+sign-in instead: an `expires_in` with a `refresh_token` means muster renews the
+grant through its refresh path, and neither means the grant stands until the
+person signs out.
 
 A permission change is an edit to the manifest **and** to this record, in the
 same pull request. Apply it on the App's settings page afterwards. Every
