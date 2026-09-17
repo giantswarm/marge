@@ -77,6 +77,7 @@ type headlinePart struct {
 func headlineParts(counts SweepSummary) []headlinePart {
 	return []headlinePart{
 		{counts.Merged, "merged"},
+		{counts.AutoMerge, "left to auto-merge"},
 		{counts.Remedied, "remedied"},
 		{counts.Refreshed, "refreshed"},
 		{counts.Retried, "retried"},

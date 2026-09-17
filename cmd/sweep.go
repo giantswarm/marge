@@ -48,7 +48,7 @@ func init() {
 	sweepCmd.Flags().StringSliceVar(&sweepOpts.PRs, "prs", nil, "Sweep only these pull requests of the scope, each a PR URL or owner/repo#number (repeatable, or comma-separated)")
 	sweepCmd.Flags().BoolVar(&sweepOpts.NoTUI, "no-tui", false, "Disable live table, print plain-text results instead")
 	sweepCmd.Flags().StringVar(&sweepFlags.output, "output", "table", "Output format: table or json")
-	sweepCmd.Flags().BoolVar(&sweepOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled")
+	sweepCmd.Flags().BoolVar(&sweepOpts.MergeAuto, "merge-auto", false, "Also merge PRs that have auto-merge enabled, instead of leaving the merge to GitHub")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name (default "+rules.DefaultOwner+"/"+rules.DefaultRepo+")")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from (default "+rules.DefaultRef+")")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")

@@ -104,7 +104,7 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 | `--org` | | | Limit to repos owned by this org or user |
 | `--repos-file` | | | File with `org/repo` entries (one per line; blank lines and `#` comments are ignored) to scan for bot PRs instead of searching GitHub. A query then keeps only the listed repos whose `org/repo` contains it (case-insensitive) |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
-| `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are observed only) |
+| `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default the merge itself is left to GitHub) |
 | `--security-patterns` | | _(built-in)_ | Add to the built-in security check pattern list (see below) |
 | `--rules-repo` | | `giantswarm/marge` | Repository the rule catalogue is read from, as `owner/name` |
 | `--rules-ref` | | `main` | Branch the rule catalogue is read from |
@@ -188,7 +188,7 @@ Each guard is enforced by the engine and covered by a scenario test; none has an
 - **Required checks.** The base branch's required status checks are read from its protection. A required context that is pending, or that nobody reported, is a wait (`Waiting for checks`), never a bypass, also when every red check on the head is pre-existing. A merge GitHub refuses for a check reason is a wait too.
 - **Red non-required check.** A failing check that is not required blocks the merge when the same check is green on the base head, or never ran there. When it is red on the base head too the failure is pre-existing: the PR merges and the check is named in the detail and in an evidence comment.
 - **Security check.** A failing check whose name matches the security pattern list is never merged past, even when it is red on the base head too. The PR gets a `security-blocked` evidence comment; a rescue may still be dispatched on it.
-- **Auto-merge.** A PR with GitHub auto-merge enabled is observed only; GitHub merges it.
+- **Auto-merge.** A PR with GitHub auto-merge enabled is classified, held or approved like any other, and then left to GitHub for the merge itself. GitHub fires auto-merge only once every requirement is met and does nothing to meet one, so the sweep still approves it and still updates a branch behind its base. A failing required check classifies the PR on the check, not on auto-merge. The `auto-merge` outcome is counted apart from `merged`, because nothing merged yet.
 - **Review rule.** A green PR that GitHub refuses to merge after marge's approval is `Awaiting approval`. marge never merges as an admin and never touches `enforce_admins`.
 - **Strict protection.** A green PR behind its base is brought up to date with *Update branch* and merges on a later sweep, once its checks ran on the new head.
 
@@ -382,7 +382,7 @@ The live table shows every PR's outcome, including the failure reason and any ai
 | `--prs` | | | Sweep only these pull requests of the scope, each a PR URL or `owner/repo#number` (repeatable, or comma-separated). It is a scope of its own: given alone, the repositories of the listed PRs are read |
 | `--no-tui` | | `false` | Disable the live table; print plain-text results instead |
 | `--output` | | `table` | `table` or `json` |
-| `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default these are observed only) |
+| `--merge-auto` | | `false` | Also merge PRs that have auto-merge enabled (by default the merge itself is left to GitHub) |
 | `--security-patterns` | | _(built-in)_ | Add to the built-in security check pattern list (see [Security check patterns](#security-check-patterns)) |
 
 ### `marge mark <pr-url> [flags]`

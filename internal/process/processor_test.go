@@ -503,17 +503,62 @@ func TestGuard_neverWritesBranchProtection(t *testing.T) {
 	require.Equal(t, []string{"bot-prs-sweep/merged"}, f.labelSet())
 }
 
-// TestGuard_autoMergeIsObservedOnly: GitHub merges what auto-merge is set
-// on; the sweep neither approves nor merges it.
-func TestGuard_autoMergeIsObservedOnly(t *testing.T) {
+// TestGuard_autoMergeIsHandedOffGreen: GitHub performs the merge, and the
+// sweep still does everything that lets it fire. The approval is one of the
+// requirements auto-merge waits on, so withholding it strands the PR.
+func TestGuard_autoMergeIsHandedOffGreen(t *testing.T) {
 	f := greenFixture()
 	f.autoMerge = true
 	got := f.run(t, nil)
 
 	require.Equal(t, pr.StatusAutoMerge, got.State, got.Detail)
+	require.Equal(t, int32(1), f.approveCalls.Load())
+	require.Zero(t, f.mergeCalls.Load(), "GitHub merges it, not the sweep")
+	require.Equal(t, []string{"bot-prs-sweep/auto-merge"}, f.labelSet())
+}
+
+// TestGuard_autoMergeFailingCheckIsClassifiedOnTheCheck: auto-merge never
+// fires on a PR whose required check failed, so reporting it as handed off
+// hides a PR that needs a person.
+func TestGuard_autoMergeFailingCheckIsClassifiedOnTheCheck(t *testing.T) {
+	f := greenFixture()
+	f.autoMerge = true
+	f.headChecks = map[string]string{"go-build": "failure", "lint": "success"}
+	got := f.run(t, nil)
+
+	require.NotEqual(t, pr.StatusAutoMerge, got.State, got.Detail)
 	require.Zero(t, f.approveCalls.Load())
 	require.Zero(t, f.mergeCalls.Load())
-	require.Equal(t, []string{"bot-prs-sweep/auto-merge"}, f.labelSet())
+	require.Equal(t, []string{"bot-prs-sweep/action-required"}, f.labelSet())
+}
+
+// TestGuard_autoMergeMajorIsStillHeld keeps the policy above the hand-off: a
+// major update waits for a person whether or not auto-merge is set.
+func TestGuard_autoMergeMajorIsStillHeld(t *testing.T) {
+	f := greenFixture()
+	f.autoMerge = true
+	f.title = "fix(deps): update module sigs.k8s.io/cluster-api to v2"
+	f.body = "| a | `v1.14.2` → `v2.0.0` |"
+	got := f.run(t, nil)
+
+	require.Equal(t, pr.StatusHeld, got.State, got.Detail)
+	require.Zero(t, f.approveCalls.Load())
+	require.Equal(t, []string{"bot-prs-sweep/action-required"}, f.labelSet())
+}
+
+// TestGuard_autoMergeBehindBaseIsRefreshed: GitHub fires auto-merge only once
+// every requirement is met and does nothing to meet one, so a branch behind
+// its base waits forever unless the sweep updates it.
+func TestGuard_autoMergeBehindBaseIsRefreshed(t *testing.T) {
+	f := greenFixture()
+	f.autoMerge = true
+	f.mergeableState = "behind"
+	got := f.run(t, nil)
+
+	require.Equal(t, pr.StatusRefreshed, got.State, got.Detail)
+	require.Equal(t, int32(1), f.updateBranchCalls.Load())
+	require.Equal(t, int32(1), f.approveCalls.Load())
+	require.Zero(t, f.mergeCalls.Load())
 }
 
 // TestGuard_eligibility applies the company defaults: majors and unreadable

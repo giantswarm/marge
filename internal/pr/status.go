@@ -2,6 +2,7 @@ package pr
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -325,7 +326,11 @@ func (s *PRStatus) UnhandledEntries() []StatusEntry {
 // executes) are counted separately from Failed: none of them is a genuine CI
 // failure and none of them belongs in the rescue path.
 type Counts struct {
-	Merged    int
+	Merged int
+	// AutoMerge counts the PRs handed to GitHub's own auto-merge. Nothing is
+	// merged yet: GitHub fires it when the last requirement is met, which can
+	// be on a later sweep or never.
+	AutoMerge int
 	Failed    int
 	Blocked   int
 	NoVerdict int
@@ -344,8 +349,10 @@ func (s *PRStatus) countsLocked() Counts {
 	var c Counts
 	for _, e := range s.entries {
 		switch e.State {
-		case StatusMerged, StatusAlreadyMerged, StatusAutoMerge:
+		case StatusMerged, StatusAlreadyMerged:
 			c.Merged++
+		case StatusAutoMerge:
+			c.AutoMerge++
 		case StatusFailed, StatusFailedSecurity, StatusConflict, StatusUntrustedAuthor, StatusHeld, StatusAwaitingApproval:
 			c.Failed++
 		case StatusBlockedCI:
@@ -569,12 +576,20 @@ func SplitActionRequired(entries []StatusEntry) (security, other []StatusEntry) 
 }
 
 func (s *PRStatus) MergedEntries() []StatusEntry {
+	return s.entriesInStates(StatusMerged, StatusAlreadyMerged)
+}
+
+// AutoMergeEntries lists the PRs left to GitHub's auto-merge.
+func (s *PRStatus) AutoMergeEntries() []StatusEntry {
+	return s.entriesInStates(StatusAutoMerge)
+}
+
+func (s *PRStatus) entriesInStates(states ...StatusState) []StatusEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var result []StatusEntry
 	for _, e := range s.entries {
-		switch e.State {
-		case StatusMerged, StatusAlreadyMerged, StatusAutoMerge:
+		if slices.Contains(states, e.State) {
 			result = append(result, e)
 		}
 	}

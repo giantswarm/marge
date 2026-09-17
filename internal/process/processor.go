@@ -269,11 +269,6 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		run.set(pr.StatusConflict, "merge conflict")
 		return
 	}
-	if pullReq.GetAutoMerge() != nil && !p.MergeAutoMerge {
-		run.set(pr.StatusAutoMerge, "auto-merge enabled; GitHub merges it")
-		return
-	}
-
 	run.set(pr.StatusChecking, "")
 	if !p.evaluateChecks(ctx, run) {
 		return
@@ -285,7 +280,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 
 	if p.DryRun {
-		detail := "dry-run: would " + p.plannedWrites()
+		detail := "dry-run: would " + p.plannedWrites(run)
 		if p.Actions.Has(ActionApprove) {
 			if err := p.ensureWriteAccess(ctx, run.info.Owner, run.info.Repo); err != nil {
 				detail = withNote(detail, writeAccessDetail(err))
@@ -304,17 +299,42 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		run.set(pr.StatusEligible, withNote("eligible; merge not in actions", preexistingNote(run)))
 		return
 	}
+	if p.handsOffToAutoMerge(run) {
+		p.handOffToAutoMerge(ctx, run)
+		return
+	}
 	p.merge(ctx, run)
+}
+
+// handsOffToAutoMerge reports whether GitHub, not marge, performs the merge.
+func (p *Processor) handsOffToAutoMerge(run *prRun) bool {
+	return run.pull.GetAutoMerge() != nil && !p.MergeAutoMerge
+}
+
+// handOffToAutoMerge leaves the merge to GitHub. GitHub fires auto-merge only
+// once every requirement is met and does nothing to meet one, so a branch
+// behind its base is brought up to date first; without that the PR waits
+// indefinitely for a person who does not know they are needed.
+func (p *Processor) handOffToAutoMerge(ctx context.Context, run *prRun) {
+	if run.pull.GetMergeableState() == "behind" {
+		p.updateBranch(ctx, run, "behind base; auto-merge needs an up-to-date branch")
+		return
+	}
+	run.set(pr.StatusAutoMerge, "auto-merge enabled; GitHub merges it")
 }
 
 // plannedWrites names the writes a dry run would perform on a green,
 // eligible PR.
-func (p *Processor) plannedWrites() string {
+func (p *Processor) plannedWrites(run *prRun) string {
 	var steps []string
 	if p.Actions.Has(ActionApprove) {
 		steps = append(steps, "approve")
 	}
-	if p.Actions.Has(ActionMerge) {
+	switch {
+	case !p.Actions.Has(ActionMerge):
+	case p.handsOffToAutoMerge(run):
+		steps = append(steps, "leave the merge to auto-merge")
+	default:
 		steps = append(steps, "merge (squash)")
 	}
 	if len(steps) == 0 {

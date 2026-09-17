@@ -189,6 +189,7 @@ func ColorizeStatus(state StatusState, detail string) string {
 
 func PrintPlainResults(w *os.File, status *PRStatus) {
 	merged := status.MergedEntries()
+	autoMerge := status.AutoMergeEntries()
 	securityFailed, otherFailed := SplitActionRequired(status.ActionRequired())
 	blocked := status.BlockedEntries()
 	skipped := status.SkippedEntries()
@@ -196,6 +197,13 @@ func PrintPlainResults(w *os.File, status *PRStatus) {
 	if len(merged) > 0 {
 		_, _ = fmt.Fprintf(w, "Merged (%d):\n", len(merged))
 		for _, e := range merged {
+			printPlainEntry(w, e)
+		}
+	}
+
+	if len(autoMerge) > 0 {
+		_, _ = fmt.Fprintf(w, "Left to auto-merge (%d):\n", len(autoMerge))
+		for _, e := range autoMerge {
 			printPlainEntry(w, e)
 		}
 		_, _ = fmt.Fprintln(w)
