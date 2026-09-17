@@ -130,32 +130,6 @@
                                     "type": "string",
                                     "description": "Key of the installation ID inside the Secret"
                                 },
-                                "oauth": {
-                                    "type": "object",
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "clientId": {
-                                            "type": "string",
-                                            "description": "OAuth client ID of the App. marge never reads it; it is held here so one place holds the App's credentials, and muster's GitHub connector references the same Secret."
-                                        },
-                                        "clientIdKey": {
-                                            "type": "string",
-                                            "description": "Key of the client ID inside the Secret"
-                                        },
-                                        "clientSecret": {
-                                            "type": "string",
-                                            "description": "OAuth client secret of the App. Do not reuse the shared github-oauth-client secret."
-                                        },
-                                        "clientSecretKey": {
-                                            "type": "string",
-                                            "description": "Key of the client secret inside the Secret"
-                                        },
-                                        "existingSecret": {
-                                            "type": "string",
-                                            "description": "Name of an existing Secret holding the OAuth client credentials. Takes precedence over the inline values. Defaults to marge.github.app.existingSecret, so one App Secret that carries the client keys below needs no second name."
-                                        }
-                                    }
-                                },
                                 "privateKey": {
                                     "type": "string",
                                     "description": "PEM private key of the App. The chart writes it into a Secret; prefer existingSecret in production. The values of this item live in 1Password, in the Team Bumblebee vault, item \"marge sweep GitHub App\"."
@@ -206,65 +180,7 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone, until a muster registers the server."
-                }
-            }
-        },
-        "muster": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "description": "Description muster shows for the server."
-                },
-                "github": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "authorizationEndpoint": {
-                            "type": "string",
-                            "description": "GitHub's authorization endpoint."
-                        },
-                        "issuer": {
-                            "type": "string",
-                            "description": "Issuer the grants are filed under, and the identity muster files them under, so it must match the value the other GitHub-backed servers use. GitHub publishes no discovery document, so the endpoints below are pinned instead."
-                        },
-                        "scopes": {
-                            "type": "string",
-                            "description": "OAuth scopes requested at sign-in. A GitHub App's user-to-server token takes its rights from the App's permissions and the person's own, so no scope is requested."
-                        },
-                        "tokenEndpoint": {
-                            "type": "string",
-                            "description": "GitHub's token endpoint."
-                        }
-                    }
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Name of the MCPServer resource. Defaults to the release fullname."
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Namespace the MCPServer is created in. Defaults to the release namespace; set it when muster watches another one."
-                },
-                "register": {
-                    "type": "boolean",
-                    "description": "Register the MCP server with muster, so a person reaches it through the gateway as themselves. Needs the App's OAuth client credentials and a muster in the cluster."
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": "Seconds muster waits on a connection to this server. The sweep reads the checks of every PR in a team's queue, which passes the CRD default of 30. The CRD caps the value at 300.",
-                    "maximum": 300,
-                    "minimum": 1
-                },
-                "toolGroup": {
-                    "type": "string",
-                    "description": "Value of the agent-platform.giantswarm.io/tool-group label, which is how the portal and the toolset presets group a server. Empty leaves the label off."
-                },
-                "toolPrefix": {
-                    "type": "string",
-                    "description": "Prefix muster gives the tools of this server, so they are reachable as x_<prefix>_<tool>."
+                    "description": "Run the MCP server: the Deployment, its Service and its NetworkPolicy. Turn it off on an installation that runs the scheduled sweep alone. Registering the server with a muster is the platform's job: an MCPServer that points at the Service URL, with the muster's own GitHub client."
                 }
             }
         },

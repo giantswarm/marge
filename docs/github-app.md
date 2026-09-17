@@ -2,12 +2,13 @@
 
 marge acts on GitHub through one GitHub App, owned by the `giantswarm`
 organization and installed on all repositories. The App is registered and its
-permissions are settled. The App serves both paths:
+permissions are settled. The App serves the unattended path; the interactive path is the person's own token:
 
-- **Interactive.** The App's user-to-server flow backs muster's GitHub
-  connector. The token is the person's. The person's effective rights are the
-  intersection of the App's permissions and their own. Nobody can do more
-  through a sweep than a sweep is meant to do, not even an organization owner.
+- **Interactive.** Not the App. A person reaches marge through muster, and
+  muster attaches the GitHub grant that person already holds for the muster's
+  other GitHub-backed servers, minted by the shared OAuth client. The token
+  is the person's, with the person's own rights. The MCPServer that
+  registers marge is declared on the platform side, not by the chart.
 - **Unattended.** Installation tokens, minted on demand from the private key,
   back the scheduled sweep and the weekly rescue run. GitHub sees the App.
 
@@ -15,7 +16,7 @@ permissions are settled. The App serves both paths:
 the environment carries the App credential, and with a token otherwise. The
 scheduled sweep in the chart sets the credential, so it acts as the App; a
 person running the CLI sets none and keeps the token path. The interactive
-path still needs the callback URLs (roadmap#4357).
+path runs through muster (roadmap#4357).
 
 The target is that no personal access token is used anywhere.
 
@@ -210,19 +211,16 @@ the `Team Bumblebee` vault, in one item named `marge sweep GitHub App`.
 | Secret | Used by | Note |
 |---|---|---|
 | Private key (PEM) | the unattended path, to mint installation tokens | An App can hold several keys at once, which is what makes a rotation with no downtime possible |
-| OAuth client ID and client secret | the interactive path, through muster's GitHub connector | The App's **own** client credentials. Do not reuse the shared `github-oauth-client` secret. A broader shared client would widen the permission ceiling of every sweep |
+| OAuth client ID and client secret | nothing | muster signs people in with the shared `github-oauth-client`, because it keeps one client per issuer. The App's client stays registered and unused |
 | Webhook secret | nothing | Webhooks are off. Keep the value; do not publish it |
 
 The chart puts them in the cluster. `marge.github.app.existingSecret` names a
 Secret that already holds `github-app-id`, `github-app-installation-id` and
 `github-app-private-key`, which is what a real installation uses;
 `marge.github.app.privateKey` and its siblings write them inline, for a test.
-`marge.github.app.oauth` holds the App's own client credentials in the same
-Secret, for muster's `clientCredentialsSecretRef` to reference. marge itself
-never reads them. muster reads them with its own ServiceAccount, whose chart
-grants `get` on Secrets in its release namespace only: when marge runs in
-another namespace, that namespace goes into muster's
-`rbac.additionalSecretNamespaces`, or every sign-in fails with Forbidden.
+The chart registers nothing with muster. The platform declares the
+MCPServer next to the muster's other GitHub-backed servers, with their shared
+client.
 
 ### Rotation
 
@@ -234,15 +232,6 @@ Rotate the private key:
 3. Confirm that a token mints with the new key. Once marge mints its own,
    confirm it on a sweep.
 4. Delete the old key on the settings page.
-
-Rotate the client secret:
-
-1. Generate a second client secret on the App's settings page.
-2. Put it in the 1Password item and update muster's
-   `clientCredentialsSecretRef`.
-3. Sign in once to confirm the new secret works. Every existing grant stays
-   valid; the secret authenticates marge to GitHub, not the person.
-4. Delete the old client secret.
 
 A leaked private key is an incident. Delete the key on the settings page
 first, then rotate. The App's installations survive; only the key dies.
@@ -278,28 +267,14 @@ address.
 
 ### The OAuth callback URLs
 
-Every muster that hosts marge's MCP server adds one callback URL to the App's
-settings, of the shape `https://<muster public URL>/oauth/proxy/callback`.
-That is the OAuth `redirect_uri` muster sends when a person signs in, and
-GitHub matches it exactly: scheme, host, port if there is one, and the path,
-with no trailing slash. A callback URL is added at any time and needs no new
-registration, and a GitHub App holds several, so one entry per muster.
-
-Registered today:
+The App holds one callback URL per muster that once hosted marge's sign-in,
+of the shape `https://<muster public URL>/oauth/proxy/callback`. Since muster
+signs people in with the shared client, these entries are unused. They stay
+registered and harmless: a callback URL grants nothing on its own.
 
 | muster | Callback URL |
 |--------|--------------|
 | gazelle | `https://muster.gazelle.awsprod.gigantic.io/oauth/proxy/callback` |
-
-A local agentlab adds its own, read from that lab's muster `publicUrl` rather
-than assumed: the lab's edge may carry a port, which is then part of the
-registered value.
-
-The App offers no setting for user-token expiry, so the lifetime of a person's
-grant is whatever GitHub issues. Read it from the token response at the first
-sign-in instead: an `expires_in` with a `refresh_token` means muster renews the
-grant through its refresh path, and neither means the grant stands until the
-person signs out.
 
 A permission change is an edit to the manifest **and** to this record, in the
 same pull request. Apply it on the App's settings page afterwards. Every
