@@ -81,10 +81,13 @@ globally disabled rule. Extract the constant, or tune the rule in the
 repository's own configuration with the reason written down.
 
 **Never suppress a vulnerability.** A red security scan is fixed, not
-ignored. A `.nancy-ignore` entry is time-boxed, carries a justification, and
-is a last resort when upstream has no fixed release.
+ignored. You do not write a `.nancy-ignore` entry: nancy-fixer owns the bump
+and the time-boxed ignore. If an ignore is the only remedy left, mark the PR
+`blocked` and name nancy-fixer.
 
-**Ask for a review before you push.** Use the code-reviewer subagent.
+**Ask for a review before you push**, with whatever review subagent the run
+declares. If it declares none, read your diff against the failing log once
+more before you push.
 
 ## Merging
 
@@ -121,8 +124,8 @@ calling it a flake is not.
 Every PR you leave open ends in a marker. A plain comment is invisible to the
 next sweep, so the sweep would hand you the same PR again next week.
 
-- `failed` — you attempted this code and could not fix it.
-- `blocked` — the fix is known and waits on something outside the repository:
+- `failed`: you attempted this code and could not fix it.
+- `blocked`: the fix is known and waits on something outside the repository:
   an upstream release, an ecosystem that is not ready, a decision.
 
 Write the outcome, the reason and the estimated cost.

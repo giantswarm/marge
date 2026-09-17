@@ -10,31 +10,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The hint table's rows cite the runbook rows they come from, in the last
-// cell: "| A stale `go.sum` ... | `go mod tidy`, commit, push | 1 |".
-var hintRow = regexp.MustCompile(`(?m)^\|[^|]+\|[^|]+\|\s*([0-9, and]+?)\s*\|$`)
+// A citation of runbook rows, as both pages and every rule write it:
+// "1", "36, 46", "7, 9, 15 and 31".
+const citation = `\d+(?:(?:,\s*|\s+and\s+)\d+)*`
 
 // A rule's provenance: "source: runbook rows 7, 9, 15 and 31 (L125, L127)".
-var ruleSource = regexp.MustCompile(`(?m)^source: runbook rows? ([0-9, and]+)`)
+var ruleSource = regexp.MustCompile(`(?m)^source: runbook rows? (` + citation + `)`)
+
+var citedRows = regexp.MustCompile(`^` + citation + `$`)
 
 var number = regexp.MustCompile(`\d+`)
 
-func rows(t *testing.T, matches [][]string) map[string]bool {
-	t.Helper()
+// row is one body row of a table whose last cell cites the runbook rows it
+// comes from. A header or a separator cites nothing, so it is not a row.
+type row struct {
+	what   string
+	remedy string
+	cited  []string
+}
+
+func table(markdown string) []row {
+	var rows []row
+	for _, line := range strings.Split(markdown, "\n") {
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		if len(cells) < 3 {
+			continue
+		}
+		cited := strings.TrimSpace(cells[len(cells)-1])
+		if !citedRows.MatchString(cited) {
+			continue
+		}
+		rows = append(rows, row{
+			what:   strings.TrimSpace(cells[0]),
+			remedy: strings.TrimSpace(cells[1]),
+			cited:  number.FindAllString(cited, -1),
+		})
+	}
+	return rows
+}
+
+func cited(rows []row) map[string]bool {
 	found := make(map[string]bool)
-	for _, match := range matches {
-		for _, row := range number.FindAllString(match[1], -1) {
-			found[row] = true
+	for _, one := range rows {
+		for _, number := range one.cited {
+			found[number] = true
 		}
 	}
 	return found
 }
 
-func skill(t *testing.T) string {
+func read(t *testing.T, path string) string {
 	t.Helper()
-	page, err := os.ReadFile("SKILL.md")
+	content, err := os.ReadFile(path)
 	require.NoError(t, err)
-	return string(page)
+	return string(content)
 }
 
 // A hint for a pattern the engine now fixes by itself is spent tokens on
@@ -42,7 +71,7 @@ func skill(t *testing.T) string {
 // to a rule and deleting its hint is one pull request; this test is what
 // makes the deletion mandatory rather than remembered.
 func TestHintsDoNotRepeatTheRules(t *testing.T) {
-	hinted := rows(t, hintRow.FindAllStringSubmatch(skill(t), -1))
+	hinted := cited(table(read(t, "SKILL.md")))
 	require.NotEmpty(t, hinted, "the hint table parsed empty")
 
 	files, err := os.ReadDir("../../rules")
@@ -51,56 +80,69 @@ func TestHintsDoNotRepeatTheRules(t *testing.T) {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".yaml") {
 			continue
 		}
-		rule, err := os.ReadFile("../../rules/" + file.Name())
-		require.NoError(t, err)
-		for row := range rows(t, ruleSource.FindAllStringSubmatch(string(rule), -1)) {
-			require.False(t, hinted[row],
-				"rule %s covers runbook row %s, which SKILL.md still hints", file.Name(), row)
+		rule := read(t, "../../rules/"+file.Name())
+		for _, source := range ruleSource.FindAllStringSubmatch(rule, -1) {
+			for _, number := range number.FindAllString(source[1], -1) {
+				require.False(t, hinted[number],
+					"rule %s covers runbook row %s, which SKILL.md still hints", file.Name(), number)
+			}
 		}
 	}
 }
 
-// docs/patterns.md decides which patterns reach a person or an agent. The
-// three sections below are the ones a rescue run acts on; the others are
-// marked and left, and a hint for them would send the model to work the sweep
-// refuses to do. Every row of those sections is a hint, and every hint is one
-// of those rows.
+// docs/patterns.md decides which patterns reach a person or an agent. Every
+// row of a section a rescue run acts on is a hint, and every hint is one of
+// those rows. The other sections are marked and left, and a hint for them
+// would send the model to work the sweep refuses to do.
 func TestHintsMatchThePatternsPage(t *testing.T) {
-	page, err := os.ReadFile("../../docs/patterns.md")
-	require.NoError(t, err)
-
-	const section = "### "
 	forTheAgent := []string{
 		"Waiting on a branch-writing remedy",
 		"Fixed on the default branch first",
 		"Needing a person or an agent",
 	}
-
-	// The CVE rows are on the page for completeness only. Herald's
-	// nancy-fixer performs the bump and the time-boxed ignore, and marge
-	// never re-implements that remedy, so a hint would send the model to do
-	// another tool's work.
-	herald := []string{"23", "51", "81", "98"}
+	notForTheAgent := []string{
+		"Held by a team decision",
+		"Belonging upstream",
+	}
 
 	expected := make(map[string]bool)
-	for _, block := range strings.Split(string(page), section)[1:] {
-		heading, body, _ := strings.Cut(block, "\n")
-		if !slices.Contains(forTheAgent, strings.TrimSpace(heading)) {
+	var seen []string
+	var heading string
+	for _, line := range strings.Split(read(t, "../../docs/patterns.md"), "\n") {
+		if after, found := strings.CutPrefix(line, "### "); found {
+			heading = strings.TrimSpace(after)
+			seen = append(seen, heading)
+			require.True(t,
+				slices.Contains(forTheAgent, heading) || slices.Contains(notForTheAgent, heading),
+				"docs/patterns.md section %q is in neither list; decide whether a rescue run acts on it", heading)
+		} else if strings.HasPrefix(line, "## ") {
+			heading = ""
+		}
+		if !slices.Contains(forTheAgent, heading) {
 			continue
 		}
-		for row := range rows(t, hintRow.FindAllStringSubmatch(body, -1)) {
-			if !slices.Contains(herald, row) {
-				expected[row] = true
+		for _, one := range table(line) {
+			// nancy-fixer performs the bump and the time-boxed ignore,
+			// and marge never re-implements that remedy, so a hint would
+			// send the model to do another tool's work.
+			if strings.Contains(one.remedy, "nancy-fixer") {
+				continue
+			}
+			for _, number := range one.cited {
+				expected[number] = true
 			}
 		}
 	}
+	for _, section := range forTheAgent {
+		require.Contains(t, seen, section, "docs/patterns.md has no section %q", section)
+	}
 	require.NotEmpty(t, expected, "no agent-facing section parsed out of docs/patterns.md")
 
-	hinted := rows(t, hintRow.FindAllStringSubmatch(skill(t), -1))
-	for row := range expected {
-		require.True(t, hinted[row], "docs/patterns.md row %s reaches the agent with no hint in SKILL.md", row)
+	hinted := cited(table(read(t, "SKILL.md")))
+	for number := range expected {
+		require.True(t, hinted[number], "docs/patterns.md row %s reaches the agent with no hint in SKILL.md", number)
 	}
-	for row := range hinted {
-		require.True(t, expected[row], "SKILL.md hints runbook row %s, which docs/patterns.md does not send to an agent", row)
+	for number := range hinted {
+		require.True(t, expected[number], "SKILL.md hints runbook row %s, which docs/patterns.md does not send to an agent", number)
 	}
 }
