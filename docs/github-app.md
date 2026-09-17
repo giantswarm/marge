@@ -219,7 +219,10 @@ Secret that already holds `github-app-id`, `github-app-installation-id` and
 `marge.github.app.privateKey` and its siblings write them inline, for a test.
 `marge.github.app.oauth` holds the App's own client credentials in the same
 Secret, for muster's `clientCredentialsSecretRef` to reference. marge itself
-never reads them.
+never reads them. muster reads them with its own ServiceAccount, whose chart
+grants `get` on Secrets in its release namespace only: when marge runs in
+another namespace, that namespace goes into muster's
+`rbac.additionalSecretNamespaces`, or every sign-in fails with Forbidden.
 
 ### Rotation
 
