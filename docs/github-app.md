@@ -158,14 +158,18 @@ GET /repos/giantswarm/marge -> .permissions:
 }
 ```
 
-| Installation permissions | Reported `permissions.push` | What `ensureWriteAccess` does |
+| Token permissions | Reported `permissions.push` | What `ensureWriteAccess` does |
 |---|---|---|
 | `Pull requests: write` + `Contents: write` | present, `false` (measured 2026-09-17) | allows: the mint reports `contents: write` |
-| `Pull requests: write` alone | present, `false` (not measured; see roadmap#4368) | refuses: the mint reports no `contents: write` |
+| `Pull requests: write` alone | *not measured yet* | refuses: the mint reports no `contents: write` |
 
-The second row needs a scratch App on a throwaway repository. The production
-App's permissions are organization-wide, so removing `Contents: write` from it
-would stop the daily merge path for everybody.
+The column names the permissions of the **token**, not of the installation.
+The mint narrows a token to any subset of what the installation holds, which
+is how the second row is measured: pass `-p '{"pull_requests":"write"}'` to
+the probe. The installation keeps every permission it has, so the daily merge
+path is never at risk. Do not measure the second row by trimming the
+production App: its permissions are organization-wide, and removing
+`Contents: write` would stop the merge path for every team.
 
 Two more results from the same test, both permanent:
 
