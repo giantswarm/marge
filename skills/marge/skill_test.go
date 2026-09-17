@@ -1,4 +1,4 @@
-package margerescue
+package marge
 
 import (
 	"os"
@@ -71,7 +71,7 @@ func read(t *testing.T, path string) string {
 // to a rule and deleting its hint is one pull request; this test is what
 // makes the deletion mandatory rather than remembered.
 func TestHintsDoNotRepeatTheRules(t *testing.T) {
-	hinted := cited(table(read(t, "SKILL.md")))
+	hinted := cited(table(read(t, "references/hazards.md")))
 	require.NotEmpty(t, hinted, "the hint table parsed empty")
 
 	files, err := os.ReadDir("../../rules")
@@ -84,7 +84,7 @@ func TestHintsDoNotRepeatTheRules(t *testing.T) {
 		for _, source := range ruleSource.FindAllStringSubmatch(rule, -1) {
 			for _, number := range number.FindAllString(source[1], -1) {
 				require.False(t, hinted[number],
-					"rule %s covers runbook row %s, which SKILL.md still hints", file.Name(), number)
+					"rule %s covers runbook row %s, which references/hazards.md still hints", file.Name(), number)
 			}
 		}
 	}
@@ -138,11 +138,38 @@ func TestHintsMatchThePatternsPage(t *testing.T) {
 	}
 	require.NotEmpty(t, expected, "no agent-facing section parsed out of docs/patterns.md")
 
-	hinted := cited(table(read(t, "SKILL.md")))
+	hinted := cited(table(read(t, "references/hazards.md")))
 	for number := range expected {
-		require.True(t, hinted[number], "docs/patterns.md row %s reaches the agent with no hint in SKILL.md", number)
+		require.True(t, hinted[number], "docs/patterns.md row %s reaches the agent with no hint in references/hazards.md", number)
 	}
 	for number := range hinted {
-		require.True(t, expected[number], "SKILL.md hints runbook row %s, which docs/patterns.md does not send to an agent", number)
+		require.True(t, expected[number], "references/hazards.md hints runbook row %s, which docs/patterns.md does not send to an agent", number)
+	}
+}
+
+// A tool the server does not serve is a call the model cannot make, and a
+// served tool the page leaves out is a call it will not make. The prefix is
+// muster's: it serves marge's tools as x_marge_<name>.
+var servedTool = regexp.MustCompile(`mcp\.NewTool\("([a-z_]+)"`)
+
+var pageTool = regexp.MustCompile(`x_marge_([a-z_]+)`)
+
+func TestSkillNamesEveryServedTool(t *testing.T) {
+	served := make(map[string]bool)
+	for _, match := range servedTool.FindAllStringSubmatch(read(t, "../../cmd/serve.go"), -1) {
+		served[match[1]] = true
+	}
+	require.NotEmpty(t, served, "no tool parsed out of cmd/serve.go")
+
+	page := read(t, "SKILL.md")
+	named := make(map[string]bool)
+	for _, match := range pageTool.FindAllStringSubmatch(page, -1) {
+		named[match[1]] = true
+	}
+	for name := range served {
+		require.True(t, named[name], "cmd/serve.go serves %q, which SKILL.md does not name as x_marge_%s", name, name)
+	}
+	for name := range named {
+		require.True(t, served[name], "SKILL.md names x_marge_%s, which cmd/serve.go does not serve", name)
 	}
 }
