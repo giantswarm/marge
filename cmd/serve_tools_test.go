@@ -21,13 +21,23 @@ func call(arguments map[string]any) mcp.CallToolRequest {
 // comparison below: what a person running the CLI would get.
 func cliOptions(t *testing.T, opts RunOptions, actions string) RunOptions {
 	t.Helper()
-	previousActions, previousOutput := sweepFlags.actions, sweepFlags.output
-	t.Cleanup(func() { sweepFlags.actions, sweepFlags.output = previousActions, previousOutput })
+	previousActions, previousOutput, previousTeams := sweepFlags.actions, sweepFlags.output, sweepFlags.teams
+	t.Cleanup(func() {
+		sweepFlags.actions, sweepFlags.output, sweepFlags.teams = previousActions, previousOutput, previousTeams
+	})
 	sweepFlags.actions = actions
+	// The team scope reaches the command through --team, so the equivalent
+	// invocation names the team there.
+	sweepFlags.teams = nil
+	if opts.Team != "" {
+		sweepFlags.teams = []string{opts.Team}
+		opts.Team = ""
+	}
 	// The MCP result is JSON, so the equivalent invocation is the one that
 	// prints JSON: it is what makes the CLI quiet too.
 	sweepFlags.output = "json"
-	require.NoError(t, resolveSweepOptions(&opts))
+	_, err := resolveSweepOptions(&opts)
+	require.NoError(t, err)
 	return opts
 }
 
