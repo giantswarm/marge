@@ -76,7 +76,7 @@ func graphQL(ctx context.Context, client *github.Client, query string, variables
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 512))

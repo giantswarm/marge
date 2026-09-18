@@ -65,16 +65,24 @@ the company defaults. `prs` narrows a call to single PRs of that scope.
 
 | Tool | Writes | Arguments beyond the scope |
 |---|---|---|
-| `x_marge_list` | no | `refresh` |
+| `x_marge_list` | no | `refresh`, `teams` |
 | `x_marge_sweep` | yes | `dry_run`, `actions`, `merge_auto`, `security_patterns` |
 | `x_marge_remedy` | yes | `pr_url` (required), `rule`, `team`, `dry_run` |
 | `x_marge_mark` | yes | `pr_url` (required), `outcome` (`failed` or `blocked`), `reason`, `tool`, `dry_run` |
 
 `x_marge_list` with `refresh: false` reads back the label of the last sweep
-and costs one search for the whole scope. `refresh: true` classifies every PR
-again and costs a check read per PR, and it returns the evidence, the update
-type, the policy and the prior rescue of each. Prefer the cheap read. Refresh
-when the answer must be current.
+and costs the discovery of the scope and nothing more: one search for a query
+scope, or one listing per twenty-five repositories for a team scope.
+`refresh: true` classifies every PR again and costs a PR read and a check read
+per PR, and it returns the evidence, the update type, the policy and the prior
+rescue of each. Prefer the cheap read. Refresh when the answer must be
+current.
+
+`teams` reads several teams in one call, each under its own policy. The answer
+is then `{"teams": [{"team": ..., "result": ...}]}`, and a team whose files
+are missing carries an `error` instead of a `result`. Use it instead of one
+call per team: the teams share one discovery, so their repository lists are
+read once.
 
 `x_marge_sweep` runs the steps `classify`, `approve`, `merge`, `refresh`,
 `retry`, `remedy` and `mark`, in that order. `actions` selects a subset.

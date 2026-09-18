@@ -217,8 +217,13 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	// Group PRs by owner/repo, then fan out under the policy's concurrency.
-	forEachPR(pr.GroupByRepo(prs), opts.Policies.Base().Concurrency, func(info pr.PRInfo) {
+	// Group PRs by owner/repo, then fan out under the policy's concurrency,
+	// or under the read bound when the run writes nothing.
+	concurrency := opts.Policies.Base().Concurrency
+	if opts.DryRun && opts.Actions.ClassifyOnly() {
+		concurrency = pr.ReadConcurrency
+	}
+	forEachPR(pr.GroupByRepo(prs), concurrency, func(info pr.PRInfo) {
 		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
 	})
