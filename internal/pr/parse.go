@@ -42,6 +42,9 @@ var dependencyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)update dependency ([@\w\-./]+(?:/[@\w\-./]+)*)`),
 	// Renovate: "Update module foo/bar to v1.2.3"
 	regexp.MustCompile(`(?i)update module ([@\w\-./]+(?:/[@\w\-./]+)*)`),
+	// Renovate: the managers that name themselves before the dependency.
+	// A vendir source is a URL, so the name may carry a colon.
+	regexp.MustCompile(`(?i)update (?:helm release|ocm component|vendir|plugin) ([@\w\-./:]+)`),
 	// Renovate: "Update github-actions action foo/bar to v1.2.3"
 	regexp.MustCompile(`(?i)update [\w\-]+ action ([@\w\-./]+(?:/[@\w\-./]+)*)`),
 	// Renovate: "Update actions/checkout action to v5.1.0" -- the action
@@ -79,6 +82,28 @@ var dependencyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^(configure renovate)$`),
 	// Dependabot onboarding: "Set package ecosystem to 'gomod' in dependabot config"
 	regexp.MustCompile(`(?i)set package[- ]ecosystem to '?([\w\-]+)'?`),
+}
+
+// onboardingPatterns are the bot titles that set a bot up rather than move a
+// dependency. They carry a name for grouping, and they name nothing a reader
+// would call a dependency.
+var onboardingPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^(configure renovate)$`),
+	regexp.MustCompile(`(?i)set package[- ]ecosystem to '?([\w\-]+)'?`),
+}
+
+// ExtractUpdatedDependency returns the dependency a title moves, and "" for a
+// title that moves none: an onboarding PR, or a title in no known shape. It
+// is what a reader is shown. ExtractDependencyName is the grouping key and
+// answers for an onboarding title too, so the two differ there.
+func ExtractUpdatedDependency(title string) string {
+	text := stripConventionalCommitPrefix(strings.TrimSpace(title))
+	for _, pat := range onboardingPatterns {
+		if pat.MatchString(text) {
+			return ""
+		}
+	}
+	return ExtractDependencyName(title)
 }
 
 // IsDependencyUpdateTitle returns true if the PR title looks like an automated

@@ -558,3 +558,30 @@ func TestExtractDependencyName_renovateManagerAfterName(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractUpdatedDependency covers what a reader is shown: the dependency
+// a title moves, and nothing for a title that moves none.
+func TestExtractUpdatedDependency(t *testing.T) {
+	for title, want := range map[string]string{
+		"chore(deps): update ocm component backstage to v2.28.1":                                "backstage",
+		"chore(deps): update helm release cilium to v1.18.2":                                    "cilium",
+		"chore(deps): update vendir https://github.com/kubernetes-sigs/agent-sandbox to v1.0.3": "https://github.com/kubernetes-sigs/agent-sandbox",
+		"chore(deps): update dependency typescript to v7":                                       "typescript",
+		"Configure Renovate": "",
+		"Set package-ecosystem to 'gomod' in dependabot config": "",
+		"Remediate Nancy findings on main":                      "",
+	} {
+		if got := ExtractUpdatedDependency(title); got != want {
+			t.Errorf("ExtractUpdatedDependency(%q) = %q, want %q", title, got, want)
+		}
+	}
+}
+
+// TestExtractDependencyName_keepsTheOnboardingKey guards the grouping key:
+// an onboarding PR still groups under its own name, which is what
+// superseded, fingerprint and grouping read.
+func TestExtractDependencyName_keepsTheOnboardingKey(t *testing.T) {
+	if got := ExtractDependencyName("Configure Renovate"); got != "Configure Renovate" {
+		t.Errorf("ExtractDependencyName = %q, want the title", got)
+	}
+}
