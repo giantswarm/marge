@@ -2,6 +2,7 @@ package marge
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -155,11 +156,20 @@ var servedTool = regexp.MustCompile(`mcp\.NewTool\("([a-z_]+)"`)
 var pageTool = regexp.MustCompile(`x_marge_([a-z_]+)`)
 
 func TestSkillNamesEveryServedTool(t *testing.T) {
+	// Every file of cmd, because a tool declares itself next to its handler
+	// and only the small ones live in serve.go.
+	sources, err := filepath.Glob("../../cmd/*.go")
+	require.NoError(t, err)
 	served := make(map[string]bool)
-	for _, match := range servedTool.FindAllStringSubmatch(read(t, "../../cmd/serve.go"), -1) {
-		served[match[1]] = true
+	for _, source := range sources {
+		if strings.HasSuffix(source, "_test.go") {
+			continue
+		}
+		for _, match := range servedTool.FindAllStringSubmatch(read(t, source), -1) {
+			served[match[1]] = true
+		}
 	}
-	require.NotEmpty(t, served, "no tool parsed out of cmd/serve.go")
+	require.NotEmpty(t, served, "no tool parsed out of cmd")
 
 	page := read(t, "SKILL.md")
 	named := make(map[string]bool)
@@ -167,9 +177,9 @@ func TestSkillNamesEveryServedTool(t *testing.T) {
 		named[match[1]] = true
 	}
 	for name := range served {
-		require.True(t, named[name], "cmd/serve.go serves %q, which SKILL.md does not name as x_marge_%s", name, name)
+		require.True(t, named[name], "cmd serves %q, which SKILL.md does not name as x_marge_%s", name, name)
 	}
 	for name := range named {
-		require.True(t, served[name], "SKILL.md names x_marge_%s, which cmd/serve.go does not serve", name)
+		require.True(t, served[name], "SKILL.md names x_marge_%s, which cmd does not serve", name)
 	}
 }
