@@ -31,8 +31,8 @@ func storedServer(t *testing.T, pulls []*github.PullRequest) (toolset, *[]string
 		switch r.URL.Path {
 		case "/user":
 			_ = json.NewEncoder(w).Encode(&github.User{Login: new("me")})
-		case "/repos/org/one/pulls":
-			_ = json.NewEncoder(w).Encode(pulls)
+		case "/graphql":
+			graphQLPulls(t, map[string][]*github.PullRequest{"org/one": pulls}, nil)(w, r)
 		default:
 			http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
 		}

@@ -17,16 +17,13 @@ import (
 // only the four bots' PRs are kept.
 func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /repos/org/ok/pulls", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]*github.PullRequest{
+	mux.HandleFunc("POST /graphql", graphQLPulls(t, map[string][]*github.PullRequest{
+		"org/ok": {
 			{Number: new(1), Title: new("chore(deps): update x"), HTMLURL: new("https://github.com/org/ok/pull/1"), User: &github.User{Login: new("renovate[bot]")}, Labels: []*github.Label{{Name: "dependencies"}, {Name: "marge/action-required"}}},
 			{Number: new(2), Title: new("feat: by a person"), HTMLURL: new("https://github.com/org/ok/pull/2"), User: &github.User{Login: new("quentin")}},
 			{Number: new(3), Title: new("chore: align files"), HTMLURL: new("https://github.com/org/ok/pull/3"), User: &github.User{Login: new("giantswarm-align-files[bot]")}},
-		})
-	})
-	mux.HandleFunc("GET /repos/org/broken/pulls", func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, `{"message":"boom"}`, http.StatusInternalServerError)
-	})
+		},
+	}, map[string]string{"org/broken": "boom"}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	baseURL := server.URL + "/"
