@@ -1297,7 +1297,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 			Reason: string(e.ObsoleteReason),
 			Kind:   string(e.Kind),
 		}
-		entry.Dependency = pr.ExtractDependencyName(e.PR.Title)
+		entry.Dependency = pr.ExtractUpdatedDependency(e.PR.Title)
 		entry.VersionFrom, entry.VersionTo = pr.ExtractVersions(e.PR.Title)
 		if e.UpdateType != "" {
 			entry.UpdateType = string(e.UpdateType)
