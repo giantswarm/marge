@@ -328,7 +328,7 @@ func sweepTool() mcp.Tool {
 			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
 		),
 		mcp.WithString("actions",
-			mcp.Description("Comma-separated sweep steps to run, in fixed order: classify, approve, merge, refresh, retry, mark (default: all). refresh updates stale branches from their base; retry reruns the CircleCI workflow of auto-cancelled builds on the same head from its failed jobs, falling back to a single-build retry (needs CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); mark writes markers and evidence comments."),
+			mcp.Description("Comma-separated sweep steps to run, in fixed order: classify, changelog, approve, merge, refresh, retry, mark (default: all). changelog commits the team's changelog entry before anything is approved, unless the team's policy switches it off; the PR then waits for the CI that commit started. refresh updates stale branches from their base; retry reruns the CircleCI workflow of auto-cancelled builds on the same head from its failed jobs, falling back to a single-build retry (needs CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); mark writes markers and evidence comments."),
 		),
 		mcp.WithString("security_patterns",
 			mcp.Description("Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related"),

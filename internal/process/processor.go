@@ -275,6 +275,13 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		p.setConflict(run, "merge conflict")
 		return
 	}
+	// The entry goes in before the checks are read, and the PR then waits
+	// for the CI the commit started. Reading the checks first and writing
+	// after would decide the PR on a head that no longer exists.
+	if p.changelogEntry(ctx, run, resolved) {
+		return
+	}
+
 	run.set(pr.StatusChecking, "")
 	if !p.evaluateChecks(ctx, run) {
 		return

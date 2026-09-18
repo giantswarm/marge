@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -53,6 +54,10 @@ type guardFixture struct {
 	// protectionForbidden makes GitHub answer 403 to the protection read,
 	// as it does for a caller who is not a repository admin.
 	protectionForbidden bool
+	// changelog is the content of the repository's CHANGELOG.md; empty
+	// means the repository has none and GitHub answers 404.
+	changelog     string
+	changelogPuts atomic.Int32
 
 	mu       sync.Mutex
 	labels   []string
@@ -203,6 +208,33 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			BaseCommit: &github.RepositoryCommit{SHA: new(gfBase)},
 			Files:      []*github.CommitFile{{Filename: new("go.mod"), Status: new("modified"), Patch: new("@@ -1 +1 @@\n-a\n+b")}},
 		})
+	})
+
+	mux.HandleFunc("GET /repos/org/repo/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		content := f.changelog
+		f.mu.Unlock()
+		if content == "" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, github.RepositoryContent{
+			Type:     new("file"),
+			Name:     new("CHANGELOG.md"),
+			Path:     new("CHANGELOG.md"),
+			SHA:      new("blob1"),
+			Encoding: new("base64"),
+			Content:  new(base64.StdEncoding.EncodeToString([]byte(content))),
+		})
+	})
+	mux.HandleFunc("PUT /repos/org/repo/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
+		var req github.RepositoryContentFileOptions
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		f.changelog = string(req.Content)
+		f.mu.Unlock()
+		f.changelogPuts.Add(1)
+		writeJSON(w, github.RepositoryContentResponse{Commit: github.Commit{SHA: new("newsha")}})
 	})
 
 	mux.HandleFunc("GET /repos/org/repo/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
@@ -749,7 +781,7 @@ func TestParseActions(t *testing.T) {
 
 	_, err = ParseActions("rescue")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "classify, approve, merge, refresh, retry, remedy, mark")
+	require.Contains(t, err.Error(), "classify, changelog, approve, merge, refresh, retry, remedy, mark")
 	require.True(t, strings.Contains(err.Error(), fmt.Sprintf("%q", "rescue")))
 }
 

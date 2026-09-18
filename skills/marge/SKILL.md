@@ -53,10 +53,10 @@ Act on `action_required` only.
 
 ## The tools
 
-muster serves marge's four tools as `x_marge_list`, `x_marge_sweep`,
-`x_marge_remedy` and `x_marge_mark`. Each one is an adapter over the engine
-call the CLI makes, with the same guards, and each one that writes takes
-`dry_run`.
+muster serves marge's five tools as `x_marge_list`, `x_marge_sweep`,
+`x_marge_remedy`, `x_marge_mark` and `x_marge_changelog`. Each one is an
+adapter over the engine call the CLI makes, with the same guards, and each one
+that writes takes `dry_run`.
 
 Every tool takes the same scope arguments, and the scope decides the policy:
 `team` (the repositories and the policy of that team), or `query`, `org`,
@@ -69,6 +69,7 @@ the company defaults. `prs` narrows a call to single PRs of that scope.
 | `x_marge_sweep` | yes | `dry_run`, `actions`, `merge_auto`, `security_patterns` |
 | `x_marge_remedy` | yes | `pr_url` (required), `rule`, `team`, `dry_run` |
 | `x_marge_mark` | yes | `pr_url` (required), `outcome` (`failed` or `blocked`), `reason`, `tool`, `dry_run` |
+| `x_marge_changelog` | yes | `prs` (required), `team`, `dry_run` |
 
 `x_marge_list` with `refresh: false` reads back the label of the last sweep
 and costs the discovery of the scope and nothing more: one search for a query
@@ -84,9 +85,39 @@ are missing carries an `error` instead of a `result`. Use it instead of one
 call per team: the teams share one discovery, so their repository lists are
 read once.
 
-`x_marge_sweep` runs the steps `classify`, `approve`, `merge`, `refresh`,
-`retry`, `remedy` and `mark`, in that order. `actions` selects a subset.
-`remedy` needs `mark` and is refused without it.
+`x_marge_sweep` runs the steps `classify`, `changelog`, `approve`, `merge`,
+`refresh`, `retry`, `remedy` and `mark`, in that order. `actions` selects a
+subset. `remedy` needs `mark` and is refused without it.
+
+## The changelog entry
+
+A bot PR carries no changelog entry of its own, so a repository's release
+notes lose every dependency update. marge writes one in the team's format:
+the `changelog` section of `bot-prs-sweep/team-<name>.yaml` names the file,
+the heading and section the entry goes under, and the line itself.
+
+Two doors, and the same write behind both:
+
+- The `changelog` **step** of a sweep, unless `changelog.enabled` is false in
+  the team's policy. It is true by default: a dependency update nobody records
+  is a release note nobody can write.
+- `x_marge_changelog`, on the PRs a person picked, whatever the policy says.
+
+The entry is a commit on the PR's own branch, and that has two consequences a
+person has to hear before they ask for one:
+
+- **CI runs again.** The step therefore writes before anything is approved,
+  never after -- a commit pushed after an approval dismisses it wherever the
+  branch protection dismisses stale reviews -- and the PR is then left under
+  `waiting`. The next sweep classifies the new head and merges it. Say this
+  when someone asks why their PR did not merge in the run that wrote its
+  entry.
+- **It is written once.** The check is on the line itself, so a rebase, a
+  second sweep and a person writing by hand all converge on one entry. Do not
+  add a guard of your own around it.
+
+A repository with no changelog file is refused with that reason and is swept
+exactly as it would have been. A changelog is a courtesy, never a guard.
 
 ## How to read a marker
 

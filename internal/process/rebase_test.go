@@ -119,6 +119,11 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/commits/"+rbBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.ListCheckRunsResults{Total: new(0)})
 	})
+	// These repositories keep no changelog, which is the common case and
+	// costs the sweep one read and nothing else.
+	mux.HandleFunc("GET /repos/org/repo/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)

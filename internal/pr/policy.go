@@ -69,6 +69,11 @@ var ReadConcurrency = Concurrency{PerTeam: 15, PerRepo: 4}
 // file, which heading and section of it, and the line itself. No sweep ever
 // writes one; a person asks for it on the PRs they pick.
 type ChangelogPolicy struct {
+	// Enabled lets the sweep write the entry on its own, before it approves
+	// anything. A team that does not want its bot PRs to carry an entry
+	// switches it off in its own file. The changelog tool writes on demand
+	// whatever this says.
+	Enabled bool
 	// Path is the file the entry is added to, relative to the repository
 	// root.
 	Path string
@@ -99,9 +104,12 @@ type ChangelogFacts struct {
 
 // ChangelogDefaults is the changelog entry of a team that writes none: a
 // Keep a Changelog file, the entry under the unreleased heading's Changed
-// section, and one line naming the dependency and both versions.
+// section, and one line naming the dependency and both versions. The entry
+// is written, because a dependency update nobody records is a release note
+// nobody can write; a team that does not want one says so in its own file.
 func ChangelogDefaults() ChangelogPolicy {
 	return ChangelogPolicy{
+		Enabled:  true,
 		Path:     "CHANGELOG.md",
 		Heading:  "## [Unreleased]",
 		Section:  "### Changed",

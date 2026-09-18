@@ -75,6 +75,7 @@ type BudgetDocument struct {
 // ChangelogDocument is the changelog section of a policy file: the entry a
 // team wants on a bot PR when a person asks for one.
 type ChangelogDocument struct {
+	Enabled  *bool   `yaml:"enabled"`
 	Path     *string `yaml:"path"`
 	Heading  *string `yaml:"heading"`
 	Section  *string `yaml:"section"`

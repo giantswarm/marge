@@ -26,12 +26,17 @@ const (
 	// ActionRemedy applies the catalogue rule that matches a classified PR,
 	// through the action the rule names and that action's guards.
 	ActionRemedy Action = "remedy"
+	// ActionChangelog commits the team's changelog entry to a PR that will
+	// merge, before anything is approved. A team's policy switches it off.
+	ActionChangelog Action = "changelog"
 	// ActionMark writes markers and evidence comments on the PR.
 	ActionMark Action = "mark"
 )
 
-// AllActions lists every action in execution order.
-var AllActions = []Action{ActionClassify, ActionApprove, ActionMerge, ActionRefresh, ActionRetry, ActionRemedy, ActionMark}
+// AllActions lists every action in execution order. changelog comes before
+// approve: the entry is a commit, and a commit pushed after an approval
+// dismisses it wherever the branch protection dismisses stale reviews.
+var AllActions = []Action{ActionClassify, ActionChangelog, ActionApprove, ActionMerge, ActionRefresh, ActionRetry, ActionRemedy, ActionMark}
 
 // ActionSet is the subset of actions one sweep performs.
 type ActionSet map[Action]bool
