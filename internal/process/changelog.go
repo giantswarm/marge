@@ -60,12 +60,13 @@ func (p *Processor) changelogEntry(ctx context.Context, run *prRun, resolved pr.
 	}, run.info.Owner, run.info.Repo, run.pull.GetHead().GetRef(), false)
 	switch {
 	case err != nil:
-		// A changelog is a courtesy, never a guard: a repository without the
-		// file, or a write GitHub refused, leaves the sweep to decide the PR
-		// as it would have.
+		// A changelog is a courtesy, never a guard: a write GitHub refused
+		// leaves the sweep to decide the PR as it would have, and says so.
 		run.note("changelog entry not written: " + err.Error())
 		return false
 	case !outcome.Written:
+		// The repository keeps no changelog, or the entry is already in it.
+		// Neither is a failure and neither is worth a word on the outcome.
 		return false
 	}
 
