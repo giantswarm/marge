@@ -282,6 +282,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 
 	if !resolved.Eligible(kind, updateType) {
 		run.set(pr.StatusHeld, heldDetail(kind, updateType))
+		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, heldMarkerReason(kind, updateType, resolved))
 		return
 	}
 
