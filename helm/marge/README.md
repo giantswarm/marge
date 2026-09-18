@@ -67,7 +67,7 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}` | Container security context (restricted Pod Security Standard) |
 | service.type | string | `"ClusterIP"` | Service type |
 | service.port | int | `8080` | Service port; the container listens on 8080 |
-| resources | object | `{"limits":{"cpu":"500m","ephemeral-storage":"1Gi","memory":"256Mi"},"requests":{"cpu":"50m","ephemeral-storage":"50Mi","memory":"64Mi"}}` | Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies. |
+| resources | object | `{"limits":{"cpu":"2","ephemeral-storage":"1Gi","memory":"512Mi"},"requests":{"cpu":"100m","ephemeral-storage":"50Mi","memory":"128Mi"}}` | Container resources. One pod answers every person reading the Bot PRs page at once, and a single read runs its GitHub requests in parallel, so the CPU limit bounds how many of those a pod can hold. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies. |
 | nodeSelector | object | `{}` | Node selector for the pod |
 | tolerations | list | `[]` | Tolerations for the pod |
 | affinity | object | `{}` | Affinity for the pod |

@@ -54,8 +54,9 @@ Every request then carries a token the transport mints for it:
   repository. GitHub answers `404` for every other repository under it.
 - The mint itself and `GET /app` carry the App JWT, signed RS256 with the
   private key and valid for nine minutes.
-- A call that names no repository, which is the code search, carries an
-  installation-wide token. A search cannot be scoped to one repository.
+- A call that names no repository carries an installation-wide token: the
+  code search, which cannot be scoped to one repository, and the GraphQL
+  discovery, which reads many repositories in one request.
 
 A token is kept in memory until a minute before it expires, then replaced.
 Nothing is written to disk and nothing survives the process.

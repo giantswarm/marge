@@ -500,7 +500,7 @@ marge sweep --team bumblebee --output json
 
 ## How it works
 
-1. Resolves the scope and the [policy](#sweep-policy): with `--team`, the repositories of the team file in the team-file repository, the company default file and the team's own; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`, under the company defaults. A repository whose PRs cannot be listed is reported, never silently dropped.
+1. Resolves the scope and the [policy](#sweep-policy): with `--team`, the repositories of the team file in the team-file repository, the company default file and the team's own; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`, under the company defaults. A scope that names repositories lists their open PRs over GraphQL, twenty-five repositories a request. A repository whose PRs cannot be listed is reported, never silently dropped.
 2. In interactive mode, groups results by repository (or dependency) and presents a selector.
 3. For each PR, in parallel (the policy's `concurrency`, by default 5 repositories at a time and one PR per repository):
    - Reads the PR, its kind and update size, its checks, the base branch's required status checks and its markers.

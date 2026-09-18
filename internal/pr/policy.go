@@ -57,6 +57,14 @@ type Concurrency struct {
 	PerRepo int
 }
 
+// ReadConcurrency bounds a run that writes nothing. The policy's own bounds
+// exist for the writes: PerRepo is 1 so that two merges never race for one
+// base branch, and the product is held small so a sweep cannot empty the
+// write budget in a minute. A classify-only dry run makes neither a merge
+// nor a comment, so it is bounded by how many reads GitHub answers at once
+// and not by the write policy.
+var ReadConcurrency = Concurrency{PerTeam: 15, PerRepo: 4}
+
 // Policy is the resolved bot PR sweep policy of one repository: the company
 // defaults, the owning team's deviations and the repository's own exception,
 // merged in that order.

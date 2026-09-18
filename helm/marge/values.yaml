@@ -67,15 +67,15 @@ service:
   # -- Service port; the container listens on 8080
   port: 8080
 
-# -- Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
+# -- Container resources. One pod answers every person reading the Bot PRs page at once, and a single read runs its GitHub requests in parallel, so the CPU limit bounds how many of those a pod can hold. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
 resources:
   limits:
-    cpu: 500m
-    memory: 256Mi
+    cpu: "2"
+    memory: 512Mi
     ephemeral-storage: 1Gi
   requests:
-    cpu: 50m
-    memory: 64Mi
+    cpu: 100m
+    memory: 128Mi
     ephemeral-storage: 50Mi
 
 # -- Node selector for the pod

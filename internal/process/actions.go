@@ -72,6 +72,21 @@ func (s ActionSet) Has(a Action) bool {
 	return s[a]
 }
 
+// ClassifyOnly reports whether the set performs the classify step alone.
+// Together with a dry run that is the read: no label, no marker, no comment
+// and no merge. A nil set performs every action, so it is never this.
+func (s ActionSet) ClassifyOnly() bool {
+	if s == nil {
+		return false
+	}
+	for _, a := range AllActions {
+		if a != ActionClassify && s[a] {
+			return false
+		}
+	}
+	return s[ActionClassify]
+}
+
 // String renders the set in execution order.
 func (s ActionSet) String() string {
 	var names []string

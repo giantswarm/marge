@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/google/go-github/v92/github"
@@ -234,88 +232,45 @@ func labelNames(labels []*github.Label) []string {
 	return names
 }
 
+// listRepoPRs lists the open bot PRs of the repositories named, in one
+// GraphQL request per chunk of repositories rather than one REST request per
+// repository: a team of forty repositories is two requests, and a scope of
+// every team is a handful. query is a case-insensitive substring filter on
+// the repository names, applied before anything is read.
 func listRepoPRs(ctx context.Context, client *github.Client, repos []string, query string) (discovery, error) {
-	type repoRef struct{ Owner, Name string }
-	var refs []repoRef
 	queryLower := strings.ToLower(query)
-	for _, entry := range repos {
-		owner, name, ok := strings.Cut(strings.TrimSpace(entry), "/")
-		if !ok {
+	var refs []gh.RepoRef
+	for _, ref := range gh.ParseRepoRefs(repos) {
+		if query != "" && !strings.Contains(strings.ToLower(ref.String()), queryLower) {
 			continue
 		}
-		if query != "" && !strings.Contains(strings.ToLower(owner+"/"+name), queryLower) {
+		refs = append(refs, ref)
+	}
+
+	open, failed := gh.ListOpenPRs(ctx, client, refs)
+
+	var found discovery
+	seen := make(map[string]bool, len(open))
+	for _, entry := range open {
+		if pr.KindOf(entry.Author) == "" || seen[entry.URL] {
 			continue
 		}
-		refs = append(refs, repoRef{owner, name})
+		seen[entry.URL] = true
+		found.PRs = append(found.PRs, pr.PRInfo{
+			Owner:     entry.Owner,
+			Repo:      entry.Repo,
+			Number:    entry.Number,
+			Title:     entry.Title,
+			URL:       entry.URL,
+			Author:    entry.Author,
+			CreatedAt: entry.CreatedAt,
+			BaseRef:   entry.BaseRef,
+			Labels:    entry.Labels,
+		})
 	}
-
-	var (
-		mu    sync.Mutex
-		seen  = make(map[string]bool)
-		found discovery
-		wg    sync.WaitGroup
-	)
-	sem := make(chan struct{}, 10)
-
-	for _, ref := range refs {
-		wg.Add(1)
-		go func(owner, name string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			opts := &github.PullRequestListOptions{
-				State:       "open",
-				Sort:        "updated",
-				ListOptions: github.ListOptions{PerPage: 100},
-			}
-			var batch []pr.PRInfo
-			for {
-				pulls, resp, err := client.PullRequests.List(ctx, owner, name, opts)
-				if err != nil {
-					mu.Lock()
-					found.Failed = append(found.Failed, repoFailure{Repo: owner + "/" + name, Err: err.Error()})
-					mu.Unlock()
-					return
-				}
-
-				for _, pull := range pulls {
-					author := pull.GetUser().GetLogin()
-					if pr.KindOf(author) == "" {
-						continue
-					}
-					batch = append(batch, pr.PRInfo{
-						Owner:     owner,
-						Repo:      name,
-						Number:    pull.GetNumber(),
-						Title:     pull.GetTitle(),
-						URL:       pull.GetHTMLURL(),
-						Author:    author,
-						CreatedAt: pull.GetCreatedAt().Time,
-						BaseRef:   pull.GetBase().GetRef(),
-						Labels:    labelNames(pull.Labels),
-					})
-				}
-
-				if resp.NextPage == 0 {
-					break
-				}
-				opts.Page = resp.NextPage
-			}
-
-			mu.Lock()
-			for _, p := range batch {
-				if !seen[p.URL] {
-					seen[p.URL] = true
-					found.PRs = append(found.PRs, p)
-				}
-			}
-			mu.Unlock()
-		}(ref.Owner, ref.Name)
+	for _, failure := range failed {
+		found.Failed = append(found.Failed, repoFailure{Repo: failure.Repo, Err: failure.Err})
 	}
-
-	wg.Wait()
-	sort.Slice(found.Failed, func(i, j int) bool { return found.Failed[i].Repo < found.Failed[j].Repo })
 	return found, nil
 }
 

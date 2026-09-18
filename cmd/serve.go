@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -120,9 +121,14 @@ func listTool() mcp.Tool {
 			"The entries are grouped the way the sweep reports them -- merged, security_failures, action_required, stale, cancelled, waiting, obsolete, ci_unavailable, ci_no_verdict, skipped -- so \"what is waiting for us\" and \"what would a sweep do\" are the same question. "+
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale."),
 		scopeArguments(),
+		mcp.WithArray("teams",
+			mcp.Description("Cover several teams in one call, each read under its own team file and policy. The answer is then {\"teams\": [{\"team\": ..., \"result\": ...}]}, one entry per team in the order given, and a team whose files are missing or unreadable carries an error instead of a result. "+
+				"The teams share one discovery, so reading every team costs one listing rather than one per team. Mutually exclusive with team, query, org, repos and repos_file."),
+			mcp.WithStringItems(),
+		),
 		mcp.WithBoolean("refresh",
 			mcp.Description("Classify every PR again instead of reading the classification the last sweep stored in its marge/<class> label (default: false). "+
-				"The stored read costs one search per scope and reports a PR no sweep has labelled under unclassified; a refresh costs a check read per PR and reports the evidence, the update type, the policy and the prior-rescue state, which the stored read leaves out."),
+				"The stored read costs the discovery of the scope and nothing more -- one search for a query scope, or one listing per twenty-five repositories for a team scope -- and reports a PR no sweep has labelled under unclassified; a refresh costs a PR read and a check read per PR, and reports the evidence, the update type, the policy and the prior-rescue state, which the stored read leaves out."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -796,12 +802,24 @@ func listRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 }
 
 func (t toolset) handleList(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	refresh := request.GetBool("refresh", false)
+	if teams := request.GetStringSlice("teams", nil); len(teams) > 0 {
+		if err := validateTeamsScope(request); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		queues, err := t.listTeams(ctx, teams, refresh)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return result(queues)
+	}
+
 	req, err := listRequest(request)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	run := t.listStored
-	if request.GetBool("refresh", false) {
+	if refresh {
 		run = t.run
 	}
 	sweepResult, err := run(ctx, req)
@@ -809,6 +827,190 @@ func (t toolset) handleList(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return result(sweepResult)
+}
+
+// TeamQueue is one team's queue inside a list that covered several teams.
+type TeamQueue struct {
+	Team   string       `json:"team"`
+	Result *SweepResult `json:"result,omitempty"`
+	// Error says why the team has no result: it has no team file, or its
+	// files do not parse. One team's failure leaves the others alone.
+	Error string `json:"error,omitempty"`
+}
+
+// TeamQueues is what the list tool answers when it was given teams. The
+// answer is an object and not a bare array, so a caller can tell a
+// several-team answer from a single scope's SweepResult by its shape.
+type TeamQueues struct {
+	Teams []TeamQueue `json:"teams"`
+}
+
+// validateTeamsScope refuses a teams list that carries a second scope, the
+// way the single-team scope is refused one.
+func validateTeamsScope(request mcp.CallToolRequest) error {
+	if request.GetString("team", "") != "" {
+		return errors.New("teams is mutually exclusive with team: pass the one team under team, or every team under teams")
+	}
+	if request.GetString("query", "") != "" || request.GetString("org", "") != "" ||
+		request.GetString("repos_file", "") != "" || len(request.GetStringSlice("repos", nil)) > 0 {
+		return errors.New("teams is mutually exclusive with query, org, repos and repos_file")
+	}
+	return nil
+}
+
+// teamScope is one team's resolved scope, or the error that resolving it
+// produced.
+type teamScope struct {
+	team  string
+	scope policy.Scope
+	err   error
+}
+
+// listTeams reads the queues of several teams in one call.
+//
+// The teams share the discovery: their repository lists are merged and read
+// once, so a caller that wants every team pays one listing rather than one
+// per team, and a repository two teams own is read once. Everything after
+// the discovery stays per team, because a team file decides what its PRs
+// may become: each team's PRs are classified under that team's own policy.
+func (t toolset) listTeams(ctx context.Context, teams []string, refresh bool) (TeamQueues, error) {
+	client, err := t.newClient(ctx)
+	if err != nil {
+		return TeamQueues{}, err
+	}
+	loader, err := policyLoader(client)
+	if err != nil {
+		return TeamQueues{}, err
+	}
+	login, err := gh.AuthenticatedLogin(ctx, client)
+	if err != nil {
+		return TeamQueues{}, err
+	}
+
+	scopes := resolveTeamScopes(ctx, loader, teams)
+
+	repoLists := make([][]string, 0, len(scopes))
+	for _, scoped := range scopes {
+		if scoped.err == nil {
+			repoLists = append(repoLists, scoped.scope.Repos)
+		}
+	}
+	// No team resolved, so there is nothing to read. The discovery is not
+	// run at all: without repositories it would fall back to the GitHub
+	// search, and answer with PRs that belong to no team asked for.
+	var found discovery
+	if repos := mergeRepos(repoLists...); len(repos) > 0 {
+		found, err = searchPRs(ctx, client, "", login, repos)
+		if err != nil {
+			return TeamQueues{}, fmt.Errorf("searching PRs: %w", err)
+		}
+	}
+
+	queues := make([]TeamQueue, len(scopes))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, teamsAtOnce)
+	for index, scoped := range scopes {
+		if scoped.err != nil {
+			queues[index] = TeamQueue{Team: scoped.team, Error: scoped.err.Error()}
+			continue
+		}
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			queues[index] = t.teamQueue(ctx, client, login, scoped, found, refresh)
+		})
+	}
+	wg.Wait()
+	return TeamQueues{Teams: queues}, nil
+}
+
+// teamsAtOnce is how many teams of one call are classified together. It
+// bounds the widest read, which is a refresh of every team: each team fans
+// out over its own PRs as well.
+const teamsAtOnce = 4
+
+// teamQueue builds one team's queue from the shared discovery.
+func (t toolset) teamQueue(ctx context.Context, client *github.Client, login string, scoped teamScope, found discovery, refresh bool) TeamQueue {
+	prs := prsOfRepos(found.PRs, scoped.scope.Repos)
+	failed := failuresOfRepos(found.Failed, scoped.scope.Repos)
+
+	if !refresh {
+		return TeamQueue{Team: scoped.team, Result: pointer(buildSweepResult(storedStatus(prs), failed, nil))}
+	}
+
+	opts := RunOptions{
+		Quiet:    true,
+		NoTUI:    true,
+		DryRun:   true,
+		Team:     scoped.team,
+		Actions:  process.ActionSet{process.ActionClassify: true},
+		Policies: scoped.scope.Policies,
+	}
+	status, err := processOnceWithStatus(ctx, client, login, prs, opts)
+	if err != nil {
+		return TeamQueue{Team: scoped.team, Error: err.Error()}
+	}
+	return TeamQueue{Team: scoped.team, Result: pointer(buildSweepResult(status, failed, nil))}
+}
+
+func pointer[T any](value T) *T { return &value }
+
+// resolveTeamScopes reads every team's files. The reads are independent, so
+// they run together: one team's files are three requests, and a caller that
+// asks for every team would otherwise wait for all of them in turn.
+func resolveTeamScopes(ctx context.Context, loader policy.Loader, teams []string) []teamScope {
+	scopes := make([]teamScope, len(teams))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, scopesAtOnce)
+	for index, team := range teams {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			scope, err := loader.TeamScope(ctx, team)
+			scopes[index] = teamScope{team: team, scope: scope, err: err}
+		})
+	}
+	wg.Wait()
+	return scopes
+}
+
+// scopesAtOnce is how many team files are read together.
+const scopesAtOnce = 8
+
+// prsOfRepos keeps the PRs that live in one of the repositories. GitHub
+// treats owner and repository names case-insensitively, so the comparison
+// does too.
+func prsOfRepos(prs []pr.PRInfo, repos []string) []pr.PRInfo {
+	wanted := repoSet(repos)
+	kept := make([]pr.PRInfo, 0, len(prs))
+	for _, info := range prs {
+		if wanted[strings.ToLower(info.Owner+"/"+info.Repo)] {
+			kept = append(kept, info)
+		}
+	}
+	return kept
+}
+
+// failuresOfRepos keeps the failures of one of the repositories, so a team
+// is told about its own unreadable repositories and not about another
+// team's.
+func failuresOfRepos(failures []repoFailure, repos []string) []repoFailure {
+	wanted := repoSet(repos)
+	kept := make([]repoFailure, 0, len(failures))
+	for _, failure := range failures {
+		if wanted[strings.ToLower(failure.Repo)] {
+			kept = append(kept, failure)
+		}
+	}
+	return kept
+}
+
+func repoSet(repos []string) map[string]bool {
+	set := make(map[string]bool, len(repos))
+	for _, repo := range repos {
+		set[strings.ToLower(strings.TrimSpace(repo))] = true
+	}
+	return set
 }
 
 // listStored reports the classification the last sweep stored on each PR
@@ -826,9 +1028,13 @@ func (t toolset) listStored(ctx context.Context, req sweepRequest) (SweepResult,
 	if err != nil {
 		return SweepResult{}, err
 	}
+	return buildSweepResult(storedStatus(scoped.prs), scoped.found.Failed, nil), nil
+}
 
+// storedStatus reads each PR's stored classification out of its labels.
+func storedStatus(prs []pr.PRInfo) *pr.PRStatus {
 	status := pr.NewPRStatus()
-	for _, info := range scoped.prs {
+	for _, info := range prs {
 		idx := status.Add(info)
 		status.SetClassification(idx, pr.KindOf(info.Author), "")
 		label, class := pr.StoredClass(info.Labels)
@@ -840,7 +1046,7 @@ func (t toolset) listStored(ctx context.Context, req sweepRequest) (SweepResult,
 		status.Update(idx, state, "stored by the last sweep")
 		status.SetLabel(idx, label)
 	}
-	return buildSweepResult(status, scoped.found.Failed, nil), nil
+	return status
 }
 
 func (t toolset) handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
