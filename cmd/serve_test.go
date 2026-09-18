@@ -459,3 +459,14 @@ func mustPRsByTeam(t *testing.T, scopes []teamScope, refs []string) map[string][
 	require.NoError(t, err)
 	return got
 }
+
+// TestChangelogTool_declaresWhatItReads guards the changelog tool's schema
+// against its handler, the way the sweep tool's is guarded.
+func TestChangelogTool_declaresWhatItReads(t *testing.T) {
+	declared := changelogTool().InputSchema.Properties
+	for _, name := range []string{"prs", "team", "dry_run"} {
+		require.Contains(t, declared, name)
+	}
+	require.Len(t, declared, 3)
+	require.Equal(t, []string{"prs"}, changelogTool().InputSchema.Required)
+}

@@ -40,6 +40,7 @@ type Document struct {
 	UpdateTypes  map[string][]string  `yaml:"updateTypes"`
 	Rescue       *RescueDocument      `yaml:"rescue"`
 	Concurrency  *ConcurrencyDocument `yaml:"concurrency"`
+	Changelog    *ChangelogDocument   `yaml:"changelog"`
 	ModelConfig  *string              `yaml:"modelConfig"`
 	SlackChannel *string              `yaml:"slackChannel"`
 
@@ -69,6 +70,15 @@ type RescueDocument struct {
 type BudgetDocument struct {
 	PerRescue *float64 `yaml:"perRescue"`
 	Weekly    *float64 `yaml:"weekly"`
+}
+
+// ChangelogDocument is the changelog section of a policy file: the entry a
+// team wants on a bot PR when a person asks for one.
+type ChangelogDocument struct {
+	Path     *string `yaml:"path"`
+	Heading  *string `yaml:"heading"`
+	Section  *string `yaml:"section"`
+	Template *string `yaml:"template"`
 }
 
 // ConcurrencyDocument is the concurrency section of a policy file.
@@ -161,6 +171,34 @@ func (d *Document) resolve() error {
 	}
 	if err := d.Concurrency.resolve(); err != nil {
 		return err
+	}
+	if err := d.Changelog.resolve(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// resolve checks that the template parses and that no key is empty. A
+// template a team cannot read back is worse than no template: the file is
+// an error rather than a line nobody expected.
+func (c *ChangelogDocument) resolve() error {
+	if c == nil {
+		return nil
+	}
+	for name, value := range map[string]*string{
+		"path":     c.Path,
+		"heading":  c.Heading,
+		"section":  c.Section,
+		"template": c.Template,
+	} {
+		if value != nil && strings.TrimSpace(*value) == "" {
+			return fmt.Errorf("changelog.%s: empty", name)
+		}
+	}
+	if c.Template != nil {
+		if _, err := pr.ParseChangelogTemplate(*c.Template); err != nil {
+			return fmt.Errorf("changelog.template: %w", err)
+		}
 	}
 	return nil
 }
