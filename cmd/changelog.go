@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/google/go-github/v92/github"
@@ -150,7 +148,8 @@ func changelogEntry(ctx context.Context, client *github.Client, policies *policy
 	resolved := policies.For(owner, repo).Changelog
 	entry.Path = resolved.Path
 	from, to := pr.ExtractVersions(pull.GetTitle())
-	line, err := pr.ChangelogLine(resolved, pr.ChangelogFacts{
+
+	outcome, err := pr.WriteChangelogEntry(ctx, client, resolved, pr.ChangelogFacts{
 		Dependency: pr.ExtractDependencyName(pull.GetTitle()),
 		From:       from,
 		To:         to,
@@ -158,61 +157,15 @@ func changelogEntry(ctx context.Context, client *github.Client, policies *policy
 		Repository: owner + "/" + repo,
 		Kind:       string(kind),
 		UpdateType: string(pr.ClassifyUpdate(kind, pull.GetTitle(), pull.GetBody())),
-	})
-	if err != nil {
+	}, owner, repo, head.GetRef(), dryRun)
+	entry.Line = outcome.Line
+	switch {
+	case err != nil:
 		entry.Refused = err.Error()
-		return entry
+	default:
+		entry.Refused = outcome.Refused
+		entry.Written = outcome.Written
+		entry.Commit = outcome.Commit
 	}
-	entry.Line = line
-
-	content, sha, err := fileOnBranch(ctx, client, owner, repo, resolved.Path, head.GetRef())
-	if err != nil {
-		entry.Refused = err.Error()
-		return entry
-	}
-
-	next, changed := pr.InsertChangelogLine(content, resolved, line)
-	if !changed {
-		entry.Refused = "the entry is already in " + resolved.Path
-		return entry
-	}
-	if dryRun {
-		return entry
-	}
-
-	commit, _, err := client.Repositories.UpdateFile(ctx, owner, repo, resolved.Path, &github.RepositoryContentFileOptions{
-		Message: new(fmt.Sprintf("docs(changelog): record %s", entry.PR)),
-		Content: []byte(next),
-		SHA:     new(sha),
-		Branch:  new(head.GetRef()),
-	})
-	if err != nil {
-		entry.Refused = "committing the entry: " + err.Error()
-		return entry
-	}
-	entry.Written = true
-	entry.Commit = commit.GetSHA()
 	return entry
-}
-
-// fileOnBranch reads one file of a branch and returns its content and blob
-// SHA. A file that is not there is refused rather than created: where a
-// changelog goes is the repository's own convention, and this call does not
-// invent one.
-func fileOnBranch(ctx context.Context, client *github.Client, owner, repo, path, branch string) (string, string, error) {
-	file, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: branch})
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return "", "", errors.New(path + " is not in this repository, so there is no changelog to add to")
-		}
-		return "", "", fmt.Errorf("reading %s: %w", path, err)
-	}
-	if file == nil {
-		return "", "", errors.New(path + " is a directory, not a changelog file")
-	}
-	content, err := file.GetContent()
-	if err != nil {
-		return "", "", fmt.Errorf("decoding %s: %w", path, err)
-	}
-	return content, file.GetSHA(), nil
 }

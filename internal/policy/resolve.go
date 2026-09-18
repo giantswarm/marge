@@ -125,6 +125,9 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 		}
 	}
 	if c := doc.Changelog; c != nil {
+		if c.Enabled != nil {
+			out.Changelog.Enabled = *c.Enabled
+		}
 		if c.Path != nil {
 			out.Changelog.Path = *c.Path
 		}

@@ -69,6 +69,11 @@ var ReadConcurrency = Concurrency{PerTeam: 15, PerRepo: 4}
 // file, which heading and section of it, and the line itself. No sweep ever
 // writes one; a person asks for it on the PRs they pick.
 type ChangelogPolicy struct {
+	// Enabled lets the sweep write the entry on its own, before it approves
+	// anything. It is false by default: the entry is a commit on the team's
+	// branch, and a commit starts CI again, so no team gets one until it
+	// asks. The changelog tool writes on demand whatever this says.
+	Enabled bool
 	// Path is the file the entry is added to, relative to the repository
 	// root.
 	Path string
