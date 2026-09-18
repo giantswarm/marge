@@ -51,11 +51,12 @@ var serveOpts struct {
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start an MCP server exposing sweep and mark as tools",
+	Short: "Start an MCP server exposing the sweep as tools",
 	Long: `Start a Model Context Protocol (MCP) server.
-The server exposes a "sweep" tool that mirrors the sweep CLI command,
-returning structured JSON results instead of terminal output, and a "mark"
-tool that mirrors the mark CLI command.
+The server exposes "list", "sweep", "remedy" and "mark", which mirror the CLI
+commands of those names and return structured JSON instead of terminal
+output, and "changelog", which writes one changelog entry on a bot PR in the
+team's own format.
 
 Transports:
   stdio            JSON-RPC over stdin/stdout, for a local MCP client that
@@ -104,6 +105,7 @@ func newMCPServer(newClient clientFactory) *server.MCPServer {
 	mcpServer.AddTool(sweepTool(), tools.handleSweep)
 	mcpServer.AddTool(remedyTool(), tools.handleRemedy)
 	mcpServer.AddTool(markTool(), tools.handleMark)
+	mcpServer.AddTool(changelogTool(), tools.handleChangelog)
 
 	return mcpServer
 }

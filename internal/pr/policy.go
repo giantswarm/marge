@@ -65,6 +65,50 @@ type Concurrency struct {
 // and not by the write policy.
 var ReadConcurrency = Concurrency{PerTeam: 15, PerRepo: 4}
 
+// ChangelogPolicy is the changelog entry a team writes for a bot PR: which
+// file, which heading and section of it, and the line itself. No sweep ever
+// writes one; a person asks for it on the PRs they pick.
+type ChangelogPolicy struct {
+	// Path is the file the entry is added to, relative to the repository
+	// root.
+	Path string
+	// Heading is the heading the entry goes under, and Section the
+	// subheading inside it. The section is created under the heading when
+	// the file does not carry it yet.
+	Heading string
+	Section string
+	// Template is the line, as a Go text/template over ChangelogFacts.
+	Template string
+}
+
+// ChangelogFacts are the values a changelog template may name.
+type ChangelogFacts struct {
+	// Dependency is what the update moves, From and To the versions it
+	// moves between. From is empty when the title names only the target.
+	Dependency string
+	From       string
+	To         string
+	// PR is the reference of the pull request, owner/repo#number.
+	PR string
+	// Repository is owner/repo, Kind the bot that authored the PR, and
+	// UpdateType the size of the update.
+	Repository string
+	Kind       string
+	UpdateType string
+}
+
+// ChangelogDefaults is the changelog entry of a team that writes none: a
+// Keep a Changelog file, the entry under the unreleased heading's Changed
+// section, and one line naming the dependency and both versions.
+func ChangelogDefaults() ChangelogPolicy {
+	return ChangelogPolicy{
+		Path:     "CHANGELOG.md",
+		Heading:  "## [Unreleased]",
+		Section:  "### Changed",
+		Template: "- Update {{ .Dependency }}{{ if .From }} from {{ .From }}{{ end }} to {{ .To }} ({{ .PR }})",
+	}
+}
+
 // Policy is the resolved bot PR sweep policy of one repository: the company
 // defaults, the owning team's deviations and the repository's own exception,
 // merged in that order.
@@ -77,6 +121,7 @@ type Policy struct {
 	UpdateTypes  map[Kind][]UpdateType
 	Rescue       RescuePolicy
 	Concurrency  Concurrency
+	Changelog    ChangelogPolicy
 	ModelConfig  string
 	SlackChannel string
 	// Sources names every file that produced this policy, in the order the
@@ -105,6 +150,7 @@ func CompanyDefaults() Policy {
 			Confirm: ConfirmPerPR,
 		},
 		Concurrency: Concurrency{PerTeam: 5, PerRepo: 1},
+		Changelog:   ChangelogDefaults(),
 		ModelConfig: "default-model-config",
 		Sources:     []string{"built-in company defaults"},
 	}

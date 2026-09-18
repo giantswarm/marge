@@ -124,6 +124,20 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 			out.Concurrency.PerRepo = *c.PerRepo
 		}
 	}
+	if c := doc.Changelog; c != nil {
+		if c.Path != nil {
+			out.Changelog.Path = *c.Path
+		}
+		if c.Heading != nil {
+			out.Changelog.Heading = *c.Heading
+		}
+		if c.Section != nil {
+			out.Changelog.Section = *c.Section
+		}
+		if c.Template != nil {
+			out.Changelog.Template = *c.Template
+		}
+	}
 	if doc.ModelConfig != nil {
 		out.ModelConfig = *doc.ModelConfig
 	}

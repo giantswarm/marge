@@ -289,3 +289,39 @@ func TestNewSet_refusesAnUnresolvedDocument(t *testing.T) {
 	require.ErrorContains(t, err, "only ParseDocument builds a document")
 	require.ErrorContains(t, err, DefaultFile)
 }
+
+// TestResolve_changelog resolves the changelog section: a team that writes
+// none keeps the company format, and a team that writes one key keeps the
+// company values for the keys it leaves out.
+func TestResolve_changelog(t *testing.T) {
+	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
+	require.NoError(t, err)
+	set, err := NewSet([]File{{Path: TeamFile("shield"), Doc: silent}}, nil)
+	require.NoError(t, err)
+	require.Equal(t, pr.ChangelogDefaults(), set.Base().Changelog)
+
+	own, err := ParseDocument(TeamFile("bumblebee"), `
+changelog:
+  section: "### Dependencies"
+  template: "* {{ .Dependency }} {{ .To }}"
+`)
+	require.NoError(t, err)
+	set, err = NewSet([]File{{Path: TeamFile("bumblebee"), Doc: own}}, nil)
+	require.NoError(t, err)
+	changelog := set.Base().Changelog
+	require.Equal(t, "### Dependencies", changelog.Section)
+	require.Equal(t, "* {{ .Dependency }} {{ .To }}", changelog.Template)
+	require.Equal(t, pr.ChangelogDefaults().Path, changelog.Path)
+	require.Equal(t, pr.ChangelogDefaults().Heading, changelog.Heading)
+}
+
+// TestParseDocument_refusesABrokenChangelog guards the promise every policy
+// key makes: a value a team cannot read back stops the file rather than
+// applying a format nobody wrote.
+func TestParseDocument_refusesABrokenChangelog(t *testing.T) {
+	_, err := ParseDocument(TeamFile("bumblebee"), "changelog:\n  template: \"- {{ .Dependency \"\n")
+	require.ErrorContains(t, err, "changelog.template")
+
+	_, err = ParseDocument(TeamFile("bumblebee"), "changelog:\n  path: \"\"\n")
+	require.ErrorContains(t, err, "changelog.path")
+}
