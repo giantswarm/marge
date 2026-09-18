@@ -181,10 +181,10 @@ func changelogEntry(ctx context.Context, client *github.Client, policies *policy
 	}
 
 	commit, _, err := client.Repositories.UpdateFile(ctx, owner, repo, resolved.Path, &github.RepositoryContentFileOptions{
-		Message: github.Ptr(fmt.Sprintf("docs(changelog): record %s", entry.PR)),
+		Message: new(fmt.Sprintf("docs(changelog): record %s", entry.PR)),
 		Content: []byte(next),
-		SHA:     github.Ptr(sha),
-		Branch:  github.Ptr(head.GetRef()),
+		SHA:     new(sha),
+		Branch:  new(head.GetRef()),
 	})
 	if err != nil {
 		entry.Refused = "committing the entry: " + err.Error()
