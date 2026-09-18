@@ -124,7 +124,7 @@ The policy files say what may merge, and nothing about when a team is swept. Eac
 
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
-slackChannel: standup-bumblebee
+slackChannel: C0AUNCS4C2Y  # #standup-bumblebee
 updateTypes:
   renovate: [patch, minor]
 rescue:
@@ -140,6 +140,8 @@ concurrency:
   perRepo: 1
 modelConfig: default-model-config
 ```
+
+`slackChannel` is a Slack channel **ID**. The summary reaches it through klaus-gateway's team-notice endpoint (`POST /notices`): the gateway holds the Slack app and the workspace credential, and a scheduled run authenticates with the projected ServiceAccount token its pod already carries, so marge holds no Slack token. The chart's `notices.gatewayURL` names the gateway; without it, and for a team that names no channel, the run does its work, posts nothing and says so in its log.
 
 Every key is optional and an absent key keeps what the file before it said. `updateTypes` replaces the list of the kinds it names; the known update types are `major`, `minor`, `patch`, `digest`, `pin`, `lockfile` and `none`, and an update whose size marge could not read can never be declared eligible. An empty list is a list: `renovate: []` merges no Renovate PR at all.
 
@@ -224,7 +226,7 @@ Documents are decoded strictly, so an unknown key is an error. A rule whose only
 
 A failure no rule recognises is grouped by signature in the sweep's JSON output under `unhandled`, most frequent first, and written on the PR itself as an evidence marker carrying the signature, the failing checks and the log excerpt the rules already fetched. The run ends and its grouping ends with it; the marker is what persists, so the same failure on eleven PRs is eleven records that can be counted. The marker is written once per change and goes stale when the branch moves, like every other marker.
 
-`marge rules signatures` counts those markers by signature over the last `--days`, the one on the most PRs first. `marge rules draft <signature>` writes a rule skeleton and a pair of scenarios built from the PRs that carry it, then opens a draft pull request carrying the same files; it reads the markers, so no saved report is needed, and `--from <report>` reads a saved sweep report instead. The skeleton leaves the action blank, so it does not validate until a person names one; promoting a pattern is editing a draft rather than authoring one. A scheduled sweep's Slack summary names the top signatures of the run, which is a pointer to the markers rather than the only record of them.
+`marge rules signatures` counts those markers by signature over the last `--days`, the one on the most PRs first. `marge rules draft <signature>` writes a rule skeleton and a pair of scenarios built from the PRs that carry it, then opens a draft pull request carrying the same files; it reads the markers, so no saved report is needed, and `--from <report>` reads a saved sweep report instead. The skeleton leaves the action blank, so it does not validate until a person names one; promoting a pattern is editing a draft rather than authoring one. A scheduled sweep's summary names the top signatures of the run, which is a pointer to the markers rather than the only record of them.
 
 The pull request is opened through the API -- a tree, a commit, a branch and the pull request -- so marge needs no git workspace, no push credential and no language toolchain, and an agent running the sweep opens it with the token the sweep already uses. That token needs `contents: write` and `pull-requests: write` on the repository; a read-only sweep token is not enough. The branch is `rule/<name>`, one per rule, so a second draft of the same pattern reports the pull request already standing rather than opening another. `--repo` and `--base` say where it lands, and `--no-pr` writes the files and stops, printing the git and `gh` commands instead.
 

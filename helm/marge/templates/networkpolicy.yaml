@@ -26,7 +26,7 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # GitHub, CircleCI and Slack APIs
+    # GitHub and CircleCI APIs
     - ports:
         - port: 443
           protocol: TCP
@@ -57,9 +57,19 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # GitHub, CircleCI and Slack APIs
+    # GitHub and CircleCI APIs
     - ports:
         - port: 443
           protocol: TCP
+    {{- if $.Values.notices.gatewayURL }}
+    # klaus-gateway, which posts the team summary
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.notices.gatewayNamespace }}
+      ports:
+        - port: {{ $.Values.notices.gatewayPort }}
+          protocol: TCP
+    {{- end }}
 {{- end }}
 {{- end }}

@@ -153,24 +153,6 @@
                             "description": "GitHub token marge uses (needs the permissions listed in the repository README). The chart writes it into a Secret; prefer existingSecret in production. The scheduled sweeps ignore it and act as the App instead."
                         }
                     }
-                },
-                "slack": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "existingSecret": {
-                            "type": "string",
-                            "description": "Name of an existing Secret holding the Slack bot token. Takes precedence over token."
-                        },
-                        "existingSecretKey": {
-                            "type": "string",
-                            "description": "Key of the Slack bot token inside existingSecret"
-                        },
-                        "token": {
-                            "type": "string",
-                            "description": "Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary."
-                        }
-                    }
                 }
             }
         },
@@ -207,6 +189,28 @@
             "type": "object",
             "description": "Node selector for the pod",
             "additionalProperties": true
+        },
+        "notices": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "audience": {
+                    "type": "string",
+                    "description": "Audience the run projects its ServiceAccount token for; the gateway's own `reviews.audience`."
+                },
+                "gatewayNamespace": {
+                    "type": "string",
+                    "description": "Namespace the gateway runs in, for the egress rule of each scheduled run. The URL is not parsed, so it is named here as well."
+                },
+                "gatewayPort": {
+                    "type": "integer",
+                    "description": "Port the gateway serves the endpoint on, for the same egress rule."
+                },
+                "gatewayURL": {
+                    "type": "string",
+                    "description": "klaus-gateway as reached from the pod, for example `http://klaus-gateway.agent-platform.svc:8080`. Empty posts no summary: the run does its work and reports it on its own output."
+                }
+            }
         },
         "podAnnotations": {
             "type": "object",

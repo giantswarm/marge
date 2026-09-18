@@ -16,18 +16,18 @@ import (
 	"github.com/giantswarm/marge/internal/remedy"
 )
 
-// recordingPoster stands in for Slack and keeps every message, so the run is
-// tested without a Slack app.
+// recordingPoster stands in for the gateway and keeps every message, so the
+// run is tested without one.
 type recordingPoster struct {
-	posts []struct{ channel, text string }
+	posts []struct{ team, channel, text string }
 	err   error
 }
 
-func (p *recordingPoster) Post(_ context.Context, channel, text string) error {
+func (p *recordingPoster) Post(_ context.Context, team, channel, text string) error {
 	if p.err != nil {
 		return p.err
 	}
-	p.posts = append(p.posts, struct{ channel, text string }{channel, text})
+	p.posts = append(p.posts, struct{ team, channel, text string }{team, channel, text})
 	return nil
 }
 
@@ -38,7 +38,7 @@ func TestTeamsRun_postsOnlyWithAPoster(t *testing.T) {
 	result := SweepResult{Summary: SweepSummary{Total: 2, Merged: 2}}
 
 	poster := &recordingPoster{}
-	posted, err := teamsRun{Slack: poster}.post(t.Context(), "bumblebee", "team-bumblebee", result)
+	posted, err := teamsRun{Notices: poster}.post(t.Context(), "bumblebee", "team-bumblebee", result)
 	require.NoError(t, err)
 	require.True(t, posted)
 	require.Len(t, poster.posts, 1)
@@ -49,7 +49,7 @@ func TestTeamsRun_postsOnlyWithAPoster(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, posted, "a run with no poster posts nothing")
 
-	posted, err = teamsRun{Slack: poster}.post(t.Context(), "bumblebee", "", result)
+	posted, err = teamsRun{Notices: poster}.post(t.Context(), "bumblebee", "", result)
 	require.NoError(t, err)
 	require.False(t, posted, "a team whose policy names no channel posts nothing")
 	require.Len(t, poster.posts, 1)

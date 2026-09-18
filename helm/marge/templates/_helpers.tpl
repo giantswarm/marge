@@ -98,7 +98,7 @@ Whether the chart writes its own token Secret: at least one inline credential
 is set and not overridden by an existing Secret.
 */}}
 {{- define "marge.writesTokenSecret" -}}
-{{- if or (include "marge.writesGitHubToken" .) (include "marge.writesCircleCIToken" .) (include "marge.writesAppCredential" .) (include "marge.writesSlackToken" .) -}}
+{{- if or (include "marge.writesGitHubToken" .) (include "marge.writesCircleCIToken" .) (include "marge.writesAppCredential" .) -}}
 true
 {{- end -}}
 {{- end }}
@@ -113,10 +113,6 @@ true
 
 {{- define "marge.writesAppCredential" -}}
 {{- if and .Values.marge.github.app.privateKey (not .Values.marge.github.app.existingSecret) -}}true{{- end -}}
-{{- end }}
-
-{{- define "marge.writesSlackToken" -}}
-{{- if and .Values.marge.slack.token (not .Values.marge.slack.existingSecret) -}}true{{- end -}}
 {{- end }}
 
 {{/*
@@ -159,16 +155,15 @@ listing of the pod.
 {{- end }}
 
 {{/*
-Environment of the Slack bot token. Renders nothing when no token is
+Environment of the team summaries. Renders nothing when no gateway is
 configured, and the run then posts no summary.
 */}}
-{{- define "marge.slackEnv" -}}
-{{- if or .Values.marge.slack.existingSecret .Values.marge.slack.token -}}
-- name: MARGE_SLACK_TOKEN
-  valueFrom:
-    secretKeyRef:
-      name: {{ default (include "marge.tokenSecretName" .) .Values.marge.slack.existingSecret }}
-      key: {{ .Values.marge.slack.existingSecretKey }}
+{{- define "marge.noticesEnv" -}}
+{{- if .Values.notices.gatewayURL -}}
+- name: MARGE_NOTICES_URL
+  value: {{ .Values.notices.gatewayURL | quote }}
+- name: MARGE_NOTICES_TOKEN_FILE
+  value: /var/run/secrets/klaus-gateway/token
 {{- end }}
 {{- end }}
 

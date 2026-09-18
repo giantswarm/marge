@@ -11,15 +11,15 @@ import (
 
 	"github.com/google/go-github/v92/github"
 
+	"github.com/giantswarm/marge/internal/notify"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/rules"
-	"github.com/giantswarm/marge/internal/slack"
 )
 
 // poster sends one team's summary to one channel. The run takes it as an
-// interface so a test drives the whole run without Slack.
+// interface so a test drives the whole run without the gateway.
 type poster interface {
-	Post(ctx context.Context, channel, text string) error
+	Post(ctx context.Context, team, channel, text string) error
 }
 
 // teamOutcome is what one team's sweep produced. A skipped team carries
@@ -47,10 +47,10 @@ type teamsRun struct {
 	// Teams are the teams an operator named. Empty means the schedule's
 	// own run, which sweeps every team that has a policy file and skips
 	// the teams whose policy switches the schedule off.
-	Teams []string
-	Slack poster
+	Teams   []string
+	Notices poster
 	// Out carries the per-team progress lines. The summaries themselves go
-	// to Slack.
+	// to the team channels.
 	Out io.Writer
 }
 
@@ -113,7 +113,7 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 }
 
 // post renders the summary and sends it. It reports false, and no error,
-// both when the run changed nothing and when no channel or no Slack token is
+// both when the run changed nothing and when no channel or no gateway is
 // configured: a sweep that did its work is not a failed run because a chat
 // message had nowhere to go.
 func (r teamsRun) post(ctx context.Context, team, channel string, result SweepResult) (bool, error) {
@@ -121,10 +121,10 @@ func (r teamsRun) post(ctx context.Context, team, channel string, result SweepRe
 	if !changed {
 		return false, nil
 	}
-	if r.Slack == nil || strings.TrimSpace(channel) == "" {
+	if r.Notices == nil || strings.TrimSpace(channel) == "" {
 		return false, nil
 	}
-	if err := r.Slack.Post(ctx, channel, text); err != nil {
+	if err := r.Notices.Post(ctx, team, channel, text); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -191,11 +191,11 @@ func teamsError(outcomes []teamOutcome) error {
 	return errors.Join(errs...)
 }
 
-// loadSlack returns the poster the environment configures, or nil when it
+// loadNotices returns the poster the environment configures, or nil when it
 // configures none. A typed nil in the poster interface is never nil, so the
 // nil case is returned explicitly.
-func loadSlack() poster {
-	client := slack.LoadClient()
+func loadNotices() poster {
+	client := notify.LoadClient()
 	if client == nil {
 		return nil
 	}
@@ -208,16 +208,16 @@ func loadSlack() poster {
 // A summary reaches the team's channel only when post says so: a sweep by
 // hand posts to no team channel, whether it names one team or five.
 func runTeams(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, post, asJSON bool) error {
-	var slack poster
+	var notices poster
 	if post {
-		slack = loadSlack()
+		notices = loadNotices()
 	}
-	return runTeamSweeps(ctx, client, login, source, opts, teams, slack, asJSON)
+	return runTeamSweeps(ctx, client, login, source, opts, teams, notices, asJSON)
 }
 
 // runTeamSweeps sweeps the teams and fails only after the last team has had
 // its turn.
-func runTeamSweeps(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, slack poster, asJSON bool) error {
+func runTeamSweeps(ctx context.Context, client *github.Client, login string, source RulesSource, opts RunOptions, teams []string, notices poster, asJSON bool) error {
 	opts.Team = ""
 	opts.Query = ""
 	// The live table shows one sweep and these are several, so the run
@@ -227,13 +227,13 @@ func runTeamSweeps(ctx context.Context, client *github.Client, login string, sou
 	opts.Quiet = asJSON
 
 	run := teamsRun{
-		Client: client,
-		Login:  login,
-		Rules:  source,
-		Opts:   opts,
-		Teams:  teams,
-		Slack:  slack,
-		Out:    os.Stderr,
+		Client:  client,
+		Login:   login,
+		Rules:   source,
+		Opts:    opts,
+		Teams:   teams,
+		Notices: notices,
+		Out:     os.Stderr,
 	}
 	outcomes, err := run.Run(ctx)
 	if err != nil {
