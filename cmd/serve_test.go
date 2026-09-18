@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
 )
@@ -182,8 +185,11 @@ func TestBuildSweepResult_rescueRebased(t *testing.T) {
 
 // sweepArguments sets every argument the sweep tool declares to a value
 // that differs from its default, so a parsed request shows whether each one
-// was read.
+// was read. teams is the one argument handleSweep reads for itself, because
+// it selects the several-team answer rather than the request; parseSweepRequest
+// leaves it alone and TestSweepTool_declaresTeams covers it.
 var sweepArguments = map[string]any{
+	"teams":             []any{"bumblebee", "planeteers"},
 	"query":             "typescript",
 	"org":               "my-org",
 	"repos_file":        "/tmp/repos.txt",
@@ -250,9 +256,7 @@ func TestParseSweepRequest_teamScope(t *testing.T) {
 
 	for _, extra := range []map[string]any{{"query": "x"}, {"org": "o"}, {"repos": []any{"o/r"}}, {"repos_file": "/tmp/f"}} {
 		args := map[string]any{"team": "bumblebee"}
-		for k, v := range extra {
-			args[k] = v
-		}
+		maps.Copy(args, extra)
 		if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}); err == nil {
 			t.Errorf("team with %v: want an error", extra)
 		}
@@ -380,4 +384,78 @@ func TestBuildSweepResult_autoMergeIsDisjointFromMerged(t *testing.T) {
 	require.Equal(t, 1, got.Merged[0].Number)
 	require.Len(t, got.AutoMerge, 1)
 	require.Equal(t, 2, got.AutoMerge[0].Number)
+}
+
+// TestBuildSweepResult_dependencyAndVersions guards that an entry carries the
+// title read as an update, so a consumer shows "from this version to that
+// one" without parsing the title again.
+func TestBuildSweepResult_dependencyAndVersions(t *testing.T) {
+	status := pr.NewPRStatus()
+	idx1 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 1, Title: "chore(deps): bump lodash from 4.17.20 to 4.17.21"})
+	status.Update(idx1, pr.StatusFailed, "checks failed: build")
+	idx2 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 2, Title: "chore(deps): update gsoci.azurecr.io/giantswarm/pause docker tag to v3.10.2"})
+	status.Update(idx2, pr.StatusFailed, "checks failed: build")
+	idx3 := status.Add(pr.PRInfo{Owner: "o", Repo: "r", Number: 3, Title: "align files with the template"})
+	status.Update(idx3, pr.StatusFailed, "checks failed: build")
+
+	got := buildSweepResult(status, nil, nil)
+
+	require.Len(t, got.ActionRequired, 3)
+	require.Equal(t, "lodash", got.ActionRequired[0].Dependency)
+	require.Equal(t, "4.17.20", got.ActionRequired[0].VersionFrom)
+	require.Equal(t, "4.17.21", got.ActionRequired[0].VersionTo)
+
+	require.Equal(t, "gsoci.azurecr.io/giantswarm/pause", got.ActionRequired[1].Dependency)
+	require.Empty(t, got.ActionRequired[1].VersionFrom)
+	require.Equal(t, "v3.10.2", got.ActionRequired[1].VersionTo)
+
+	require.Empty(t, got.ActionRequired[2].Dependency)
+	require.Empty(t, got.ActionRequired[2].VersionTo)
+}
+
+// TestSweepTool_declaresTeams guards the several-team scope of the sweep
+// tool: the argument is declared, and it is refused beside a second scope.
+func TestSweepTool_declaresTeams(t *testing.T) {
+	require.Contains(t, sweepTool().InputSchema.Properties, "teams")
+
+	teams := []any{"bumblebee", "planeteers"}
+	require.NoError(t, validateTeamsScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"teams": teams}}}))
+
+	for _, extra := range []map[string]any{{"team": "bumblebee"}, {"query": "x"}, {"org": "o"}, {"repos": []any{"o/r"}}, {"repos_file": "/tmp/f"}} {
+		args := map[string]any{"teams": teams}
+		maps.Copy(args, extra)
+		require.Error(t,
+			validateTeamsScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}),
+			"teams with %v: want an error", extra)
+	}
+}
+
+// TestPRsByTeam guards that a several-team sweep narrowed to named PRs sweeps
+// each PR under the team that owns its repository, and refuses a PR no team
+// owns rather than dropping it.
+func TestPRsByTeam(t *testing.T) {
+	scopes := []teamScope{
+		{team: "bumblebee", scope: policy.Scope{Repos: []string{"giantswarm/muster", "giantswarm/marge"}}},
+		{team: "planeteers", scope: policy.Scope{Repos: []string{"giantswarm/bwi"}}},
+		{team: "broken", err: errors.New("no team file")},
+	}
+
+	got, err := prsByTeam(scopes, []string{"giantswarm/marge#1", "giantswarm/BWI#2", "giantswarm/muster#3"})
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{
+		"bumblebee":  {"giantswarm/marge#1", "giantswarm/muster#3"},
+		"planeteers": {"giantswarm/BWI#2"},
+	}, got)
+
+	require.Empty(t, mustPRsByTeam(t, scopes, nil))
+
+	_, err = prsByTeam(scopes, []string{"giantswarm/other#9"})
+	require.ErrorContains(t, err, "giantswarm/other#9")
+}
+
+func mustPRsByTeam(t *testing.T, scopes []teamScope, refs []string) map[string][]string {
+	t.Helper()
+	got, err := prsByTeam(scopes, refs)
+	require.NoError(t, err)
+	return got
 }

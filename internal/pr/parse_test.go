@@ -525,3 +525,36 @@ func TestExtractTargetVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractVersions(t *testing.T) {
+	for _, tc := range []struct {
+		title string
+		from  string
+		to    string
+	}{
+		{"chore(deps): bump lodash from 4.17.20 to 4.17.21", "4.17.20", "4.17.21"},
+		{"chore(deps): update gsoci.azurecr.io/giantswarm/pause docker tag to v3.10.2", "", "v3.10.2"},
+		{"chore(deps): update actions/setup-go action to v7 (major)", "", "v7"},
+		{"chore(deps): update all non-major dependencies", "", ""},
+	} {
+		from, to := ExtractVersions(tc.title)
+		if from != tc.from || to != tc.to {
+			t.Errorf("ExtractVersions(%q) = (%q, %q), want (%q, %q)", tc.title, from, to, tc.from, tc.to)
+		}
+	}
+}
+
+// TestExtractDependencyName_renovateManagerAfterName covers the Renovate
+// titles that name the dependency first and the manager after it, which are
+// most of the bot PRs of a platform repository.
+func TestExtractDependencyName_renovateManagerAfterName(t *testing.T) {
+	for title, want := range map[string]string{
+		"chore(deps): update gsoci.azurecr.io/giantswarm/pause docker tag to v3.10.2": "gsoci.azurecr.io/giantswarm/pause",
+		"fix(deps): update gvisor.dev/gvisor digest to 40da4cb":                       "gvisor.dev/gvisor",
+		"chore(deps): update giantswarm/architect orb to v5.16.1":                     "giantswarm/architect",
+	} {
+		if got := ExtractDependencyName(title); got != want {
+			t.Errorf("ExtractDependencyName(%q) = %q, want %q", title, got, want)
+		}
+	}
+}

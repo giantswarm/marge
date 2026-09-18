@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
+	"github.com/giantswarm/marge/internal/rules"
 )
 
 func init() {
@@ -312,6 +313,12 @@ func sweepTool() mcp.Tool {
 			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
 			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
 		scopeArguments(),
+		mcp.WithArray("teams",
+			mcp.Description("Sweep several teams in one call, each under its own team file and policy. The answer is then {\"teams\": [{\"team\": ..., \"result\": ...}]}, one entry per team in the order given, and a team whose files are missing or unreadable carries an error instead of a result. "+
+				"The teams share one discovery, and the sweeps themselves run one team after another, so two teams that own the same repository never write to it at the same time. "+
+				"With prs, each named PR is swept under the team that owns its repository, and a PR no team owns is refused. Mutually exclusive with team, query, org, repos and repos_file."),
+			mcp.WithStringItems(),
+		),
 		mcp.WithBoolean("merge_auto",
 			mcp.Description("Also merge PRs that have auto-merge enabled (default: false)"),
 		),
@@ -600,6 +607,13 @@ type SweepPREntry struct {
 	Label      string `json:"label,omitempty"`
 	CreatedAt  string `json:"created_at,omitempty"`
 	AgeDays    int    `json:"age_days,omitempty"`
+	// Dependency, VersionFrom and VersionTo are the title read as an
+	// update: what moves, and between which versions. A title that names
+	// no version leaves both versions empty, and a title in no known shape
+	// leaves all three empty.
+	Dependency  string `json:"dependency,omitempty"`
+	VersionFrom string `json:"version_from,omitempty"`
+	VersionTo   string `json:"version_to,omitempty"`
 	// Rescue describes the most recent prior automated rescue attempt
 	// found on the PR (an ai-rescue marker comment), if any. Consumers
 	// dispatching rescue agents should skip entries with a non-stale
@@ -874,37 +888,11 @@ type teamScope struct {
 // the discovery stays per team, because a team file decides what its PRs
 // may become: each team's PRs are classified under that team's own policy.
 func (t toolset) listTeams(ctx context.Context, teams []string, refresh bool) (TeamQueues, error) {
-	client, err := t.newClient(ctx)
+	scoped, err := t.discoverTeams(ctx, teams)
 	if err != nil {
 		return TeamQueues{}, err
 	}
-	loader, err := policyLoader(client)
-	if err != nil {
-		return TeamQueues{}, err
-	}
-	login, err := gh.AuthenticatedLogin(ctx, client)
-	if err != nil {
-		return TeamQueues{}, err
-	}
-
-	scopes := resolveTeamScopes(ctx, loader, teams)
-
-	repoLists := make([][]string, 0, len(scopes))
-	for _, scoped := range scopes {
-		if scoped.err == nil {
-			repoLists = append(repoLists, scoped.scope.Repos)
-		}
-	}
-	// No team resolved, so there is nothing to read. The discovery is not
-	// run at all: without repositories it would fall back to the GitHub
-	// search, and answer with PRs that belong to no team asked for.
-	var found discovery
-	if repos := mergeRepos(repoLists...); len(repos) > 0 {
-		found, err = searchPRs(ctx, client, "", login, repos)
-		if err != nil {
-			return TeamQueues{}, fmt.Errorf("searching PRs: %w", err)
-		}
-	}
+	client, login, scopes, found := scoped.client, scoped.login, scoped.scopes, scoped.found
 
 	queues := make([]TeamQueue, len(scopes))
 	var wg sync.WaitGroup
@@ -924,6 +912,55 @@ func (t toolset) listTeams(ctx context.Context, teams []string, refresh bool) (T
 	return TeamQueues{Teams: queues}, nil
 }
 
+// teamsScoped is the shared start of a call that covers several teams: the
+// client, the login it authenticates as, each team's resolved scope and the
+// one discovery their repositories share.
+type teamsScoped struct {
+	client *github.Client
+	login  string
+	scopes []teamScope
+	found  discovery
+}
+
+// discoverTeams resolves every team's scope and reads their repositories
+// once. A team whose files are missing or unreadable carries its error and
+// leaves the others alone.
+func (t toolset) discoverTeams(ctx context.Context, teams []string) (teamsScoped, error) {
+	client, err := t.newClient(ctx)
+	if err != nil {
+		return teamsScoped{}, err
+	}
+	loader, err := policyLoader(client)
+	if err != nil {
+		return teamsScoped{}, err
+	}
+	login, err := gh.AuthenticatedLogin(ctx, client)
+	if err != nil {
+		return teamsScoped{}, err
+	}
+
+	scopes := resolveTeamScopes(ctx, loader, teams)
+
+	repoLists := make([][]string, 0, len(scopes))
+	for _, scoped := range scopes {
+		if scoped.err == nil {
+			repoLists = append(repoLists, scoped.scope.Repos)
+		}
+	}
+	// No team resolved, so there is nothing to read. The discovery is not
+	// run at all: without repositories it would fall back to the GitHub
+	// search, and answer with PRs that belong to no team asked for.
+	var found discovery
+	if repos := mergeRepos(repoLists...); len(repos) > 0 {
+		found, err = searchPRs(ctx, client, "", login, repos)
+		if err != nil {
+			return teamsScoped{}, fmt.Errorf("searching PRs: %w", err)
+		}
+	}
+
+	return teamsScoped{client: client, login: login, scopes: scopes, found: found}, nil
+}
+
 // teamsAtOnce is how many teams of one call are classified together. It
 // bounds the widest read, which is a refresh of every team: each team fans
 // out over its own PRs as well.
@@ -935,7 +972,7 @@ func (t toolset) teamQueue(ctx context.Context, client *github.Client, login str
 	failed := failuresOfRepos(found.Failed, scoped.scope.Repos)
 
 	if !refresh {
-		return TeamQueue{Team: scoped.team, Result: pointer(buildSweepResult(storedStatus(prs), failed, nil))}
+		return TeamQueue{Team: scoped.team, Result: new(buildSweepResult(storedStatus(prs), failed, nil))}
 	}
 
 	opts := RunOptions{
@@ -950,10 +987,8 @@ func (t toolset) teamQueue(ctx context.Context, client *github.Client, login str
 	if err != nil {
 		return TeamQueue{Team: scoped.team, Error: err.Error()}
 	}
-	return TeamQueue{Team: scoped.team, Result: pointer(buildSweepResult(status, failed, nil))}
+	return TeamQueue{Team: scoped.team, Result: new(buildSweepResult(status, failed, nil))}
 }
-
-func pointer[T any](value T) *T { return &value }
 
 // resolveTeamScopes reads every team's files. The reads are independent, so
 // they run together: one team's files are three requests, and a caller that
@@ -1054,11 +1089,127 @@ func (t toolset) handleSweep(ctx context.Context, request mcp.CallToolRequest) (
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	if teams := request.GetStringSlice("teams", nil); len(teams) > 0 {
+		if err := validateTeamsScope(request); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		sweeps, err := t.sweepTeams(ctx, teams, req)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return result(sweeps)
+	}
 	sweepResult, err := t.run(ctx, req)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return result(sweepResult)
+}
+
+// sweepTeams sweeps several teams in one call, each under its own policy.
+//
+// The teams share the discovery, as a several-team list does. The sweeps
+// themselves run one after another: a sweep writes, and two teams can own
+// the same repository, so running them together would let two runs act on
+// one PR at the same time.
+func (t toolset) sweepTeams(ctx context.Context, teams []string, req sweepRequest) (TeamQueues, error) {
+	scoped, err := t.discoverTeams(ctx, teams)
+	if err != nil {
+		return TeamQueues{}, err
+	}
+
+	selected, err := prsByTeam(scoped.scopes, req.Opts.PRs)
+	if err != nil {
+		return TeamQueues{}, err
+	}
+
+	catalogue, rulesReport := loadRules(ctx, scoped.client, RulesSource{})
+	if req.Rule != "" {
+		catalogue, err = catalogue.Only(req.Rule)
+		if err != nil {
+			return TeamQueues{}, err
+		}
+		rulesReport.Loaded = len(catalogue.Rules)
+	}
+
+	queues := make([]TeamQueue, len(scoped.scopes))
+	for index, scope := range scoped.scopes {
+		if scope.err != nil {
+			queues[index] = TeamQueue{Team: scope.team, Error: scope.err.Error()}
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return TeamQueues{}, err
+		}
+		queues[index] = t.sweepTeam(ctx, scoped, scope, req, selected[scope.team], catalogue, rulesReport)
+	}
+	return TeamQueues{Teams: queues}, nil
+}
+
+// sweepTeam sweeps one team of a several-team call from the shared
+// discovery.
+func (t toolset) sweepTeam(ctx context.Context, scoped teamsScoped, scope teamScope, req sweepRequest, prs []string, catalogue *rules.Catalogue, rulesReport *SweepRules) TeamQueue {
+	found := prsOfRepos(scoped.found.PRs, scope.scope.Repos)
+	failed := failuresOfRepos(scoped.found.Failed, scope.scope.Repos)
+	if len(req.Opts.PRs) > 0 {
+		var err error
+		if found, err = filterByPRs(found, prs); err != nil {
+			return TeamQueue{Team: scope.team, Error: err.Error()}
+		}
+	}
+
+	opts := req.Opts
+	opts.Team = scope.team
+	opts.PRs = prs
+	opts.Policies = scope.scope.Policies
+	opts.Rules = catalogue
+
+	status, err := processOnceWithStatus(ctx, scoped.client, scoped.login, found, opts)
+	if err != nil {
+		return TeamQueue{Team: scope.team, Error: err.Error()}
+	}
+	return TeamQueue{Team: scope.team, Result: new(buildSweepResult(status, failed, rulesReport))}
+}
+
+// prsByTeam assigns each named PR to the team that owns its repository. A
+// PR no team of the call owns is refused for the whole call, the way a PR
+// outside a single team's scope is: a caller never believes a PR was swept
+// because it was silently absent.
+func prsByTeam(scopes []teamScope, refs []string) (map[string][]string, error) {
+	byTeam := make(map[string][]string, len(scopes))
+	if len(refs) == 0 {
+		return byTeam, nil
+	}
+	owners := make(map[string]string, len(scopes))
+	for _, scope := range scopes {
+		if scope.err != nil {
+			continue
+		}
+		for _, repo := range scope.scope.Repos {
+			if _, taken := owners[strings.ToLower(repo)]; !taken {
+				owners[strings.ToLower(repo)] = scope.team
+			}
+		}
+	}
+
+	var orphans []string
+	for _, ref := range refs {
+		owner, repo, _, err := pr.ParsePRRef(ref)
+		if err != nil {
+			return nil, err
+		}
+		team, owned := owners[strings.ToLower(owner+"/"+repo)]
+		if !owned {
+			orphans = append(orphans, ref)
+			continue
+		}
+		byTeam[team] = append(byTeam[team], ref)
+	}
+	if len(orphans) > 0 {
+		sort.Strings(orphans)
+		return nil, fmt.Errorf("no team of this call owns the repository of: %s", strings.Join(orphans, ", "))
+	}
+	return byTeam, nil
 }
 
 // remedyRequest is what one call of the remedy tool asks the engine for: the
@@ -1144,6 +1295,8 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 			Reason: string(e.ObsoleteReason),
 			Kind:   string(e.Kind),
 		}
+		entry.Dependency = pr.ExtractDependencyName(e.PR.Title)
+		entry.VersionFrom, entry.VersionTo = pr.ExtractVersions(e.PR.Title)
 		if e.UpdateType != "" {
 			entry.UpdateType = string(e.UpdateType)
 		}

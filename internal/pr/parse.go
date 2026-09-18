@@ -47,6 +47,10 @@ var dependencyPatterns = []*regexp.Regexp{
 	// Renovate: "Update actions/checkout action to v5.1.0" -- the action
 	// names itself, with no manager word in front.
 	regexp.MustCompile(`(?i)^update ([@\w\-./]+(?:/[@\w\-./]+)*) action\b`),
+	// Renovate: "Update gsoci.azurecr.io/giantswarm/pause docker tag to
+	// v3.10.2", and the digest, orb and image shapes beside it -- the
+	// dependency names itself and the manager word follows it.
+	regexp.MustCompile(`(?i)^update ([@\w\-./]+(?:/[@\w\-./]+)*) (?:docker tag|digest|orb|image)\b`),
 	// Renovate: "Update rust crate kube to v3"
 	regexp.MustCompile(`(?i)update [\w\-]+ crate ([@\w\-./]+(?:/[@\w\-./]+)*)`),
 	// Renovate: "Update terraform aws to v5"
@@ -123,6 +127,20 @@ func ExtractVersion(title string) string {
 		return m[0]
 	default:
 		return m[0] + " -> " + m[1]
+	}
+}
+
+// ExtractVersions returns the versions named in a dependency-update title as
+// a pair: the version the update moves from, empty when the title names only
+// the target, and the version it moves to.
+func ExtractVersions(title string) (from, to string) {
+	switch m := versionMatch(title); len(m) {
+	case 0:
+		return "", ""
+	case 1:
+		return "", m[0]
+	default:
+		return m[0], m[1]
 	}
 }
 
