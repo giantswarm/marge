@@ -108,13 +108,6 @@ marge:
       installationIdKey: "github-app-installation-id"
       # -- Key of the PEM private key inside the Secret
       privateKeyKey: "github-app-private-key"
-  slack:
-    # -- Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary.
-    token: ""
-    # -- Name of an existing Secret holding the Slack bot token. Takes precedence over token.
-    existingSecret: ""
-    # -- Key of the Slack bot token inside existingSecret
-    existingSecretKey: "slack-token"
   circleci:
     # -- CircleCI API token, optional: lets marge inspect private CircleCI projects and retry auto-cancelled builds. The chart writes it into a Secret; prefer existingSecret in production.
     token: ""
@@ -122,6 +115,23 @@ marge:
     existingSecret: ""
     # -- Key of the CircleCI token inside existingSecret
     existingSecretKey: "token"
+
+# Team summaries. A scheduled run posts one summary per team to klaus-gateway's
+# team-notice endpoint (POST /notices), which holds the Slack app and the
+# workspace credential; the sweep holds no Slack token. The run authenticates
+# as its own ServiceAccount: the gateway verifies the projected token with a
+# TokenReview for `audience` and admits the ServiceAccounts named in its
+# `reviews.allowedCallers`. The channel is the team's own: `slackChannel` in
+# its policy file, as a Slack channel ID.
+notices:
+  # -- klaus-gateway as reached from the pod, for example `http://klaus-gateway.agent-platform.svc:8080`. Empty posts no summary: the run does its work and reports it on its own output.
+  gatewayURL: ""
+  # -- Audience the run projects its ServiceAccount token for; the gateway's own `reviews.audience`.
+  audience: "klaus-gateway"
+  # -- Namespace the gateway runs in, for the egress rule of each scheduled run. The URL is not parsed, so it is named here as well.
+  gatewayNamespace: "agent-platform"
+  # -- Port the gateway serves the endpoint on, for the same egress rule.
+  gatewayPort: 8080
 
 # -- Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead.
 suspendAll: false

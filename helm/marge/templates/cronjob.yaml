@@ -64,7 +64,7 @@ spec:
                 {{- end }}
               env:
                 {{- include "marge.appEnv" $ | nindent 16 }}
-                {{- with (include "marge.slackEnv" $) }}
+                {{- with (include "marge.noticesEnv" $) }}
                 {{- . | nindent 16 }}
                 {{- end }}
                 {{- with (include "marge.circleciEnv" $) }}
@@ -79,6 +79,11 @@ spec:
                 {{- if $entry.tokenAudience }}
                 - name: kagent-token
                   mountPath: /var/run/secrets/kagent
+                  readOnly: true
+                {{- end }}
+                {{- if $.Values.notices.gatewayURL }}
+                - name: klaus-gateway-token
+                  mountPath: /var/run/secrets/klaus-gateway
                   readOnly: true
                 {{- end }}
                 - name: tmp
@@ -101,6 +106,17 @@ spec:
                       path: token
                       audience: {{ $entry.tokenAudience | quote }}
                       expirationSeconds: 3600
+            {{- end }}
+            {{- if $.Values.notices.gatewayURL }}
+            # The gateway verifies this token with a TokenReview for its own
+            # audience, so the summary needs no Slack token of its own.
+            - name: klaus-gateway-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      audience: {{ $.Values.notices.audience | quote }}
+                      expirationSeconds: 600
             {{- end }}
             - name: tmp
               emptyDir: {}

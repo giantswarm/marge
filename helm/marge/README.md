@@ -28,7 +28,7 @@ A run sweeps one team: it classifies, approves, merges, refreshes stale branches
 
 The schedule acts as the App and never as a person. Set `marge.github.app` and the CronJob mints an installation token per repository, for one hour, and stores none. Without `marge.github.app` the chart refuses to render an enabled schedule. The App's credentials live in 1Password, in the `Team Bumblebee` vault, in the item `marge sweep GitHub App`; see [docs/github-app.md](https://github.com/giantswarm/marge/blob/main/docs/github-app.md).
 
-Set `marge.slack.token` and each run posts one summary to the channel the team's policy names. A run that changed nothing posts nothing. A scheduled run passes `--post-summary`, which a sweep by hand does not, so a manual sweep stays out of the team channels.
+Set `notices.gatewayURL` and each run posts one summary to the channel the team's policy names, through klaus-gateway's team-notice endpoint (`POST /notices`). The run authenticates as its own ServiceAccount: the CronJob projects a token for `notices.audience`, the gateway verifies it with a `TokenReview` and admits the ServiceAccounts its own `reviews.allowedCallers` names. The gateway holds the Slack app, so the chart holds no Slack token. A run that changed nothing posts nothing, and a team whose policy names no channel is reported in the run's log. A scheduled run passes `--post-summary`, which a sweep by hand does not, so a manual sweep stays out of the team channels.
 
 An entry that sets `args` passes them to the binary as the whole command line, and `tokenAudience` mounts a projected ServiceAccount token at `/var/run/secrets/kagent`. That pair is how the weekly rescue trigger will run. Keep such an entry suspended until the rescue command exists.
 
@@ -81,12 +81,13 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | marge.github.app.idKey | string | `"github-app-id"` | Key of the App ID inside the Secret |
 | marge.github.app.installationIdKey | string | `"github-app-installation-id"` | Key of the installation ID inside the Secret |
 | marge.github.app.privateKeyKey | string | `"github-app-private-key"` | Key of the PEM private key inside the Secret |
-| marge.slack.token | string | `""` | Bot token of the sweep's own Slack app, which holds chat:write and nothing else. Without it a scheduled sweep does its work and posts no summary. |
-| marge.slack.existingSecret | string | `""` | Name of an existing Secret holding the Slack bot token. Takes precedence over token. |
-| marge.slack.existingSecretKey | string | `"slack-token"` | Key of the Slack bot token inside existingSecret |
 | marge.circleci.token | string | `""` | CircleCI API token, optional: lets marge inspect private CircleCI projects and retry auto-cancelled builds. The chart writes it into a Secret; prefer existingSecret in production. |
 | marge.circleci.existingSecret | string | `""` | Name of an existing Secret holding the CircleCI token. Takes precedence over token. |
 | marge.circleci.existingSecretKey | string | `"token"` | Key of the CircleCI token inside existingSecret |
+| notices.gatewayURL | string | `""` | klaus-gateway as reached from the pod, for example `http://klaus-gateway.agent-platform.svc:8080`. Empty posts no summary: the run does its work and reports it on its own output. |
+| notices.audience | string | `"klaus-gateway"` | Audience the run projects its ServiceAccount token for; the gateway's own `reviews.audience`. |
+| notices.gatewayNamespace | string | `"agent-platform"` | Namespace the gateway runs in, for the egress rule of each scheduled run. The URL is not parsed, so it is named here as well. |
+| notices.gatewayPort | int | `8080` | Port the gateway serves the endpoint on, for the same egress rule. |
 | suspendAll | bool | `false` | Suspend every scheduled run without deleting its entry. A single run is suspended on its own entry instead. |
 | scheduleDefaults | object | `{"actions":"classify,approve,merge,refresh,retry,remedy,mark","activeDeadlineSeconds":3600,"dryRun":false,"failedJobsHistoryLimit":3,"resources":{"limits":{"cpu":1,"ephemeral-storage":"1Gi","memory":"512Mi"},"requests":{"cpu":"100m","ephemeral-storage":"50Mi","memory":"128Mi"}},"successfulJobsHistoryLimit":3,"timeZone":"Europe/Berlin"}` | Values every entry of schedules takes for the keys it does not set itself. |
 | scheduleDefaults.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expressions are read in. |
