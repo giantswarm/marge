@@ -21,7 +21,9 @@ import (
 // before the entry would merge code no CI ran on.
 //
 // A PR that already carries the line is left alone and the sweep carries on
-// with it, so a team that opted in does not stall on the same PR every day.
+// with it, so a team does not stall on the same PR every day. A repository
+// that keeps no changelog costs one read and nothing else: that is the common
+// case, not a failure, and it is not reported as one.
 func (p *Processor) changelogEntry(ctx context.Context, run *prRun, resolved pr.Policy) bool {
 	if !p.Actions.Has(ActionChangelog) || p.DryRun {
 		return false

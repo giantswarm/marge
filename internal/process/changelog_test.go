@@ -61,12 +61,25 @@ func TestChangelog_writtenOnce(t *testing.T) {
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
 }
 
-// TestChangelog_offWithoutTheTeamAskingForIt: the entry is a commit on a
-// team's branch, so no team gets one until its policy says so.
-func TestChangelog_offWithoutTheTeamAskingForIt(t *testing.T) {
+// TestChangelog_writtenWithoutAnyPolicyFile: the entry is the company
+// default, so a team that writes no policy file still records its updates.
+func TestChangelog_writtenWithoutAnyPolicyFile(t *testing.T) {
 	f := changelogFixture()
 
 	got := f.run(t, nil)
+
+	require.Equal(t, int32(1), f.changelogPuts.Load())
+	require.Equal(t, pr.StatusWaitingChecks, got.State, got.Detail)
+}
+
+// TestChangelog_offWhenTheTeamSwitchesItOff: a team that does not want its
+// bot PRs to carry an entry says so, and the sweep merges as it always did.
+func TestChangelog_offWhenTheTeamSwitchesItOff(t *testing.T) {
+	f := changelogFixture()
+
+	got := f.run(t, func(p *Processor) {
+		p.Policies = policySet(t, "changelog:\n  enabled: false\n", nil)
+	})
 
 	require.Zero(t, f.changelogPuts.Load())
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
@@ -86,15 +99,16 @@ func TestChangelog_notInAClassifyRun(t *testing.T) {
 	require.NotEqual(t, pr.StatusWaitingChecks, got.State, got.Detail)
 }
 
-// TestChangelog_aRepositoryWithoutTheFileIsDecidedAnyway: a changelog is a
-// courtesy, never a guard.
+// TestChangelog_aRepositoryWithoutTheFileIsDecidedAnyway: plenty of
+// repositories keep no changelog. That is a normal state, not a failure, so
+// the sweep says nothing about it and decides the PR as it always did.
 func TestChangelog_aRepositoryWithoutTheFileIsDecidedAnyway(t *testing.T) {
 	f := changelogFixture()
 	f.changelog = ""
 
-	got := f.run(t, func(p *Processor) { p.Policies = policySet(t, "changelog:\n  enabled: true\n", nil) })
+	got := f.run(t, nil)
 
 	require.Zero(t, f.changelogPuts.Load())
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
-	require.Contains(t, got.Detail, "changelog entry not written")
+	require.NotContains(t, got.Detail, "changelog")
 }

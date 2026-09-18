@@ -27,8 +27,7 @@ const (
 	// through the action the rule names and that action's guards.
 	ActionRemedy Action = "remedy"
 	// ActionChangelog commits the team's changelog entry to a PR that will
-	// merge, before anything is approved. It runs only where the team's
-	// policy asks for it.
+	// merge, before anything is approved. A team's policy switches it off.
 	ActionChangelog Action = "changelog"
 	// ActionMark writes markers and evidence comments on the PR.
 	ActionMark Action = "mark"

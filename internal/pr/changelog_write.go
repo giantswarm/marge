@@ -16,8 +16,8 @@ type ChangelogOutcome struct {
 	Line    string
 	Written bool
 	Commit  string
-	// Refused says why nothing was written: the file is not there, or the
-	// entry already is.
+	// Refused says why nothing was written, and is not a failure: the
+	// repository keeps no changelog, or the entry is already in it.
 	Refused string
 }
 
@@ -44,9 +44,13 @@ func WriteChangelogEntry(
 	}
 	outcome := ChangelogOutcome{Line: line}
 
-	content, sha, err := changelogFile(ctx, client, owner, repo, policy.Path, branch)
+	content, sha, found, err := changelogFile(ctx, client, owner, repo, policy.Path, branch)
 	if err != nil {
 		return outcome, err
+	}
+	if !found {
+		outcome.Refused = owner + "/" + repo + " has no " + policy.Path
+		return outcome, nil
 	}
 
 	next, changed := InsertChangelogLine(content, policy, line)
@@ -73,23 +77,23 @@ func WriteChangelogEntry(
 }
 
 // changelogFile reads the file on the branch and returns its content and blob
-// SHA. A file that is not there is an error rather than a file to create:
-// where a changelog goes is the repository's own convention, and this does
-// not invent one.
-func changelogFile(ctx context.Context, client *github.Client, owner, repo, path, branch string) (string, string, error) {
+// SHA. A repository that keeps no changelog reports found false and no error:
+// plenty of repositories have none, and where a changelog goes is the
+// repository's own convention, which this does not invent.
+func changelogFile(ctx context.Context, client *github.Client, owner, repo, path, branch string) (content, sha string, found bool, err error) {
 	file, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: branch})
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return "", "", errors.New(path + " is not in this repository, so there is no changelog to add to")
+			return "", "", false, nil
 		}
-		return "", "", fmt.Errorf("reading %s: %w", path, err)
+		return "", "", false, fmt.Errorf("reading %s: %w", path, err)
 	}
 	if file == nil {
-		return "", "", errors.New(path + " is a directory, not a changelog file")
+		return "", "", false, errors.New(path + " is a directory, not a changelog file")
 	}
-	content, err := file.GetContent()
+	content, err = file.GetContent()
 	if err != nil {
-		return "", "", fmt.Errorf("decoding %s: %w", path, err)
+		return "", "", false, fmt.Errorf("decoding %s: %w", path, err)
 	}
-	return content, file.GetSHA(), nil
+	return content, file.GetSHA(), true, nil
 }

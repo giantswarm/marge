@@ -98,8 +98,9 @@ the heading and section the entry goes under, and the line itself.
 
 Two doors, and the same write behind both:
 
-- The `changelog` **step** of a sweep, where `changelog.enabled` is true in
-  the team's policy. It is false by default.
+- The `changelog` **step** of a sweep, unless `changelog.enabled` is false in
+  the team's policy. It is true by default: a dependency update nobody records
+  is a release note nobody can write.
 - `x_marge_changelog`, on the PRs a person picked, whatever the policy says.
 
 The entry is a commit on the PR's own branch, and that has two consequences a
