@@ -67,6 +67,12 @@ const MarkerOutcomeUnhandled = "unhandled"
 // so a search over PR comments finds every PR that holds one.
 const UnhandledPhrase = "unrecognised failure"
 
+// MarkerOutcomeHeld is the outcome of an evidence marker that records a
+// green PR the resolved policy leaves to a person. The label says a person
+// must act; the marker says which update type waits and which files decided
+// it, which the run's log holds only for the length of the run.
+const MarkerOutcomeHeld = "held"
+
 // IsUnhandled reports whether the marker records a failure no rule
 // recognised, with the signature that groups it across PRs.
 func (m *RescueMarker) IsUnhandled() bool {

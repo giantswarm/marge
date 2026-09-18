@@ -55,6 +55,45 @@ func TestPolicy_heldByTeamDeviation(t *testing.T) {
 	require.Equal(t, []pr.UpdateType{pr.UpdatePatch}, entry.Policy.UpdateTypes[pr.KindRenovate])
 }
 
+// TestPolicy_heldIsExplainedOnThePR writes the hold on the PR itself. The
+// label names the class and no more, and the run's log holds the reason
+// only while the run lasts, so a team that did not write the policy has
+// nowhere to read which key held their PR.
+func TestPolicy_heldIsExplainedOnThePR(t *testing.T) {
+	fixture := greenFixture()
+	entry := fixture.run(t, func(p *Processor) {
+		p.Policies = policySet(t, "updateTypes:\n  renovate: [patch]\n", nil)
+	})
+
+	require.Equal(t, pr.StatusHeld, entry.State)
+	require.Equal(t, int32(1), fixture.commentPosts.Load())
+
+	marker := pr.ParseRescueMarker(fixture.comments[0])
+	require.NotNil(t, marker)
+	require.True(t, marker.IsEvidence(), "a hold is evidence, not a prior rescue attempt")
+	require.Equal(t, pr.MarkerOutcomeHeld, marker.Outcome)
+	require.Contains(t, marker.Reason, "minor update waits for a person")
+	require.Contains(t, marker.Reason, policy.TeamFile("bumblebee"))
+	require.Nil(t, entry.Rescue, "evidence never counts as a prior rescue")
+}
+
+// TestPolicy_heldIsExplainedOncePerChange leaves one explanation on a PR a
+// daily sweep holds again and again. A held PR waits for a person for as
+// long as the person takes.
+func TestPolicy_heldIsExplainedOncePerChange(t *testing.T) {
+	fixture := greenFixture()
+	hold := func(p *Processor) {
+		p.Policies = policySet(t, "updateTypes:\n  renovate: [patch]\n", nil)
+	}
+
+	first := fixture.run(t, hold)
+	second := fixture.run(t, hold)
+
+	require.Equal(t, pr.StatusHeld, first.State)
+	require.Equal(t, pr.StatusHeld, second.State)
+	require.Equal(t, int32(1), fixture.commentPosts.Load())
+}
+
 // TestPolicy_exceptionSwitchesTheSweepOff skips every PR of a repository
 // whose exception says so, and writes nothing to it.
 func TestPolicy_exceptionSwitchesTheSweepOff(t *testing.T) {

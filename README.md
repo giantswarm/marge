@@ -189,7 +189,7 @@ Each guard is enforced by the engine and covered by a scenario test; none has an
 
 Every PR the sweep touched carries exactly one `marge/<class>` label, replaced on each sweep: `merged`, `auto-merge`, `eligible`, `pending`, `action-required`, `held`, `awaiting-approval`, `security`, `stale`, `conflict`, `ci-unavailable`, `skipped`. Labels are display only; no guard reads them back. A label marge may not write is a note on the entry, never a different outcome. A `bot-prs-sweep/<class>` label from the earlier namespace is removed on the next sweep that touches the PR.
 
-An action marge performed, or a guard decision a person needs to see, is written once as an evidence comment: `update-branch`, `retry`, `merged-past-red-check`, `awaiting-approval`, `security-blocked`. Evidence is an [ai-rescue marker](#rescue-markers-prior-ai-rescue-attempts) with `"kind":"evidence"` and `"tool":"marge"`, so it carries the head SHA and the diff fingerprint. A second sweep on the same change writes nothing: the fingerprint, not the SHA, decides, so a Renovate rebase does not repeat the comment.
+An action marge performed, or a guard decision a person needs to see, is written once as an evidence comment: `update-branch`, `retry`, `merged-past-red-check`, `awaiting-approval`, `security-blocked`, `held`. The `held` comment names the update type that waits and the policy files that decided it, which the label does not carry. Evidence is an [ai-rescue marker](#rescue-markers-prior-ai-rescue-attempts) with `"kind":"evidence"` and `"tool":"marge"`, so it carries the head SHA and the diff fingerprint. A second sweep on the same change writes nothing: the fingerprint, not the SHA, decides, so a Renovate rebase does not repeat the comment.
 
 #### Actions
 
