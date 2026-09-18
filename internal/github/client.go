@@ -62,7 +62,7 @@ func NewClient(ctx context.Context) (*github.Client, error) {
 	if token == "" {
 		return nil, errors.New("no GitHub token found: set GITHUB_TOKEN or GH_TOKEN, log in with `gh auth login`, or set the App credential (" + appIDEnv + ", " + appInstallationIDEnv + ", " + appPrivateKeyFileEnv + ")")
 	}
-	return github.NewClient(github.WithAuthToken(token))
+	return github.NewClient(github.WithTransport(APITransport()), github.WithAuthToken(token))
 }
 
 // defaultBaseURL is the REST API root every call is built on. It carries the
@@ -78,7 +78,7 @@ func NewAppClient(app *App, baseURL string, httpClient *http.Client) (*github.Cl
 	}
 	base := httpClient.Transport
 	if base == nil {
-		base = http.DefaultTransport
+		base = APITransport()
 	}
 	transport := &appTransport{
 		app:     app,

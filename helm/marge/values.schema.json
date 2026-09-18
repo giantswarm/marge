@@ -259,7 +259,7 @@
         },
         "resources": {
             "type": "object",
-            "description": "Container resources. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.",
+            "description": "Container resources. One pod answers every person reading the Bot PRs page at once, and a single read runs its GitHub requests in parallel, so the CPU limit bounds how many of those a pod can hold. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.",
             "additionalProperties": false,
             "properties": {
                 "limits": {
