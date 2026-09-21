@@ -1,0 +1,13 @@
+name: another orb step that gives up is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update giantswarm/architect orb to v10.5.1"
+  failing: ["ci/circleci: push-to-registries"]
+  logs:
+    "circleci:ci/circleci: push-to-registries": |
+      ====> Attempt 4: Running "docker push"
+      denied: requested access to the resource is denied
+      Giving up after 4 failures.
+expect:
+  rule: ""

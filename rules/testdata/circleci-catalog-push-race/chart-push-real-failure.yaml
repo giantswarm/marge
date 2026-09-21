@@ -1,0 +1,14 @@
+name: a chart push that failed on the chart itself is left alone
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update giantswarm/architect orb to v10.5.1"
+  failing: ["ci/circleci: push-chart"]
+  logs:
+    "circleci:ci/circleci: push-chart": |
+      Error: validation: chart.metadata.version "0.1.0-dev" is invalid
+      Error pushing changes. See known errors in:
+      https://github.com/giantswarm/architect-orb/blob/master/README.md#push-to-app-catalog
+      Exited with code exit status 1
+expect:
+  rule: ""

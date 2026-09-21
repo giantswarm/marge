@@ -32,6 +32,7 @@ the index.
 |---|---|---|---|
 | A CircleCI build the platform cancelled | `circleci-auto-cancel` | `circleci-retry` | 74 |
 | cosign transparency-log conflict | `cosign-transparency-log-conflict` | `circleci-retry` | 32 |
+| A chart push that lost the race on the shared app catalog | `circleci-catalog-push-race` | `circleci-retry` | observed 2026-09-18 to 2026-09-21 |
 | A release asset 404 moments after publication | `release-asset-404-race` | `rerun-failed` | 33 |
 | An action or tool download that failed | `actions-runner-download-error` | `rerun-failed` | 86 |
 | A dropped Go module-proxy connection | `go-module-proxy-stream-error` | `rerun-failed` | observed 2026-09-14 |
