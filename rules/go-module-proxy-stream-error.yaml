@@ -1,10 +1,9 @@
 name: go-module-proxy-stream-error
 summary: The Go module proxy dropped the connection while a module was fetched.
-source: observed on giantswarm/mcp-template#136, 2026-09-14
+source: observed on giantswarm/mcp-template#136 and giantswarm/agentlab#218, 2026-09-14
 match:
   states: [failed]
   log:
-    source: actions
     pattern: 'proxy\.golang\.org.*(stream error|INTERNAL_ERROR|unexpected EOF|TLS handshake timeout)'
 action:
   name: rerun-failed

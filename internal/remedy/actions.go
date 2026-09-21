@@ -67,26 +67,30 @@ func (updateBranch) Apply(ctx context.Context, req *Request) (Outcome, error) {
 // runURLRE reads the workflow run id out of a check run's details URL.
 var runURLRE = regexp.MustCompile(`/actions/runs/(\d+)`)
 
-// rerunFailed reruns the failed jobs of the GitHub Actions run behind the
-// matched check, which also releases the jobs those failures blocked.
+// rerunFailed reruns the failed jobs of the build behind the matched check,
+// which also releases the jobs those failures blocked. The provider is the
+// one that ran the check, read from the check's URL, so a rule that names a
+// transient failure reruns it wherever the failure appeared.
 type rerunFailed struct{}
 
 func (rerunFailed) Name() Name      { return RerunFailed }
 func (rerunFailed) Guards() []Guard { return commonGuards(RerunFailed) }
 
 func (rerunFailed) Apply(ctx context.Context, req *Request) (Outcome, error) {
-	match := runURLRE.FindStringSubmatch(req.CheckURL)
-	if match == nil {
-		return Outcome{Refused: "no Actions run behind " + req.Check}, nil
+	if match := runURLRE.FindStringSubmatch(req.CheckURL); match != nil {
+		runID, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil {
+			return Outcome{Refused: "no build behind " + req.Check}, nil
+		}
+		if _, err := req.Deps.GitHub.Actions.RerunFailedJobsByID(ctx, req.Info.Owner, req.Info.Repo, runID); err != nil {
+			return Outcome{}, fmt.Errorf("rerun-failed: %w", err)
+		}
+		return Outcome{Applied: true, Detail: fmt.Sprintf("failed jobs of run %d rerun", runID)}, nil
 	}
-	runID, err := strconv.ParseInt(match[1], 10, 64)
-	if err != nil {
-		return Outcome{Refused: "no Actions run behind " + req.Check}, nil
+	if _, ok := circleci.ParseBuildURL(req.CheckURL); ok {
+		return retryCircleCIBuild(ctx, req, "rerun-failed")
 	}
-	if _, err := req.Deps.GitHub.Actions.RerunFailedJobsByID(ctx, req.Info.Owner, req.Info.Repo, runID); err != nil {
-		return Outcome{}, fmt.Errorf("rerun-failed: %w", err)
-	}
-	return Outcome{Applied: true, Detail: fmt.Sprintf("failed jobs of run %d rerun", runID)}, nil
+	return Outcome{Refused: "no build behind " + req.Check}, nil
 }
 
 // circleCIRetry reruns the CircleCI workflow the matched check belongs to,
@@ -98,6 +102,17 @@ func (circleCIRetry) Name() Name      { return CircleCIRetry }
 func (circleCIRetry) Guards() []Guard { return commonGuards(CircleCIRetry) }
 
 func (circleCIRetry) Apply(ctx context.Context, req *Request) (Outcome, error) {
+	if _, ok := circleci.ParseBuildURL(req.CheckURL); !ok {
+		return Outcome{Refused: "no CircleCI build behind " + req.Check}, nil
+	}
+	return retryCircleCIBuild(ctx, req, string(CircleCIRetry))
+}
+
+// retryCircleCIBuild reruns the CircleCI workflow behind the matched check
+// from its failed jobs, and falls back to the single-build retry when
+// CircleCI has no failed job to rerun from. action names the caller, so the
+// error says which action the sweep was applying.
+func retryCircleCIBuild(ctx context.Context, req *Request, action string) (Outcome, error) {
 	client := req.Deps.CircleCI
 	if client == nil {
 		return Outcome{Refused: "no CircleCI token: the build cannot be retried"}, nil
@@ -108,7 +123,7 @@ func (circleCIRetry) Apply(ctx context.Context, req *Request) (Outcome, error) {
 	}
 	build, err := client.Build(ctx, ref)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("circleci-retry: %w", err)
+		return Outcome{}, fmt.Errorf("%s: %w", action, err)
 	}
 
 	if build.Workflows.WorkflowID != "" {
@@ -117,12 +132,12 @@ func (circleCIRetry) Apply(ctx context.Context, req *Request) (Outcome, error) {
 			return Outcome{Applied: true, Detail: "workflow " + workflowLabel(build.Workflows) + " rerun from failed"}, nil
 		}
 		if !rerunRefused(err) {
-			return Outcome{}, fmt.Errorf("circleci-retry: rerun of workflow %s: %w", workflowLabel(build.Workflows), err)
+			return Outcome{}, fmt.Errorf("%s: rerun of workflow %s: %w", action, workflowLabel(build.Workflows), err)
 		}
 	}
 	retried, err := client.Retry(ctx, ref)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("circleci-retry: retry of build %d: %w", ref.Num, err)
+		return Outcome{}, fmt.Errorf("%s: retry of build %d: %w", action, ref.Num, err)
 	}
 	return Outcome{Applied: true, Detail: fmt.Sprintf("build %d retried as %d", ref.Num, retried.BuildNum)}, nil
 }

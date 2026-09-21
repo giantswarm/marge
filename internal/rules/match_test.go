@@ -290,3 +290,97 @@ evidence:
 	require.Equal(t, []string{"ci/circleci: go-build"}, hit.MissingContexts,
 		"the action rewrites only the contexts the rule named")
 }
+
+// anySourceRule reads the failing check's log whichever provider ran it.
+const anySourceRule = `
+name: module-proxy-dropped
+summary: The module proxy dropped the connection while a module was fetched.
+source: runbook row 91
+match:
+  states: [failed]
+  log:
+    pattern: 'proxy\.golang\.org.*stream error'
+action:
+  name: rerun-failed
+evidence:
+  reason: retried
+`
+
+// logsBySource answers for the provider that holds a log for the check, and
+// reports nothing for every other, the way the sweep answers for a check
+// only one provider ran.
+func logsBySource(bodies map[LogSource]string) func(LogSource, string, int) (string, bool) {
+	return func(source LogSource, _ string, _ int) (string, bool) {
+		body, ok := bodies[source]
+		return body, ok
+	}
+}
+
+const proxyStreamError = `read "https://proxy.golang.org/cached-only/x/@v/v1.0.0.zip": stream error; stream ID 1415; INTERNAL_ERROR`
+
+// A rule that names no source matches the failure on the provider that ran
+// the check, and the provider that did not run it never answers.
+func TestMatchWithoutASourceReadsCircleCI(t *testing.T) {
+	cat := catalogue(t, anySourceRule)
+
+	hit := cat.Match(&Subject{
+		State:   pr.StatusFailed,
+		Kind:    pr.KindRenovate,
+		Failing: []string{"ci/circleci: go-build"},
+		Log:     logsBySource(map[LogSource]string{LogCircleCI: proxyStreamError}),
+	})
+
+	require.NotNil(t, hit)
+	require.Equal(t, "module-proxy-dropped", hit.Rule.Name)
+	require.Equal(t, "ci/circleci: go-build", hit.Check)
+	require.True(t, hit.LogMatched)
+}
+
+func TestMatchWithoutASourceReadsActions(t *testing.T) {
+	cat := catalogue(t, anySourceRule)
+
+	hit := cat.Match(&Subject{
+		State:   pr.StatusFailed,
+		Kind:    pr.KindRenovate,
+		Failing: []string{"bootstrap"},
+		Log:     logsBySource(map[LogSource]string{LogActions: proxyStreamError}),
+	})
+
+	require.NotNil(t, hit)
+	require.Equal(t, "module-proxy-dropped", hit.Rule.Name)
+	require.Equal(t, "bootstrap", hit.Check)
+	require.True(t, hit.LogMatched)
+}
+
+// A rule that names a source keeps reading that source alone, so the same
+// text on the other provider is not its failure.
+func TestMatchWithASourceStillRestricts(t *testing.T) {
+	doc := `
+name: actions-only-proxy-drop
+summary: The module proxy dropped the connection on an Actions run.
+source: runbook row 91
+match:
+  states: [failed]
+  log:
+    source: actions
+    pattern: 'proxy\.golang\.org.*stream error'
+action:
+  name: rerun-failed
+evidence:
+  reason: retried
+`
+	cat := catalogue(t, doc)
+	subject := &Subject{
+		State:   pr.StatusFailed,
+		Kind:    pr.KindRenovate,
+		Failing: []string{"ci/circleci: go-build"},
+		Log:     logsBySource(map[LogSource]string{LogCircleCI: proxyStreamError}),
+	}
+
+	require.Nil(t, cat.Match(subject), "the rule reads the Actions log only")
+
+	subject.Log = logsBySource(map[LogSource]string{LogActions: proxyStreamError})
+	hit := cat.Match(subject)
+	require.NotNil(t, hit)
+	require.Equal(t, "actions-only-proxy-drop", hit.Rule.Name)
+}

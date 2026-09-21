@@ -208,6 +208,8 @@ The `remedy` step matches a classified PR against a catalogue of rules and appli
 
 A rule carries a detection signal, the name of one action, refusals it adds, and the evidence line written on the PR. The signal is a check-name glob (`match.check.name`), a bounded log-excerpt expression (`match.log`), PR metadata (`match.pr`) -- the title (`titlePattern`), the diff (`files`), or what the base head reported for the failing checks (`baseHead`) -- or the base branch's protection (`match.protection.missingContexts`), globs over the required contexts the head never reported. A `baseHead` condition must hold for every check the rule selected, so a PR carrying one transient failure and one real failure matches neither `green` nor `red`. A glob that matches everything is refused wherever one is accepted: a rule names at least one literal segment, or it is a classification restated rather than a signal.
 
+`match.log.source` is optional. A rule that leaves it out reads the log of the failing check from the provider that ran it, so the same failure is recognised on GitHub Actions and on CircleCI without a second copy of the pattern. A rule whose pattern is evidence on one provider only names that provider and keeps reading it alone.
+
 ```yaml
 name: circleci-auto-cancel
 summary: A build CircleCI itself cancelled established nothing about the code.
@@ -225,7 +227,7 @@ evidence:
   reason: the auto-cancelled build was retried on the same commit
 ```
 
-The actions a rule may name are `update-branch`, `rerun-failed`, `circleci-retry`, `close`, `mark-wait`, `dispatch-align-workflow`, `dispatch-cve-workflow`, `fix-protection-context` and `strict-chain`. A new action is a Go change, reviewed as code.
+The actions a rule may name are `update-branch`, `rerun-failed`, `circleci-retry`, `close`, `mark-wait`, `dispatch-align-workflow`, `dispatch-cve-workflow`, `fix-protection-context` and `strict-chain`. A new action is a Go change, reviewed as code. `rerun-failed` reads the matched check's URL and reruns the failed jobs of the Actions run or the CircleCI workflow behind it, so a rule that names a transient failure remedies it on either provider.
 
 `strict-chain` is **held**: it is the one action that merges, and no measured sweep has reported a PR blocked by the plain review rule. A rule may name it and validation accepts it, so the catalogue documents it, but the sweep refuses it and says so. Turning it on is a Go change, not a rule merged into the branch the sweep reads at run time.
 

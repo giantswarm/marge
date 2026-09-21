@@ -1,0 +1,14 @@
+name: the same dropped connection on a CircleCI build is a rerun
+subject:
+  state: failed
+  kind: renovate
+  title: "fix(deps): update module github.com/giantswarm/mcp-oauth to v1.4.1"
+  failing: ["ci/circleci: go-build"]
+  logs:
+    "circleci:ci/circleci: go-build": |
+      go: downloading github.com/giantswarm/mcp-oauth v1.4.1
+      go: github.com/giantswarm/agentlab/internal/server: github.com/giantswarm/mcp-oauth@v1.4.1: read "https://proxy.golang.org/cached-only/github.com/giantswarm/mcp-oauth/@v/v1.4.1.zip": stream error; stream ID 1415; INTERNAL_ERROR; received from peer
+      Exited with code exit status 1
+expect:
+  rule: go-module-proxy-stream-error
+  check: "ci/circleci: go-build"

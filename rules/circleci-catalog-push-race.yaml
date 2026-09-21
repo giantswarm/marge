@@ -1,0 +1,14 @@
+name: circleci-catalog-push-race
+summary: The architect push-to-app-catalog job loses the git push race on the shared app catalog and gives up.
+source: giantswarm/marge#165 (giantswarm-platform-manager#25, #70, vm-manager#61)
+match:
+  states: [failed]
+  check:
+    name: "ci/circleci: push-*"
+  log:
+    source: circleci
+    pattern: "failed to push some refs to [^\\n]*giantswarm/[a-z0-9-]*catalog\\.git[^\\n]*\\n(?:[^\\n]*\\n){0,20}Giving up after \\d+ failures"
+action:
+  name: circleci-retry
+evidence:
+  reason: the chart push lost the race on the shared app catalog repository, so the build was rerun
