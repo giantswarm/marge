@@ -305,7 +305,7 @@
                 },
                 "activeDeadlineSeconds": {
                     "type": "integer",
-                    "description": "Seconds a scheduled run may take before Kubernetes stops it."
+                    "description": "Seconds a scheduled run may take before Kubernetes stops it. An entry of schedules overrides it for its own run. A stopped run posts what it had reached before it was stopped."
                 },
                 "dryRun": {
                     "type": "boolean",

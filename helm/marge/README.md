@@ -22,13 +22,13 @@ schedules:
     schedule: "10 6 * * 1-5"
 ```
 
-An entry takes the keys it does not set from `scheduleDefaults`. `suspend` pauses one run and `suspendAll` pauses every run, in both cases without deleting the entry. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit.
+An entry takes the keys it does not set from `scheduleDefaults`, and overrides any of them, `activeDeadlineSeconds` included: keep the fleet default in `scheduleDefaults` and raise it on the one entry whose queue needs longer. `suspend` pauses one run and `suspendAll` pauses every run, in both cases without deleting the entry. Stagger the expressions: every run acts as the same GitHub App and shares its rate limit.
 
 A run sweeps one team: it classifies, approves, merges, refreshes stale branches, retries cancelled builds and applies the catalogue's rules. Every one of those steps acts through the GitHub or CircleCI API, so a scheduled run writes no code to any branch. The team's policy file in `giantswarm/github` says what may merge.
 
 The schedule acts as the App and never as a person. Set `marge.github.app` and the CronJob mints an installation token per repository, for one hour, and stores none. Without `marge.github.app` the chart refuses to render an enabled schedule. The App's credentials live in 1Password, in the `Team Bumblebee` vault, in the item `marge sweep GitHub App`; see [docs/github-app.md](https://github.com/giantswarm/marge/blob/main/docs/github-app.md).
 
-Set `notices.gatewayURL` and each run posts one summary to the channel the team's policy names, through klaus-gateway's team-notice endpoint (`POST /notices`). The run authenticates as its own ServiceAccount: the CronJob projects a token for `notices.audience`, the gateway verifies it with a `TokenReview` and admits the ServiceAccounts its own `reviews.allowedCallers` names. The gateway holds the Slack app, so the chart holds no Slack token. A run that changed nothing posts nothing, and a team whose policy names no channel is reported in the run's log. A scheduled run passes `--post-summary`, which a sweep by hand does not, so a manual sweep stays out of the team channels.
+Set `notices.gatewayURL` and each run posts one summary to the channel the team's policy names, through klaus-gateway's team-notice endpoint (`POST /notices`). The run authenticates as its own ServiceAccount: the CronJob projects a token for `notices.audience`, the gateway verifies it with a `TokenReview` and admits the ServiceAccounts its own `reviews.allowedCallers` names. The gateway holds the Slack app, so the chart holds no Slack token. A run that changed nothing posts nothing, and a team whose policy names no channel is reported in the run's log. A run Kubernetes stopped at `activeDeadlineSeconds` is the exception: it posts what it had reached, and what it had not, because silence in the channel otherwise reads as "nothing changed". A scheduled run passes `--post-summary`, which a sweep by hand does not, so a manual sweep stays out of the team channels.
 
 An entry that sets `args` passes them to the binary as the whole command line, and `tokenAudience` mounts a projected ServiceAccount token at `/var/run/secrets/kagent`. That pair is how the weekly rescue trigger will run. Keep such an entry suspended until the rescue command exists.
 
@@ -93,7 +93,7 @@ An entry that sets `args` passes them to the binary as the whole command line, a
 | scheduleDefaults.timeZone | string | `"Europe/Berlin"` | IANA timezone the cron expressions are read in. |
 | scheduleDefaults.actions | string | `"classify,approve,merge,refresh,retry,remedy,mark"` | Sweep steps a scheduled sweep performs. Every step here acts through the GitHub or CircleCI API; none of them writes code to a branch. |
 | scheduleDefaults.dryRun | bool | `false` | Report every outcome without writing anything. Turn it on for the first runs on a new installation. |
-| scheduleDefaults.activeDeadlineSeconds | int | `3600` | Seconds a scheduled run may take before Kubernetes stops it. |
+| scheduleDefaults.activeDeadlineSeconds | int | `3600` | Seconds a scheduled run may take before Kubernetes stops it. An entry of schedules overrides it for its own run. A stopped run posts what it had reached before it was stopped. |
 | scheduleDefaults.successfulJobsHistoryLimit | int | `3` | Successful Jobs kept |
 | scheduleDefaults.failedJobsHistoryLimit | int | `3` | Failed Jobs kept |
 | scheduleDefaults.resources | object | `{"limits":{"cpu":1,"ephemeral-storage":"1Gi","memory":"512Mi"},"requests":{"cpu":"100m","ephemeral-storage":"50Mi","memory":"128Mi"}}` | Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies. |

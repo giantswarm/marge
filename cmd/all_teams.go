@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 
@@ -34,6 +35,11 @@ type teamOutcome struct {
 	Err     error
 	// Posted reports that the summary reached the team's channel.
 	Posted bool
+	// Stopped says the run's context was cancelled before the team was
+	// finished. On a scheduled run that is Kubernetes at
+	// activeDeadlineSeconds, and the counts of Result cover only the PRs
+	// the run reached.
+	Stopped bool
 }
 
 // teamsRun holds what one sweep of several teams needs. The unattended run
@@ -70,8 +76,15 @@ func (r teamsRun) Run(ctx context.Context) ([]teamOutcome, error) {
 	reportRules(r.Out, rulesReport)
 
 	outcomes := make([]teamOutcome, 0, len(teams))
-	for _, team := range teams {
-		if err := ctx.Err(); err != nil {
+	for i, team := range teams {
+		if ctx.Err() != nil {
+			// The teams left have no outcome of their own, and an
+			// outcome nobody records reads as a team the run covered.
+			for _, left := range teams[i:] {
+				outcome := teamOutcome{Team: left, Stopped: true, Skipped: "the run was stopped before this team had its turn"}
+				r.report(outcome)
+				outcomes = append(outcomes, outcome)
+			}
 			return outcomes, nil
 		}
 		outcome := r.sweepTeam(ctx, loader, team, catalogue, rulesReport)
@@ -86,7 +99,7 @@ func (r teamsRun) Run(ctx context.Context) ([]teamOutcome, error) {
 func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team string, catalogue *rules.Catalogue, rulesReport *SweepRules) teamOutcome {
 	scope, err := loader.TeamScope(ctx, team)
 	if err != nil {
-		return teamOutcome{Team: team, Err: err}
+		return teamOutcome{Team: team, Stopped: ctx.Err() != nil, Err: err}
 	}
 	resolved := scope.Policies.Base()
 
@@ -96,29 +109,48 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 	opts.Rules = catalogue
 
 	found, err := searchPRs(ctx, r.Client, "", r.Login, scope.Repos)
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
 		return teamOutcome{Team: team, Err: fmt.Errorf("searching PRs of team %s: %w", team, err)}
 	}
 	status, err := processOnceWithStatus(ctx, r.Client, r.Login, found.PRs, opts)
 	if err != nil {
-		return teamOutcome{Team: team, Err: err}
+		return teamOutcome{Team: team, Stopped: ctx.Err() != nil, Err: err}
 	}
 
-	outcome := teamOutcome{Team: team, Result: buildSweepResult(status, found.Failed, rulesReport)}
-	outcome.Posted, err = r.post(ctx, team, resolved.SlackChannel, outcome.Result)
+	outcome := teamOutcome{
+		Team:    team,
+		Stopped: ctx.Err() != nil,
+		Result:  buildSweepResult(status, found.Failed, rulesReport),
+	}
+	outcome.Posted, err = r.post(ctx, team, resolved.SlackChannel, outcome.Result, outcome.Stopped)
 	if err != nil {
 		outcome.Err = err
 	}
 	return outcome
 }
 
+// stopNoticeTimeout bounds the notice a stopped run sends. The pod is
+// already terminating, so the notice has the termination grace period to
+// reach the gateway and SIGKILL follows it.
+const stopNoticeTimeout = 10 * time.Second
+
 // post renders the summary and sends it. It reports false, and no error,
 // both when the run changed nothing and when no channel or no gateway is
 // configured: a sweep that did its work is not a failed run because a chat
 // message had nowhere to go.
-func (r teamsRun) post(ctx context.Context, team, channel string, result SweepResult) (bool, error) {
+//
+// A stopped run posts whatever it reached, changed or not, under a context
+// of its own: the one it was swept under is cancelled, and the notice is
+// the only trace of the stop outside the cluster.
+func (r teamsRun) post(ctx context.Context, team, channel string, result SweepResult, stopped bool) (bool, error) {
 	text, changed := teamSummary(team, result)
-	if !changed {
+	switch {
+	case stopped:
+		text = stoppedSummary(team, result)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), stopNoticeTimeout)
+		defer cancel()
+	case !changed:
 		return false, nil
 	}
 	if r.Notices == nil || strings.TrimSpace(channel) == "" {
@@ -136,10 +168,16 @@ func (r teamsRun) post(ctx context.Context, team, channel string, result SweepRe
 // approval the write-access guard refused, and those need different repairs.
 func (r teamsRun) report(outcome teamOutcome) {
 	switch {
+	case outcome.Err != nil && outcome.Stopped:
+		_, _ = fmt.Fprintf(r.Out, "team %s was stopped before it finished: %s\n", outcome.Team, outcome.Err)
 	case outcome.Err != nil:
 		_, _ = fmt.Fprintf(r.Out, "team %s failed: %s\n", outcome.Team, outcome.Err)
 	case outcome.Skipped != "":
 		_, _ = fmt.Fprintf(r.Out, "team %s skipped: %s\n", outcome.Team, outcome.Skipped)
+	case outcome.Stopped:
+		_, _ = fmt.Fprintf(r.Out, "team %s was stopped before it finished: %d PRs, %s, summary posted: %t\n",
+			outcome.Team, outcome.Result.Summary.Total, headline(outcome.Result.Summary), outcome.Posted)
+		r.reportReasons(outcome.Result)
 	default:
 		_, _ = fmt.Fprintf(r.Out, "team %s: %d PRs, %s, summary posted: %t\n",
 			outcome.Team, outcome.Result.Summary.Total, headline(outcome.Result.Summary), outcome.Posted)
@@ -253,9 +291,12 @@ type TeamSweep struct {
 	Team string `json:"team"`
 	// Skipped says why the team was not swept; Error why its sweep failed.
 	// Result is absent for both.
-	Skipped string       `json:"skipped,omitempty"`
-	Error   string       `json:"error,omitempty"`
-	Posted  bool         `json:"summary_posted"`
+	Skipped string `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Posted  bool   `json:"summary_posted"`
+	// Stopped says the run did not finish this team, so Result covers only
+	// the PRs it reached.
+	Stopped bool         `json:"stopped,omitempty"`
 	Result  *SweepResult `json:"result,omitempty"`
 }
 
@@ -263,7 +304,7 @@ type TeamSweep struct {
 func teamsResult(outcomes []teamOutcome) []TeamSweep {
 	teams := make([]TeamSweep, 0, len(outcomes))
 	for _, outcome := range outcomes {
-		entry := TeamSweep{Team: outcome.Team, Skipped: outcome.Skipped, Posted: outcome.Posted}
+		entry := TeamSweep{Team: outcome.Team, Skipped: outcome.Skipped, Posted: outcome.Posted, Stopped: outcome.Stopped}
 		if outcome.Err != nil {
 			entry.Error = outcome.Err.Error()
 		}

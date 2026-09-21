@@ -819,3 +819,27 @@ func TestParseActionsRefusesRemedyWithoutMark(t *testing.T) {
 	require.True(t, both.Has(ActionRemedy))
 	require.True(t, both.Has(ActionMark))
 }
+
+// TestProcessPR_stoppedRunLeavesThePRUndecided is what a run killed at
+// activeDeadlineSeconds owes the PRs it never got to: a PR the sweep did
+// not look at is not a failed PR, and the run's summary counts it as one it
+// never reached.
+func TestProcessPR_stoppedRunLeavesThePRUndecided(t *testing.T) {
+	f := greenFixture()
+	server := f.server(t)
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	proc := NewProcessor(newTestClient(t, server), true, false, "me")
+	status := pr.NewPRStatus()
+	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 7, Author: f.author}
+	idx := status.Add(info)
+	proc.ProcessPR(ctx, info, status, idx)
+
+	entry := status.Snapshot()[idx]
+	require.Equal(t, pr.StatusPending, entry.State, "a PR the stopped run never decided stays pending")
+	require.Empty(t, entry.Detail)
+	require.Empty(t, f.labelSet(), "a stopped run writes nothing on a PR it never decided")
+}
