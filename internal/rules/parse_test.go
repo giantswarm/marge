@@ -27,6 +27,7 @@ func testRegistry() *remedy.Registry {
 		testAction{remedy.UpdateBranch},
 		testAction{remedy.CircleCIRetry},
 		testAction{remedy.Close},
+		testAction{remedy.RerunFailed},
 	)
 }
 
@@ -480,4 +481,28 @@ evidence:
 	_, err := Parse("context-drift.yaml", []byte(doc), testRegistry())
 
 	require.ErrorContains(t, err, "match.protection.missingContexts is required")
+}
+
+// A rule that names no source reads every provider; one that names a source
+// reads that one.
+func TestParseLogSourceIsOptional(t *testing.T) {
+	doc := `
+name: any-source
+summary: s
+source: runbook row 1
+match:
+  log:
+    pattern: "x"
+action:
+  name: close
+evidence:
+  reason: y
+`
+	rule, err := Parse("any-source.yaml", []byte(doc), testRegistry())
+	require.NoError(t, err)
+	require.Equal(t, []LogSource{LogActions, LogCircleCI}, rule.LogSources())
+
+	rule, err = Parse("circleci-auto-cancel.yaml", []byte(validRule), testRegistry())
+	require.NoError(t, err)
+	require.Equal(t, []LogSource{LogCircleCI}, rule.LogSources())
 }

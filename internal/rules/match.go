@@ -198,17 +198,25 @@ func (r *Rule) matchPRMetadata(subject *Subject) bool {
 
 // matchLog reads the excerpt of each candidate check and returns the first
 // that carries the signal. A log that cannot be read is not a match.
+//
+// A rule that names no source asks every provider for the same check. The
+// subject reports no excerpt for a provider that holds no reference for
+// that check, so the provider that ran it is the only one that answers, and
+// a rule written from one provider's failure recognises the same failure on
+// the other.
 func (r *Rule) matchLog(subject *Subject, candidates []string) *Hit {
 	if subject.Log == nil {
 		return nil
 	}
 	for _, name := range candidates {
-		excerpt, ok := subject.Log(r.Match.Log.Source, name, r.LogBytes())
-		if !ok {
-			continue
-		}
-		if r.LogPattern().MatchString(excerpt) {
-			return &Hit{Rule: r, Check: name, Excerpt: excerpt, LogMatched: true}
+		for _, source := range r.LogSources() {
+			excerpt, ok := subject.Log(source, name, r.LogBytes())
+			if !ok {
+				continue
+			}
+			if r.LogPattern().MatchString(excerpt) {
+				return &Hit{Rule: r, Check: name, Excerpt: excerpt, LogMatched: true}
+			}
 		}
 	}
 	return nil
