@@ -38,6 +38,10 @@ const (
 	// DispatchAlignWorkflow triggers the Align files workflow for one
 	// repository so its alignment branch is regenerated.
 	DispatchAlignWorkflow Name = "dispatch-align-workflow"
+	// DispatchCVEWorkflow triggers a repository's generated Fix Go
+	// vulnerabilities workflow on the pull request's base branch, which
+	// runs nancy-fixer and opens the remediation PR under the Herald App.
+	DispatchCVEWorkflow Name = "dispatch-cve-workflow"
 	// MarkWait records that the PR waits on something outside the
 	// repository and leaves it open.
 	MarkWait Name = "mark-wait"

@@ -37,6 +37,7 @@ the index.
 | A dropped Go module-proxy connection | `go-module-proxy-stream-error` | `rerun-failed` | observed 2026-09-14 |
 | A failure already green on the base head | `stale-failure-green-on-base` | `update-branch` | 68 |
 | nancy guide-API error on an old orb | `nancy-guide-api-orb-delta` | `update-branch` | 37 |
+| A nancy finding the base head carries too | `cve-fix-on-base` | `dispatch-cve-workflow` | 23, 51, 81, 98 |
 | A tag older than the pseudo-version in use | `renovate-downgrade-to-older-tag` | `close` | 16 |
 | A self-replace rewritten to a wrong major | `mangled-replace-major` | `close` | 38 |
 | A required context nobody reported | `required-check-name-drift` | `fix-protection-context` | 21, 44 |
@@ -62,10 +63,15 @@ names one.
 A remedy here is mechanical but the engine has no action for it yet, or the
 decision is not mechanical at all.
 
-### Waiting on a branch-writing remedy
+### Written on the branch by a person or an agent
 
-These rows need a git workspace, a push credential and a language toolchain,
-which the sweep does not have. They become rules when those actions exist.
+These rows change a file on the PR branch, so each one needs a git workspace,
+a push credential and a language toolchain. The engine has none of the three
+and does not get them. Over the sweeps of 2026-09-18 to 2026-09-21, one pull
+request reached one row of this table and eleven rows reached none, which does
+not justify that capability class. The remedy is `skills/marge` in Claude
+Code, where the workspace, the toolchain and the credential are the person's
+own. PRD decision 31 carries the counts.
 
 | Pattern | Remedy | Runbook row |
 |---|---|---|
@@ -77,18 +83,23 @@ which the sweep does not have. They become rules when those actions exist.
 | A `TEAM-NAME` placeholder in `Chart.yaml` | Replace it with the team from `CODEOWNERS` | 42 |
 | A staticcheck SA1019 deprecation after a bump | Rename the call site | 62 |
 | `github.Ptr` rejected by the `inline` analyzer | Replace it with the `new` builtin | 73 |
-| Transitive CVEs with a clean upgrade path | nancy-fixer's: `go get` the parents, tidy, push | 23, 98 |
-| A CVE with no fixed release | nancy-fixer's: a time-boxed `.nancy-ignore` entry with a justification | 51, 81 |
 | A custom Makefile target referencing a file the alignment migration deleted | Drop the file from the target on `teams-alignment-branch`; `Makefile.custom.mk` is the repository's own | 24 |
 | A chart icon the `abs` validator rejects (`C0004: IconDomainIsValid`) | `giantswarm-validator-ignored-checks: C0004` in `.abs/main.yaml` | 28 |
 | ATS refusing an unknown cluster type in its pre-run | Add a minimal `.ats/main.yaml` | 50 |
 | A placeholder PEM header in vendored chart docs tripping `gitleaks` | An allowlist regex in the repository's `.github/.gitleaks.toml` | 70 |
+| A consuming chart pinned outside the range its HelmRelease follows | Add the entry the test names to `testdata/consumption/charts.yaml` | observed 2026-09-20 |
+| A golden render that drifted from the default branch | Run the repository's own verify target and commit what it rewrites | observed 2026-09-18 |
 
-The CVE rows are listed for completeness only. nancy-fixer already performs
-the bump and the time-boxed ignore, and the shared `fix-vulnerabilities`
-workflow opens the PR. marge sweeps those PRs as a bot PR kind and never
-re-implements the remedy (PRD decision 3). Naming nancy-fixer in the remedy
-is what keeps those rows out of the rescue skill's hints.
+The last two rows come from the sweeps themselves and from no runbook row.
+Both are a repository's own generate target rather than a shared hook, and
+both reached more pull requests than any row above them.
+
+The CVE rows are gone from this table. `cve-fix-on-base` dispatches the
+repository's own `Fix Go vulnerabilities` workflow on the base branch;
+nancy-fixer then performs the bump, the replace pin and the time-boxed
+`.nancy-ignore` entry, and the shared workflow opens the PR under the Herald
+App. marge sweeps those PRs as a bot PR kind and never re-implements the
+remedy (PRD decision 3).
 
 ### Fixed on the default branch first
 

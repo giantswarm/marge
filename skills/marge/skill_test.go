@@ -97,7 +97,7 @@ func TestHintsDoNotRepeatTheRules(t *testing.T) {
 // would send the model to work the sweep refuses to do.
 func TestHintsMatchThePatternsPage(t *testing.T) {
 	forTheAgent := []string{
-		"Waiting on a branch-writing remedy",
+		"Written on the branch by a person or an agent",
 		"Fixed on the default branch first",
 		"Needing a person or an agent",
 	}

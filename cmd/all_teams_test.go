@@ -211,6 +211,7 @@ func TestDailyActionsWriteNoCode(t *testing.T) {
 		remedy.CircleCIRetry,
 		remedy.Close,
 		remedy.DispatchAlignWorkflow,
+		remedy.DispatchCVEWorkflow,
 		remedy.FixProtectionContext,
 		remedy.MarkWait,
 		remedy.RerunFailed,

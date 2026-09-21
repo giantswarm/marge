@@ -174,8 +174,8 @@ log before you act on it.
 | `check-values-schema` rejecting an empty `values.yaml` | Make the values file `{}` on the default branch, then refresh the PR | 34 |
 | A required check the Align files PR has not delivered yet | Land the align PR, then refresh every PR it blocks; `pre-commit` and `semantic-pull-request` arrive that way | 36, 46 |
 
-Some of these are mechanical enough to become rules once the engine has a
-branch-writing action for them. Until then they are yours.
+Every one of these is yours. The engine writes no file on a PR branch, and
+the sweep counts of 2026-09-21 decided it does not learn to.
 
 ## When you find a pattern worth keeping
 

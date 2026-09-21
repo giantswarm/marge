@@ -98,6 +98,49 @@ func (dispatchAlignWorkflow) Apply(ctx context.Context, req *Request) (Outcome, 
 	}, nil
 }
 
+// cveWorkflow is the generated workflow every Go repository carries. It
+// calls the shared fix-vulnerabilities workflow, which runs nancy-fixer and
+// opens the remediation PR under the Herald App.
+const cveWorkflow = "zz_generated.fix_vulnerabilities.yaml"
+
+// dispatchCVEWorkflow triggers that workflow on the PR's base branch. The
+// remedy for a finding the base head carries is a change to the base, and
+// nancy-fixer performs it: the bump, the replace pin and the time-boxed
+// .nancy-ignore entry belong to nancy-fixer, never to this engine.
+type dispatchCVEWorkflow struct{}
+
+func (dispatchCVEWorkflow) Name() Name { return DispatchCVEWorkflow }
+
+// NoSecurityFailure is absent by design. It refuses every action on a PR
+// whose failing check name matches the security list, which is the only
+// state this action ever runs in, so carrying it would refuse for ever.
+// NoGeneratedEdit is carried although the action writes no file: the set an
+// action enforces is what a report prints.
+func (dispatchCVEWorkflow) Guards() []Guard {
+	return []Guard{TrustedAuthor, LogMatched, NoGeneratedEdit, OncePerChange(DispatchCVEWorkflow)}
+}
+
+func (dispatchCVEWorkflow) Apply(ctx context.Context, req *Request) (Outcome, error) {
+	base := req.Pull.GetBase().GetRef()
+	if base == "" {
+		return Outcome{Refused: "the pull request names no base branch"}, nil
+	}
+	_, _, err := req.Deps.GitHub.Actions.CreateWorkflowDispatchEventByFileName(ctx,
+		req.Info.Owner, req.Info.Repo, cveWorkflow,
+		github.CreateWorkflowDispatchEventRequest{
+			Ref:    base,
+			Inputs: map[string]any{"branch": base},
+		})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("dispatch-cve-workflow: %w", err)
+	}
+	return Outcome{
+		Applied:            true,
+		KeepClassification: true,
+		Detail:             "Fix Go vulnerabilities dispatched on " + base,
+	}, nil
+}
+
 // fixProtectionContext drops the required status check contexts that no job
 // posts any more, which a migration leaves behind and which never clear on
 // their own. It only ever removes a context the head did not report, never

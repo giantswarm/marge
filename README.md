@@ -225,7 +225,7 @@ evidence:
   reason: the auto-cancelled build was retried on the same commit
 ```
 
-The actions a rule may name are `update-branch`, `rerun-failed`, `circleci-retry`, `close`, `mark-wait`, `dispatch-align-workflow`, `fix-protection-context` and `strict-chain`. A new action is a Go change, reviewed as code.
+The actions a rule may name are `update-branch`, `rerun-failed`, `circleci-retry`, `close`, `mark-wait`, `dispatch-align-workflow`, `dispatch-cve-workflow`, `fix-protection-context` and `strict-chain`. A new action is a Go change, reviewed as code.
 
 `strict-chain` is **held**: it is the one action that merges, and no measured sweep has reported a PR blocked by the plain review rule. A rule may name it and validation accepts it, so the catalogue documents it, but the sweep refuses it and says so. Turning it on is a Go change, not a rule merged into the branch the sweep reads at run time.
 
