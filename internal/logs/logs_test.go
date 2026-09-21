@@ -179,3 +179,26 @@ func TestPlainTextIsStableAcrossRuns(t *testing.T) {
 
 	require.Equal(t, PlainText(first), PlainText(second))
 }
+
+func TestCarriesFailure(t *testing.T) {
+	for name, excerpt := range map[string]string{
+		"actions marker": "Run make build\n##[error]Process completed with exit code 1.\n",
+		"circleci exit":  "go: downloading\nExited with code exit status 1\n",
+		"go test":        "--- FAIL: TestSweep (0.01s)\nFAIL\n",
+		"panic":          "panic: runtime error: index out of range [3]\n",
+		"make":           "make[1]: *** [Makefile:12: build] Error 2\n",
+		"tool error":     "Error: failed to pull chart\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, CarriesFailure(excerpt))
+		})
+	}
+}
+
+// The output of a step that succeeded names no failure, whatever the build
+// around it did.
+func TestCarriesFailureRejectsASuccessfulStep(t *testing.T) {
+	excerpt := "==> go-build\nBuilding mcp-capi-linux-amd64...\nBuilding mcp-capi-darwin-arm64...\n"
+
+	require.False(t, CarriesFailure(excerpt))
+}
