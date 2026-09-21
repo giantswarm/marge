@@ -275,13 +275,6 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		p.setConflict(run, "merge conflict")
 		return
 	}
-	// The entry goes in before the checks are read, and the PR then waits
-	// for the CI the commit started. Reading the checks first and writing
-	// after would decide the PR on a head that no longer exists.
-	if p.changelogEntry(ctx, run, resolved) {
-		return
-	}
-
 	run.set(pr.StatusChecking, "")
 	if !p.evaluateChecks(ctx, run) {
 		return
@@ -294,7 +287,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 
 	if p.DryRun {
-		detail := "dry-run: would " + p.plannedWrites(run)
+		detail := "dry-run: would " + p.plannedWrites(run, p.changelogApplies(ctx, run, resolved))
 		if p.Actions.Has(ActionApprove) {
 			if err := p.ensureWriteAccess(ctx, run.info.Owner, run.info.Repo); err != nil {
 				run.set(pr.StatusSkipped, withNote(detail, writeAccessDetail(err)))
@@ -302,6 +295,14 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 			}
 		}
 		run.set(pr.StatusEligible, detail)
+		return
+	}
+
+	// The entry goes on a head the checks have already passed, so it costs
+	// the PR one more CI cycle and no more. Writing it before the checks
+	// were read would cost the same cycle and leave the line on the branch
+	// for the whole of it, where a rebase of the bot's own takes it away.
+	if p.changelogEntry(ctx, run, resolved) {
 		return
 	}
 
@@ -339,9 +340,13 @@ func (p *Processor) handOffToAutoMerge(ctx context.Context, run *prRun) {
 }
 
 // plannedWrites names the writes a dry run would perform on a green,
-// eligible PR.
-func (p *Processor) plannedWrites(run *prRun) string {
+// eligible PR. changelog says whether the PR earns a changelog entry, which
+// only a read of the repository answers.
+func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 	var steps []string
+	if changelog {
+		steps = append(steps, "write the changelog entry")
+	}
 	if p.Actions.Has(ActionApprove) {
 		steps = append(steps, "approve")
 	}

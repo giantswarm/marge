@@ -12,9 +12,10 @@ import (
 	"github.com/giantswarm/marge/internal/pr"
 )
 
-// changelogTool declares the changelog tool. No sweep and no rule reaches
-// it: a changelog entry is a person's decision about their own repository,
-// so it is asked for by name, on the PRs the person picked.
+// changelogTool declares the changelog tool. The sweep writes the entry on
+// the PRs it is about to approve; this door writes it on the PRs a person
+// picked, whatever the team's policy says about the sweep. Both refuse a
+// repository whose release notes are generated from its commits.
 func changelogTool() mcp.Tool {
 	return mcp.NewTool("changelog",
 		mcp.WithDescription("WRITES: add one changelog entry to a bot PR, in the team's own format, and commit it to the PR's own branch. "+
@@ -23,7 +24,7 @@ func changelogTool() mcp.Tool {
 			"A team that writes no changelog section gets the company default. "+
 			"Nothing else is written: this neither approves, merges, refreshes, retries, remedies nor labels, and it writes no comment. "+
 			"A PR that already carries the line is left untouched, so asking twice writes once. "+
-			"A PR whose branch lives in a fork, whose author is not a trusted bot, or whose repository has no such file, is refused with the reason."),
+			"A PR whose branch lives in a fork, whose author is not a trusted bot, whose repository has no such file, or whose repository generates its release notes from its commits (it carries a cliff.toml), is refused with the reason."),
 		mcp.WithArray("prs",
 			mcp.Required(),
 			mcp.Description("The pull requests to write an entry on, each a PR URL or OWNER/REPO#NUMBER."),

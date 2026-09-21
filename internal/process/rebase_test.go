@@ -119,8 +119,12 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/commits/"+rbBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.ListCheckRunsResults{Total: new(0)})
 	})
-	// These repositories keep no changelog, which is the common case and
-	// costs the sweep one read and nothing else.
+	// These repositories cut their release from a changelog they do not
+	// keep, which is the common case and costs the sweep two reads and
+	// nothing else.
+	mux.HandleFunc("GET /repos/org/repo/contents/cliff.toml", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("GET /repos/org/repo/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})

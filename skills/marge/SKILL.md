@@ -91,27 +91,41 @@ subset. `remedy` needs `mark` and is refused without it.
 
 ## The changelog entry
 
-A bot PR carries no changelog entry of its own, so a repository's release
-notes lose every dependency update. marge writes one in the team's format:
-the `changelog` section of `bot-prs-sweep/team-<name>.yaml` names the file,
-the heading and section the entry goes under, and the line itself.
+A bot PR carries no changelog entry of its own. Where that matters, marge
+writes one in the team's format: the `changelog` section of
+`bot-prs-sweep/team-<name>.yaml` names the file, the heading and section the
+entry goes under, and the line itself.
+
+**It matters in fewer repositories than people expect.** A repository with a
+`cliff.toml` generates its release notes from its commits, and git-cliff groups
+a bot's commit like any other, so the update is on the release page already --
+`- *(deps)* Update module github.com/giantswarm/mcp-oauth to v1.4.3`. Those
+repositories also stopped cutting a version section when they moved to the
+generated notes, so a line added to the file would sit under an unreleased
+heading nothing releases. marge reads the repository and refuses them with that
+reason. The entry is for a repository that still cuts its release from the
+changelog file, which is the older flow:
+`zz_generated.create_release_pr.yaml` with `zz_generated.validate_changelog.yaml`
+and no `cliff.toml`. Say this when someone asks why a PR of theirs got no
+entry.
 
 Two doors, and the same write behind both:
 
 - The `changelog` **step** of a sweep, unless `changelog.enabled` is false in
-  the team's policy. It is true by default: a dependency update nobody records
-  is a release note nobody can write.
+  the team's policy. It is true by default.
 - `x_marge_changelog`, on the PRs a person picked, whatever the policy says.
 
 The entry is a commit on the PR's own branch, and that has two consequences a
 person has to hear before they ask for one:
 
-- **CI runs again.** The step therefore writes before anything is approved,
-  never after -- a commit pushed after an approval dismisses it wherever the
-  branch protection dismisses stale reviews -- and the PR is then left under
-  `waiting`. The next sweep classifies the new head and merges it. Say this
-  when someone asks why their PR did not merge in the run that wrote its
-  entry.
+- **CI runs again.** The step therefore writes once the checks are green and
+  before anything is approved. After the checks, because the bot force-pushes
+  its own branch and a line written earlier waits out the whole CI cycle on a
+  branch that may be rebased under it. Before the approval, because a commit
+  pushed after an approval dismisses it wherever the branch protection
+  dismisses stale reviews. The PR is then left under `waiting`, and the next
+  sweep classifies the new head and merges it. Say this when someone asks why
+  their PR did not merge in the run that wrote its entry.
 - **It is written once.** The check is on the line itself, so a rebase, a
   second sweep and a person writing by hand all converge on one entry. Do not
   add a guard of your own around it.
