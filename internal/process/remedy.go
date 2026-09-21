@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -91,7 +90,7 @@ func (p *Processor) logExcerpt(ctx context.Context, run *prRun) func(rules.LogSo
 		return nil
 	}
 	return func(source rules.LogSource, check string, maxBytes int) (string, bool) {
-		key := string(source) + " " + check
+		key := excerptKey(source, check)
 		if cached, ok := run.excerpts[key]; ok {
 			return cached, cached != ""
 		}
@@ -251,13 +250,7 @@ func (p *Processor) recordUnhandled(ctx context.Context, run *prRun) {
 	checks := slices.Clone(run.failing)
 	slices.Sort(checks)
 
-	excerpt := ""
-	for _, key := range slices.Sorted(maps.Keys(run.excerpts)) {
-		if run.excerpts[key] != "" {
-			excerpt = signatureTail(logs.PlainText(run.excerpts[key]))
-			break
-		}
-	}
+	excerpt := signatureExcerpt(checks, run.excerpts)
 	unhandled := &pr.Unhandled{
 		Signature: failureSignature(checks, excerpt),
 		Checks:    checks,
@@ -278,6 +271,40 @@ func (p *Processor) recordUnhandled(ctx context.Context, run *prRun) {
 		Checks:    unhandled.Checks,
 		Excerpt:   unhandled.Excerpt,
 	})
+}
+
+// excerptKey names one excerpt of run.excerpts: one log of one check.
+func excerptKey(source rules.LogSource, check string) string {
+	return string(source) + " " + check
+}
+
+// signatureSources are the logs an excerpt can come from, in the order
+// signatureExcerpt reads them.
+var signatureSources = []rules.LogSource{rules.LogActions, rules.LogCircleCI}
+
+// signatureExcerpt is the excerpt that identifies the failure. It reads
+// only the excerpts the rules already fetched, for the checks the
+// classification found failing, and it prefers one that names a failure. A
+// build that was cancelled leaves the output of steps that succeeded, and a
+// signature over such an excerpt groups PRs that failed differently.
+func signatureExcerpt(checks []string, excerpts map[string]string) string {
+	fallback := ""
+	for _, check := range checks {
+		for _, source := range signatureSources {
+			raw := excerpts[excerptKey(source, check)]
+			if raw == "" {
+				continue
+			}
+			excerpt := signatureTail(logs.PlainText(raw))
+			if logs.CarriesFailure(excerpt) {
+				return excerpt
+			}
+			if fallback == "" {
+				fallback = excerpt
+			}
+		}
+	}
+	return fallback
 }
 
 // standingUnhandled returns the unhandled marker already on the PR for the

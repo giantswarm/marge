@@ -191,6 +191,19 @@ var (
 	stampRE = regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?`)
 )
 
+// failureRE matches what a runner writes on the line that failed a step:
+// the Actions error marker, a CircleCI non-zero exit, a panic, a failed Go
+// test, a make target that stopped.
+var failureRE = regexp.MustCompile(`(?im)^\s*(?:` +
+	regexp.QuoteMeta(errorMarker) + `|panic:|FAIL\b|FAILED\b|[Ee]rror:|ERROR\b|make(?:\[\d+\])?: \*\*\*|Exited with code)`)
+
+// CarriesFailure reports whether an excerpt holds a line that names a
+// failure. An excerpt of a build that was cancelled holds the output of
+// steps that succeeded, and nothing in it says what went wrong.
+func CarriesFailure(excerpt string) bool {
+	return failureRE.MatchString(excerpt)
+}
+
 // PlainText is an excerpt with nothing in it that a person did not write:
 // no colour, no per-line timestamp, no carriage return.
 func PlainText(excerpt string) string {

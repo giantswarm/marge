@@ -146,3 +146,58 @@ func TestNoFailingCheckWritesNoMarker(t *testing.T) {
 	require.Nil(t, run.status.Snapshot()[run.idx].Unhandled)
 	require.Empty(t, written)
 }
+
+// The live case of giantswarm/mcp-capi#223: the check that sorts first
+// returned the output of a step that succeeded, and the failure is in the
+// log of the check beside it.
+func TestUnhandledSignatureSkipsAStepThatSucceeded(t *testing.T) {
+	var written []string
+	proc := unhandledProcessor(t, commentServer(t, nil, &written))
+	run := unhandledRun("")
+	run.failing = []string{"ci/circleci: go-test", "ci/circleci: go-build"}
+	run.excerpts = map[string]string{
+		"circleci ci/circleci: go-build": "==> go-build\nBuilding mcp-capi-linux-amd64...\n",
+		"circleci ci/circleci: go-test":  "--- FAIL: TestSweep (0.01s)\nExited with code exit status 1\n",
+	}
+
+	proc.recordUnhandled(t.Context(), run)
+
+	entry := run.status.Snapshot()[run.idx]
+	require.Contains(t, entry.Unhandled.Excerpt, "--- FAIL: TestSweep")
+}
+
+// No excerpt names a failure, so the first one stands: a signature over a
+// weak excerpt still groups the PRs that carry it.
+func TestUnhandledSignatureFallsBackToTheFirstExcerpt(t *testing.T) {
+	var written []string
+	proc := unhandledProcessor(t, commentServer(t, nil, &written))
+	run := unhandledRun("")
+	run.failing = []string{"go-test", "go-build"}
+	run.excerpts = map[string]string{
+		"actions go-build": "Building...\n",
+		"actions go-test":  "ok  \tgithub.com/giantswarm/marge\n",
+	}
+
+	proc.recordUnhandled(t.Context(), run)
+
+	entry := run.status.Snapshot()[run.idx]
+	require.Equal(t, "Building...\n", entry.Unhandled.Excerpt)
+}
+
+// An excerpt of a check the classification did not find failing never
+// signs the failure.
+func TestUnhandledSignatureIgnoresACheckThatIsNotFailing(t *testing.T) {
+	var written []string
+	proc := unhandledProcessor(t, commentServer(t, nil, &written))
+	run := unhandledRun("")
+	run.failing = []string{"go-build"}
+	run.excerpts = map[string]string{
+		"actions go-build": "Building...\n",
+		"actions lint":     "##[error]Process completed with exit code 1.\n",
+	}
+
+	proc.recordUnhandled(t.Context(), run)
+
+	entry := run.status.Snapshot()[run.idx]
+	require.Equal(t, "Building...\n", entry.Unhandled.Excerpt)
+}
