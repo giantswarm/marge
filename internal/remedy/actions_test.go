@@ -41,6 +41,7 @@ func TestDefaultRegistryNames(t *testing.T) {
 		CircleCIRetry,
 		Close,
 		DispatchAlignWorkflow,
+		DispatchCVEWorkflow,
 		FixProtectionContext,
 		MarkWait,
 		RerunFailed,

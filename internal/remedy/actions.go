@@ -25,6 +25,7 @@ func Default() *Registry {
 		closePR{},
 		markWait{},
 		dispatchAlignWorkflow{},
+		dispatchCVEWorkflow{},
 		fixProtectionContext{},
 		strictChain{},
 	)
