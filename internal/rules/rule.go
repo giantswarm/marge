@@ -71,7 +71,9 @@ type CheckMatch struct {
 
 // LogMatch matches an excerpt of the failing step's log.
 type LogMatch struct {
-	// Source selects where the excerpt comes from.
+	// Source selects where the excerpt comes from. Empty reads the log of
+	// the failing check from whichever provider ran it. A rule whose
+	// pattern is only evidence on one provider names that provider.
 	Source LogSource `yaml:"source"`
 	// Pattern is an RE2 expression matched against the excerpt.
 	Pattern string `yaml:"pattern"`
@@ -80,13 +82,20 @@ type LogMatch struct {
 	MaxBytes int `yaml:"maxBytes"`
 }
 
-// LogSource names a log the sweep can fetch.
+// LogSource names a log the sweep can fetch. LogAny is the absence of a
+// choice, not a third log.
 type LogSource string
 
 const (
+	LogAny      LogSource = ""
 	LogActions  LogSource = "actions"
 	LogCircleCI LogSource = "circleci"
 )
+
+// everyLogSource are the providers a rule without a source asks, in order.
+// A provider that did not run the check holds no reference for it and
+// reports no excerpt, so only the provider that ran it can answer.
+var everyLogSource = []LogSource{LogActions, LogCircleCI}
 
 // PRMatch matches metadata of the pull request itself.
 type PRMatch struct {
@@ -134,6 +143,7 @@ type compiled struct {
 	fileREs    []*regexp.Regexp
 	missingREs []*regexp.Regexp
 	logRE      *regexp.Regexp
+	logSources []LogSource
 	titleRE    *regexp.Regexp
 	guards     []remedy.Guard
 }
@@ -162,6 +172,10 @@ func (r *Rule) MissingContextPatterns() []*regexp.Regexp { return r.compiled.mis
 // LogPattern returns the compiled log expression, or nil when the rule has
 // no log signal.
 func (r *Rule) LogPattern() *regexp.Regexp { return r.compiled.logRE }
+
+// LogSources returns the providers the log signal reads, or nil when the
+// rule has no log signal.
+func (r *Rule) LogSources() []LogSource { return r.compiled.logSources }
 
 // TitlePattern returns the compiled title expression, or nil.
 func (r *Rule) TitlePattern() *regexp.Regexp { return r.compiled.titleRE }

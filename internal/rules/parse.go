@@ -102,8 +102,13 @@ func (r *Rule) validateMatch() error {
 		r.compiled.checkRE = compileCheckGlob(c.Name)
 	}
 	if l := r.Match.Log; l != nil {
-		if l.Source != LogActions && l.Source != LogCircleCI {
-			return fmt.Errorf("unknown log source %q: use %q or %q", l.Source, LogActions, LogCircleCI)
+		switch l.Source {
+		case LogAny:
+			r.compiled.logSources = everyLogSource
+		case LogActions, LogCircleCI:
+			r.compiled.logSources = []LogSource{l.Source}
+		default:
+			return fmt.Errorf("unknown log source %q: use %q or %q, or leave it out to read the provider that ran the check", l.Source, LogActions, LogCircleCI)
 		}
 		if strings.TrimSpace(l.Pattern) == "" {
 			return errors.New("match.log.pattern is required when a log signal is given")
