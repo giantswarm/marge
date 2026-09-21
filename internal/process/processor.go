@@ -232,8 +232,17 @@ func (r *prRun) fingerprint(ctx context.Context, p *Processor) pr.Fingerprint {
 }
 
 func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PRStatus, idx int) {
+	// A stopped run leaves the PRs it never decided as they are. A PR the
+	// sweep did not look at is not a failed PR, and the summary of a
+	// stopped run counts it as one it never reached.
+	if ctx.Err() != nil {
+		return
+	}
 	pullReq, _, err := p.Client.PullRequests.Get(ctx, info.Owner, info.Repo, info.Number)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		status.Update(idx, pr.StatusFailed, ghErrorDetail("fetch error", err))
 		return
 	}

@@ -144,7 +144,7 @@ scheduleDefaults:
   actions: "classify,approve,merge,refresh,retry,remedy,mark"
   # -- Report every outcome without writing anything. Turn it on for the first runs on a new installation.
   dryRun: false
-  # -- Seconds a scheduled run may take before Kubernetes stops it.
+  # -- Seconds a scheduled run may take before Kubernetes stops it. An entry of schedules overrides it for its own run. A stopped run posts what it had reached before it was stopped.
   activeDeadlineSeconds: 3600
   # -- Successful Jobs kept
   successfulJobsHistoryLimit: 3

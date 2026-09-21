@@ -38,18 +38,18 @@ func TestTeamsRun_postsOnlyWithAPoster(t *testing.T) {
 	result := SweepResult{Summary: SweepSummary{Total: 2, Merged: 2}}
 
 	poster := &recordingPoster{}
-	posted, err := teamsRun{Notices: poster}.post(t.Context(), "bumblebee", "team-bumblebee", result)
+	posted, err := teamsRun{Notices: poster}.post(t.Context(), "bumblebee", "team-bumblebee", result, false)
 	require.NoError(t, err)
 	require.True(t, posted)
 	require.Len(t, poster.posts, 1)
 	require.Equal(t, "team-bumblebee", poster.posts[0].channel)
 	require.Contains(t, poster.posts[0].text, "bumblebee")
 
-	posted, err = teamsRun{}.post(t.Context(), "bumblebee", "team-bumblebee", result)
+	posted, err = teamsRun{}.post(t.Context(), "bumblebee", "team-bumblebee", result, false)
 	require.NoError(t, err)
 	require.False(t, posted, "a run with no poster posts nothing")
 
-	posted, err = teamsRun{Notices: poster}.post(t.Context(), "bumblebee", "", result)
+	posted, err = teamsRun{Notices: poster}.post(t.Context(), "bumblebee", "", result, false)
 	require.NoError(t, err)
 	require.False(t, posted, "a team whose policy names no channel posts nothing")
 	require.Len(t, poster.posts, 1)
@@ -338,4 +338,90 @@ func TestReport_namesEveryBlockedPR(t *testing.T) {
 	require.Len(t, lines, 31, "the team line and one line per PR")
 	require.Contains(t, lines[0], "team bumblebee: 30 PRs")
 	require.Contains(t, lines[30], "blocked giantswarm/marge#29")
+}
+
+// contextPoster records the context each post ran under, so a test can hold
+// a post to a context that outlives the run's own.
+type contextPoster struct {
+	posts []struct{ team, channel, text string }
+	errs  []error
+}
+
+func (p *contextPoster) Post(ctx context.Context, team, channel, text string) error {
+	p.errs = append(p.errs, ctx.Err())
+	p.posts = append(p.posts, struct{ team, channel, text string }{team, channel, text})
+	return nil
+}
+
+// TestTeamsRun_stoppedRunPostsUnderItsOwnContext is what a run killed at
+// activeDeadlineSeconds owes its team. The sweep's context is cancelled by
+// then, so the notice needs one of its own, and it goes out although the
+// run changed nothing: silence in the channel means "nothing changed", and
+// a run that was cut short has established no such thing.
+func TestTeamsRun_stoppedRunPostsUnderItsOwnContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	result := SweepResult{Summary: SweepSummary{Total: 40}}
+
+	poster := &contextPoster{}
+	posted, err := teamsRun{Notices: poster}.post(ctx, "honeybadger", "team-honeybadger", result, true)
+	require.NoError(t, err)
+	require.True(t, posted, "a stopped run posts although it changed nothing")
+	require.Len(t, poster.posts, 1)
+	require.NoError(t, poster.errs[0], "the notice of a stopped run may not run under the cancelled context")
+	require.Contains(t, poster.posts[0].text, "was stopped")
+}
+
+// TestTeamsRun_stoppedRunNeedsAChannelToo keeps the stop notice under the
+// same rules as every other summary: no poster and no channel still mean no
+// message, and neither is a failure.
+func TestTeamsRun_stoppedRunNeedsAChannelToo(t *testing.T) {
+	result := SweepResult{Summary: SweepSummary{Total: 40, Merged: 2}}
+
+	posted, err := teamsRun{}.post(t.Context(), "honeybadger", "team-honeybadger", result, true)
+	require.NoError(t, err)
+	require.False(t, posted)
+
+	posted, err = teamsRun{Notices: &contextPoster{}}.post(t.Context(), "honeybadger", "", result, true)
+	require.NoError(t, err)
+	require.False(t, posted)
+}
+
+// TestTeamsRun_stoppedRunRecordsTheTeamsItNeverReached pins the other half
+// of a stop: a team whose turn never came is reported as stopped, because a
+// team with no outcome at all reads as a team the run covered.
+func TestTeamsRun_stoppedRunRecordsTheTeamsItNeverReached(t *testing.T) {
+	client := contentsMux(t, "giantswarm", "github", map[string]string{
+		"repositories/team-atlas.yaml":   "- name: atlas\n",
+		"repositories/team-phoenix.yaml": "- name: phoenix\n",
+	})
+
+	t.Setenv(teamFileRepoEnv, "")
+	var out bytes.Buffer
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	outcomes, err := teamsRun{
+		Client: client,
+		Login:  "giantswarm-marge[bot]",
+		Rules:  RulesSource{Path: t.TempDir()},
+		Opts:   RunOptions{DryRun: true, Quiet: true, NoTUI: true},
+		Teams:  []string{"atlas", "phoenix"},
+		Out:    &out,
+	}.Run(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, outcomes, 2)
+	for _, outcome := range outcomes {
+		require.True(t, outcome.Stopped, "team %s", outcome.Team)
+		require.NotEmpty(t, outcome.Skipped, "team %s", outcome.Team)
+	}
+	require.Contains(t, out.String(), "atlas")
+	require.Contains(t, out.String(), "phoenix")
+
+	for _, entry := range teamsResult(outcomes) {
+		require.True(t, entry.Stopped, "team %s", entry.Team)
+	}
 }

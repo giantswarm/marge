@@ -26,26 +26,60 @@ func teamSummary(team string, result SweepResult) (string, bool) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "*%s* swept %s: %s\n", team, plural(counts.Total, "bot PR"), headline(counts))
+	summaryBody(&b, result)
+	return strings.TrimRight(b.String(), "\n"), true
+}
 
-	section(&b, "Merged", result.Merged)
-	section(&b, "Remedied", result.Remedied)
-	section(&b, "Refreshed", result.Refreshed)
-	section(&b, "Retried", result.Retried)
-	section(&b, "Blocked, security", result.SecurityFailures)
-	section(&b, "Blocked", result.ActionRequired)
+// stoppedSummary renders a run whose context was cancelled before the team
+// was finished, which on a scheduled run is Kubernetes at
+// activeDeadlineSeconds. It renders text whether the run changed anything
+// or not: the channel reads silence as "nothing changed", and a run that
+// was cut short has established no such thing.
+func stoppedSummary(team string, result SweepResult) string {
+	counts := result.Summary
+	unreached := unaccounted(counts)
 
-	unhandledSection(&b, result.Unhandled)
+	var b strings.Builder
+	switch {
+	case counts.Total == 0:
+		fmt.Fprintf(&b, "*%s* was stopped before it read its queue, and wrote nothing.\n", team)
+	case unreached <= 0:
+		fmt.Fprintf(&b, "*%s* was stopped before it finished, with all %s decided: %s\n",
+			team, plural(counts.Total, "bot PR"), namedOutcomes(counts))
+	default:
+		fmt.Fprintf(&b, "*%s* was stopped before it finished: %d of %s swept, %d never reached: %s\n",
+			team, counts.Total-unreached, plural(counts.Total, "bot PR"), unreached, namedOutcomes(counts))
+	}
+	summaryBody(&b, result)
+	if unreached > 0 {
+		fmt.Fprintf(&b, "The queue was not drained. The next scheduled run takes it from here.\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// summaryBody writes everything under the first line, which every summary
+// shares.
+func summaryBody(b *strings.Builder, result SweepResult) {
+	counts := result.Summary
+
+	section(b, "Merged", result.Merged)
+	section(b, "Remedied", result.Remedied)
+	section(b, "Refreshed", result.Refreshed)
+	section(b, "Retried", result.Retried)
+	section(b, "Blocked, security", result.SecurityFailures)
+	section(b, "Blocked", result.ActionRequired)
+
+	unhandledSection(b, result.Unhandled)
 
 	if counts.Skipped > 0 {
-		fmt.Fprintf(&b, "%s skipped by policy.\n", plural(counts.Skipped, "PR"))
+		fmt.Fprintf(b, "%s skipped by policy.\n", plural(counts.Skipped, "PR"))
 	}
 	for _, failure := range result.RepositoriesFailed {
-		fmt.Fprintf(&b, "Repository %s could not be listed: %s\n", failure.Repo, failure.Error)
+		fmt.Fprintf(b, "Repository %s could not be listed: %s\n", failure.Repo, failure.Error)
 	}
 	if result.Rules != nil && result.Rules.Error != "" {
-		fmt.Fprintf(&b, "Rules unavailable (%s): %s. Every remedy was refused.\n", result.Rules.Source, result.Rules.Error)
+		fmt.Fprintf(b, "Rules unavailable (%s): %s. Every remedy was refused.\n", result.Rules.Source, result.Rules.Error)
 	}
-	return strings.TrimRight(b.String(), "\n"), true
 }
 
 // summarySignatureLimit bounds how many signatures the summary names. The
@@ -77,18 +111,38 @@ func unhandledSection(b *strings.Builder, groups []SweepUnhandled) {
 // counts always add up to the total. A line that drops a category reads as if
 // the sweep lost a PR.
 func headline(counts SweepSummary) string {
+	named := namedOutcomes(counts)
+	other := unaccounted(counts)
+	switch {
+	case other <= 0:
+		return named
+	case named == "":
+		return countPart(other, "other")
+	default:
+		return named + ", " + countPart(other, "other")
+	}
+}
+
+// namedOutcomes names each outcome that holds at least one pull request.
+func namedOutcomes(counts SweepSummary) string {
 	named := make([]string, 0, len(headlineParts(counts)))
-	accounted := 0
 	for _, part := range headlineParts(counts) {
-		accounted += part.count
 		if text := countPart(part.count, part.name); text != "" {
 			named = append(named, text)
 		}
 	}
-	if other := counts.Total - accounted; other > 0 {
-		named = append(named, countPart(other, "other"))
-	}
 	return strings.Join(named, ", ")
+}
+
+// unaccounted is how many pull requests no outcome of the summary accounts
+// for. On a finished run that is a PR the sweep left in a state it does not
+// name; on a stopped one it is a PR the run never reached.
+func unaccounted(counts SweepSummary) int {
+	accounted := 0
+	for _, part := range headlineParts(counts) {
+		accounted += part.count
+	}
+	return counts.Total - accounted
 }
 
 // headlinePart is one outcome and how many PRs ended in it.
