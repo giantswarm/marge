@@ -58,6 +58,10 @@ type guardFixture struct {
 	// means the repository has none and GitHub answers 404.
 	changelog     string
 	changelogPuts atomic.Int32
+	// generatedReleaseNotes puts a cliff.toml in the repository, which is
+	// how a repository says its release notes come from its commits.
+	generatedReleaseNotes bool
+	cliffReads            atomic.Int32
 
 	mu       sync.Mutex
 	labels   []string
@@ -207,6 +211,22 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			AheadBy:    new(1),
 			BaseCommit: &github.RepositoryCommit{SHA: new(gfBase)},
 			Files:      []*github.CommitFile{{Filename: new("go.mod"), Status: new("modified"), Patch: new("@@ -1 +1 @@\n-a\n+b")}},
+		})
+	})
+
+	mux.HandleFunc("GET /repos/org/repo/contents/cliff.toml", func(w http.ResponseWriter, r *http.Request) {
+		f.cliffReads.Add(1)
+		if !f.generatedReleaseNotes {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, github.RepositoryContent{
+			Type:     new("file"),
+			Name:     new("cliff.toml"),
+			Path:     new("cliff.toml"),
+			SHA:      new("blob2"),
+			Encoding: new("base64"),
+			Content:  new(base64.StdEncoding.EncodeToString([]byte("[git]\nconventional_commits = true\n"))),
 		})
 	})
 

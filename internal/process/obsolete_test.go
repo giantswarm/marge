@@ -119,6 +119,11 @@ func (f *siblingFixture) run(t *testing.T) pr.StatusEntry {
 	mux.HandleFunc("GET /repos/org/repo/commits/"+fxBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.ListCheckRunsResults{Total: new(0)})
 	})
+	// A dry run reads this too: it says what a real run would write, and
+	// only the repository knows whether an entry applies to it.
+	mux.HandleFunc("GET /repos/org/repo/contents/cliff.toml", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected GitHub request: %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)

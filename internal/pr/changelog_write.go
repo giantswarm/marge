@@ -9,6 +9,10 @@ import (
 	"github.com/google/go-github/v92/github"
 )
 
+// cliffConfigPath is git-cliff's configuration, and the mark of a repository
+// whose release notes are generated from its commits.
+const cliffConfigPath = "cliff.toml"
+
 // ChangelogOutcome is what one attempt to write an entry produced. Exactly
 // one of Written and Refused is set, and Line carries the entry either way,
 // so a dry run reports what it would have written.
@@ -23,6 +27,10 @@ type ChangelogOutcome struct {
 
 // WriteChangelogEntry adds the team's entry to a PR's branch, and reports
 // what it did.
+//
+// The entry belongs to a repository that cuts its release from the changelog
+// file. A repository whose release notes are generated from its commits
+// publishes the update already, so it is refused; see ReleaseNotesGenerated.
 //
 // The entry is written once: a file that already carries the line is left
 // untouched, whichever call put it there and however many times it is asked
@@ -43,6 +51,17 @@ func WriteChangelogEntry(
 		return ChangelogOutcome{}, err
 	}
 	outcome := ChangelogOutcome{Line: line}
+
+	// On the default branch, not the PR's: how a repository cuts its release
+	// is the repository's own setting, and a bot branch never changes it.
+	generated, err := ReleaseNotesGenerated(ctx, client, owner, repo, "")
+	if err != nil {
+		return outcome, err
+	}
+	if generated {
+		outcome.Refused = owner + "/" + repo + " generates its release notes with git-cliff"
+		return outcome, nil
+	}
 
 	content, sha, found, err := changelogFile(ctx, client, owner, repo, policy.Path, branch)
 	if err != nil {
@@ -96,4 +115,27 @@ func changelogFile(ctx context.Context, client *github.Client, owner, repo, path
 		return "", "", false, fmt.Errorf("decoding %s: %w", path, err)
 	}
 	return content, file.GetSHA(), true, nil
+}
+
+// ReleaseNotesGenerated reports whether the repository builds its release
+// notes from its commits rather than from a changelog file, which it does when
+// it carries a cliff.toml.
+//
+// git-cliff groups a bot's commit like any other -- the Giant Swarm
+// configuration maps chore and fix to Changed and Fixed -- so the update is
+// already published on the release page, and a line added to the file would
+// only repeat it. Such a repository cuts no version section either, so the
+// line would sit under an unreleased heading that nothing releases.
+//
+// A repository without the file reports false and no error, as every other
+// read here does. An empty ref reads the default branch.
+func ReleaseNotesGenerated(ctx context.Context, client *github.Client, owner, repo, ref string) (bool, error) {
+	_, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, cliffConfigPath, &github.RepositoryContentGetOptions{Ref: ref})
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading %s: %w", cliffConfigPath, err)
+	}
+	return true, nil
 }

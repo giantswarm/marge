@@ -112,3 +112,70 @@ func TestChangelog_aRepositoryWithoutTheFileIsDecidedAnyway(t *testing.T) {
 	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
 	require.NotContains(t, got.Detail, "changelog")
 }
+
+// TestChangelog_notWhenTheReleaseNotesAreGenerated is the scope of the whole
+// step: a repository with a cliff.toml publishes the bump on its release page
+// already, and it no longer cuts a version section, so a line in the file
+// would repeat the release under a heading nothing releases.
+func TestChangelog_notWhenTheReleaseNotesAreGenerated(t *testing.T) {
+	f := changelogFixture()
+	f.generatedReleaseNotes = true
+
+	got := f.run(t, nil)
+
+	require.Zero(t, f.changelogPuts.Load())
+	require.Equal(t, pr.StatusMerged, got.State, got.Detail)
+	require.NotContains(t, got.Detail, "changelog")
+}
+
+// TestChangelog_writtenAfterTheChecks guards the placement: a PR whose checks
+// are not green earns no entry, so the line never waits out a CI cycle on a
+// branch the bot can rebase under it.
+func TestChangelog_writtenAfterTheChecks(t *testing.T) {
+	f := changelogFixture()
+	f.headChecks["go-build"] = "pending"
+
+	got := f.run(t, nil)
+
+	require.Zero(t, f.changelogPuts.Load())
+	require.Equal(t, pr.StatusWaitingChecks, got.State, got.Detail)
+	require.Contains(t, got.Detail, "pending: go-build")
+}
+
+// TestChangelog_notOnAPRTheTeamHolds: an entry describes an update that will
+// land. A major update a person has to decide on may never land.
+func TestChangelog_notOnAPRTheTeamHolds(t *testing.T) {
+	f := changelogFixture()
+	f.title = "chore(deps): update module github.com/foo/bar to v5.0.0"
+
+	got := f.run(t, func(p *Processor) {
+		p.Policies = policySet(t, "updateTypes:\n  renovate:\n    - patch\n", nil)
+	})
+
+	require.Zero(t, f.changelogPuts.Load())
+	require.Equal(t, pr.StatusHeld, got.State, got.Detail)
+}
+
+// TestChangelog_dryRunWritesNothingAndNamesTheEntry: a dry run reads the
+// repository so it can say what a real run would write, and writes nothing.
+func TestChangelog_dryRunWritesNothingAndNamesTheEntry(t *testing.T) {
+	f := changelogFixture()
+
+	got := f.run(t, func(p *Processor) { p.DryRun = true })
+
+	require.Zero(t, f.changelogPuts.Load())
+	require.Equal(t, pr.StatusEligible, got.State, got.Detail)
+	require.Contains(t, got.Detail, "write the changelog entry")
+}
+
+// TestChangelog_dryRunSaysNothingWhereTheNotesAreGenerated: the same run over
+// a repository that earns no entry must not promise one.
+func TestChangelog_dryRunSaysNothingWhereTheNotesAreGenerated(t *testing.T) {
+	f := changelogFixture()
+	f.generatedReleaseNotes = true
+
+	got := f.run(t, func(p *Processor) { p.DryRun = true })
+
+	require.Equal(t, pr.StatusEligible, got.State, got.Detail)
+	require.NotContains(t, got.Detail, "changelog")
+}
