@@ -119,16 +119,45 @@ func TestRerunFailedRerunsTheRun(t *testing.T) {
 	require.Equal(t, "/repos/giantswarm/marge/actions/runs/77/rerun-failed-jobs", path)
 }
 
-func TestRerunFailedWithoutARunInTheURL(t *testing.T) {
+// The same transient failure appears on both providers, so the action
+// reruns whichever build the matched check belongs to.
+func TestRerunFailedRetriesACircleCIBuild(t *testing.T) {
+	var rerun string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			rerun = r.URL.Path
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"build_num": 12, "workflows": {"workflow_id": "abc", "workflow_name": "build"}}`))
+	}))
+	defer server.Close()
+
 	req := botRequest(nil)
 	req.Check = "ci/circleci: go-build"
 	req.CheckURL = "https://circleci.com/gh/giantswarm/marge/12"
+	req.Deps.CircleCI = &circleci.Client{HTTPClient: server.Client(), BaseURL: server.URL, Token: "t"}
+
+	out, err := Default().Apply(t.Context(), RerunFailed, req, nil)
+
+	require.NoError(t, err)
+	require.True(t, out.Applied)
+	require.Equal(t, "workflow build rerun from failed", out.Detail)
+	require.Contains(t, rerun, "abc")
+}
+
+// A check behind neither an Actions run nor a CircleCI build is a check the
+// action has no build to rerun.
+func TestRerunFailedWithoutABuildInTheURL(t *testing.T) {
+	req := botRequest(nil)
+	req.Check = "jenkins/go-build"
+	req.CheckURL = "https://jenkins.example.com/job/go-build/12"
 
 	out, err := Default().Apply(t.Context(), RerunFailed, req, nil)
 
 	require.NoError(t, err)
 	require.False(t, out.Applied)
-	require.Equal(t, "no Actions run behind ci/circleci: go-build", out.Refused)
+	require.Equal(t, "no build behind jenkins/go-build", out.Refused)
 }
 
 func TestCircleCIRetryRerunsTheWorkflow(t *testing.T) {

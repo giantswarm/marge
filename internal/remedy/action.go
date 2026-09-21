@@ -25,7 +25,8 @@ const (
 	// UpdateBranch merges the base branch into the PR head, the way the
 	// "Update branch" button does.
 	UpdateBranch Name = "update-branch"
-	// RerunFailed reruns the failed jobs of a GitHub Actions workflow run.
+	// RerunFailed reruns the failed jobs of the build behind the matched
+	// check, on the provider that ran it.
 	RerunFailed Name = "rerun-failed"
 	// CircleCIRetry reruns a CircleCI workflow from its failed jobs, or
 	// retries the single build when no workflow is known.
