@@ -2,6 +2,7 @@ package process
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,21 +13,44 @@ import (
 // TestMemoRunsOneLookupPerKey is the property the caches of a sweep depend
 // on: twenty PRs that need the same answer at the same time cost one
 // request, not twenty.
+//
+// leaderIn is what makes it a test of that property rather than of the
+// answer. Without it the callers may run one after the other, and a cache
+// that releases its lock across the lookup reports one lookup too. The
+// other callers ask only once the first is inside load, which is the state
+// a per-call cache answers wrongly.
 func TestMemoRunsOneLookupPerKey(t *testing.T) {
 	var cache memo[int]
 	var lookups atomic.Int32
+	leaderIn := make(chan struct{})
+	var entered atomic.Int32
 	release := make(chan struct{})
+
+	load := func() (int, error) {
+		lookups.Add(1)
+		return 7, nil
+	}
 
 	var wg sync.WaitGroup
 	answers := make([]int, 20)
-	for i := range answers {
-		wg.Go(func() {
-			answers[i], _ = cache.get("one", func() (int, error) {
-				lookups.Add(1)
-				<-release
-				return 7, nil
-			})
+	wg.Go(func() {
+		answers[0], _ = cache.get("one", func() (int, error) {
+			lookups.Add(1)
+			close(leaderIn)
+			<-release
+			return 7, nil
 		})
+	})
+	for i := 1; i < len(answers); i++ {
+		wg.Go(func() {
+			<-leaderIn
+			entered.Add(1)
+			answers[i], _ = cache.get("one", load)
+		})
+	}
+
+	for entered.Load() < int32(len(answers)-1) {
+		runtime.Gosched()
 	}
 	close(release)
 	wg.Wait()

@@ -91,6 +91,15 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 	}
 }
 
+// failureDetail builds a human-readable detail string for a non-security
+// check failure, naming the failing checks when available.
+func failureDetail(failedChecks []string) string {
+	if len(failedChecks) == 0 {
+		return "checks failed"
+	}
+	return fmt.Sprintf("checks failed: %s", joinCapped(failedChecks))
+}
+
 func waitingDetail(required requiredOutcome, state string) string {
 	var parts []string
 	if len(required.Missing) > 0 {

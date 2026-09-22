@@ -475,15 +475,6 @@ func (p *Processor) securityPatterns() []string {
 	return normalizePatterns(patterns)
 }
 
-// failureDetail builds a human-readable detail string for a non-security
-// check failure, naming the failing checks when available.
-func failureDetail(failedChecks []string) string {
-	if len(failedChecks) == 0 {
-		return "checks failed"
-	}
-	return fmt.Sprintf("checks failed: %s", joinCapped(failedChecks))
-}
-
 // joinCapped joins parts with ", ", naming at most detailMaxChecks of them
 // and counting the rest, so a detail stays readable on one line.
 func joinCapped(parts []string) string {
