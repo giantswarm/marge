@@ -62,6 +62,8 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 			if len(result.Contexts) == 0 {
 				result.Contexts = append(result.Contexts, checks.GetContexts()...)
 			}
+		case isRateLimit(err):
+			return protection{}, err
 		case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
 		default:
 			return protection{}, err
@@ -82,12 +84,24 @@ func (p *Processor) requiredReview(ctx context.Context, info pr.PRInfo, base str
 		switch {
 		case err == nil:
 			result.CodeOwnerReviews = enforcement.GetRequireCodeOwnerReviews()
+		case isRateLimit(err):
+			return reviewRule{}, err
 		case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
 		default:
 			return reviewRule{}, err
 		}
 		return result, nil
 	})
+}
+
+// isRateLimit reports whether the error is GitHub refusing the call for rate
+// rather than for access. Both arrive as 403, and the answer to a rate
+// refusal is to ask again later, never to read it as "the branch requires
+// nothing": the memo would keep that answer for the rest of the sweep.
+func isRateLimit(err error) bool {
+	var primary *github.RateLimitError
+	var secondary *github.AbuseRateLimitError
+	return errors.As(err, &primary) || errors.As(err, &secondary)
 }
 
 func isStatus(err error, resp *github.Response, code int) bool {
