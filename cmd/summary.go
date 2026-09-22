@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"strings"
+
+	"github.com/giantswarm/marge/internal/pr"
 )
 
 // summaryPRLimit bounds how many pull requests one section names. A team
@@ -62,6 +64,12 @@ func stoppedSummary(team string, result SweepResult) string {
 func summaryBody(b *strings.Builder, result SweepResult) {
 	counts := result.Summary
 
+	// The findings come before the pull request sections because the
+	// summary is trimmed from the end: a report of what holds a queue is
+	// worth more than the eleventh merged PR, and a team that never reads
+	// it fixes nothing in the repository.
+	findingsSection(b, result.Findings)
+
 	section(b, "Merged", result.Merged)
 	section(b, "Remedied", result.Remedied)
 	section(b, "Refreshed", result.Refreshed)
@@ -80,6 +88,60 @@ func summaryBody(b *strings.Builder, result SweepResult) {
 	if result.Rules != nil && result.Rules.Error != "" {
 		fmt.Fprintf(b, "Rules unavailable (%s): %s. Every remedy was refused.\n", result.Rules.Source, result.Rules.Error)
 	}
+}
+
+// findingRepoLimit bounds how many repositories one finding names. A team
+// with 78 repositories reads the cause and the count; the run's JSON output
+// carries every repository.
+const findingRepoLimit = 3
+
+// findingsSection names the repository settings that hold PRs back, the one
+// on the most PRs first. One line per cause, never one per repository.
+func findingsSection(b *strings.Builder, findings []SweepFinding) {
+	if len(findings) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\nRepository settings holding PRs (%d):\n", len(findings))
+	for _, finding := range findings {
+		fmt.Fprintf(b, "• %s — %s in %s: %s\n",
+			findingCause(finding.Cause),
+			plural(finding.PRs, "PR"),
+			plural(len(finding.Repositories), "repository"),
+			findingRepos(finding.Repositories))
+	}
+}
+
+// findingCause reads one cause as a sentence, and says what the team must
+// change, because the sweep will not.
+func findingCause(cause string) string {
+	switch pr.RepoFindingCause(cause) {
+	case pr.FindingStrictProtection:
+		return "strict branch protection, so one PR merges per run"
+	case pr.FindingCodeOwnerReview:
+		return "`require_code_owner_reviews`, which the sweep's own approval does not satisfy"
+	case pr.FindingSilentContext:
+		return fmt.Sprintf("a required check that has not reported in %d days", int(pr.SilentContextAfter.Hours()/24))
+	default:
+		return cause
+	}
+}
+
+// findingRepos names the repositories of one finding, each with its count,
+// and says how many it left out.
+func findingRepos(repos []SweepFindingRepo) string {
+	named := make([]string, 0, findingRepoLimit+1)
+	for i, repo := range repos {
+		if i == findingRepoLimit {
+			named = append(named, fmt.Sprintf("and %d more", len(repos)-findingRepoLimit))
+			break
+		}
+		line := fmt.Sprintf("%s %d", repo.Repo, repo.PRs)
+		if repo.Detail != "" {
+			line += fmt.Sprintf(" (%s)", repo.Detail)
+		}
+		named = append(named, line)
+	}
+	return strings.Join(named, ", ")
 }
 
 // summarySignatureLimit bounds how many signatures the summary names. The
@@ -209,6 +271,9 @@ func entryLine(entry SweepPREntry) string {
 func plural(count int, noun string) string {
 	if count == 1 {
 		return "1 " + noun
+	}
+	if strings.HasSuffix(noun, "y") {
+		return fmt.Sprintf("%d %sies", count, strings.TrimSuffix(noun, "y"))
 	}
 	return fmt.Sprintf("%d %ss", count, noun)
 }

@@ -13,16 +13,32 @@ import (
 )
 
 // protection is what the sweep needs from a base branch's protection: the
-// required status check contexts.
+// required status check contexts, and whether the branch must be up to date
+// before a merge.
 type protection struct {
 	Contexts []string
+	// Strict is "require branches to be up to date before merging". Under
+	// it every merge puts the sibling PRs of the repository behind their
+	// base, so the repository merges one PR per sweep.
+	Strict bool
 }
 
-// protectionCache memoises requiredProtection per owner/repo@base for the
-// lifetime of the Processor: every PR of a repository shares one base.
+// reviewRule is what the sweep needs from a base branch's review
+// enforcement.
+type reviewRule struct {
+	// CodeOwnerReviews is require_code_owner_reviews: an approval counts
+	// only when a code owner gives it. The sweep App owns no code, so its
+	// own approval never satisfies the rule and GitHub refuses the merge.
+	CodeOwnerReviews bool
+}
+
+// protectionCache memoises requiredProtection and requiredReview per
+// owner/repo@base for the lifetime of the Processor: every PR of a
+// repository shares one base.
 type protectionCache struct {
 	protectionMu sync.Mutex
 	protections  map[string]protection
+	reviews      map[string]reviewRule
 }
 
 // requiredProtection reads the base branch's required status checks. A 404
@@ -48,6 +64,7 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 	checks, resp, err := p.Client.Repositories.GetRequiredStatusChecks(ctx, info.Owner, info.Repo, base)
 	switch {
 	case err == nil:
+		result.Strict = checks.GetStrict()
 		for _, c := range checks.GetChecks() {
 			if c.Context != "" {
 				result.Contexts = append(result.Contexts, c.Context)
@@ -63,6 +80,38 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 
 	p.protectionMu.Lock()
 	p.protections[key] = result
+	p.protectionMu.Unlock()
+	return result, nil
+}
+
+// requiredReview reads the base branch's review enforcement. It handles the
+// two statuses requiredProtection handles, for the same reasons: a 404 means
+// the branch enforces no review, and a 403 means the caller may not read the
+// protection, which is not a rule the sweep may claim.
+func (p *Processor) requiredReview(ctx context.Context, info pr.PRInfo, base string) (reviewRule, error) {
+	key := info.Owner + "/" + info.Repo + "@" + base
+	p.protectionMu.Lock()
+	if p.reviews == nil {
+		p.reviews = make(map[string]reviewRule)
+	}
+	if cached, ok := p.reviews[key]; ok {
+		p.protectionMu.Unlock()
+		return cached, nil
+	}
+	p.protectionMu.Unlock()
+
+	var result reviewRule
+	enforcement, resp, err := p.Client.Repositories.GetPullRequestReviewEnforcement(ctx, info.Owner, info.Repo, base)
+	switch {
+	case err == nil:
+		result.CodeOwnerReviews = enforcement.GetRequireCodeOwnerReviews()
+	case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
+	default:
+		return reviewRule{}, err
+	}
+
+	p.protectionMu.Lock()
+	p.reviews[key] = result
 	p.protectionMu.Unlock()
 	return result, nil
 }

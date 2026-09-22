@@ -37,10 +37,10 @@ const (
 // sweep that has already done its work.
 const postTimeout = 30 * time.Second
 
-// textMax is the gateway's own bound on a notice: one Slack section block,
+// TextMax is the gateway's own bound on a notice: one Slack section block,
 // whose limit is 3000 characters. A longer summary is trimmed to whole lines
 // rather than refused.
-const textMax = 3000
+const TextMax = 3000
 
 // noticeMargin keeps room for the line that says what was dropped.
 const noticeMargin = 80
@@ -95,7 +95,7 @@ func (c *Client) Post(ctx context.Context, team, channel, text string) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(notice{Team: team, Channel: channel, Text: fit(text)})
+	body, err := json.Marshal(notice{Team: team, Channel: channel, Text: Fit(text)})
 	if err != nil {
 		return err
 	}
@@ -139,17 +139,18 @@ func (c *Client) token() (string, error) {
 	return token, nil
 }
 
-// fit trims a summary to the gateway's bound on whole lines, and says how
+// Fit trims a summary to the gateway's bound on whole lines, and says how
 // many lines it dropped. A summary that silently loses its last section
-// reads as a sweep that did less than it did.
-func fit(text string) string {
-	if len(text) <= textMax {
+// reads as a sweep that did less than it did. It is exported so a caller
+// that renders a summary can hold its own lines to what a notice carries.
+func Fit(text string) string {
+	if len(text) <= TextMax {
 		return text
 	}
 	lines := strings.Split(text, "\n")
 	kept, size := 0, 0
 	for _, line := range lines {
-		if size+len(line)+1 > textMax-noticeMargin {
+		if size+len(line)+1 > TextMax-noticeMargin {
 			break
 		}
 		size += len(line) + 1

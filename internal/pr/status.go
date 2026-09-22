@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type StatusState int
@@ -173,6 +174,65 @@ type StatusEntry struct {
 	// Unhandled describes a failure no rule of the catalogue recognised.
 	// Nil when a rule matched, or when the state is not one a rule acts on.
 	Unhandled *Unhandled
+	// Finding names the repository setting that holds this PR back. Nil
+	// when no setting stands between the PR and a merge.
+	Finding *RepoFinding
+}
+
+// RepoFindingCause names a repository setting the sweep cannot act on. The
+// engine refuses the same PRs it refused before; the cause says why a queue
+// does not drain, so the fix goes to the repository rather than to marge.
+type RepoFindingCause string
+
+const (
+	// FindingStrictProtection: the base branch requires an up-to-date
+	// branch, so every merge puts the sibling PRs behind their base and the
+	// repository merges one PR per sweep.
+	FindingStrictProtection RepoFindingCause = "strict_protection"
+	// FindingCodeOwnerReview: the base branch requires an approval from a
+	// code owner, which the sweep App cannot give.
+	FindingCodeOwnerReview RepoFindingCause = "code_owner_review"
+	// FindingSilentContext: a required status check has not reported for
+	// long enough that no run will report it. The PR waits for ever.
+	FindingSilentContext RepoFindingCause = "silent_required_context"
+)
+
+// SilentContextAfter is how long a required context may stay unreported on
+// a settled head before the sweep reports it as a repository-settings
+// problem. A context no workflow produces never reports, and the PRs that
+// require it wait for ever inside a classification that means "come back
+// later".
+const SilentContextAfter = 7 * 24 * time.Hour
+
+// RepoFinding is one repository setting that holds one PR back.
+type RepoFinding struct {
+	Cause RepoFindingCause
+	// Detail carries what the cause needs to be acted on, for instance the
+	// required context that never reported. Empty when the cause names
+	// itself.
+	Detail string
+}
+
+// SetFinding records the repository setting that holds the entry back.
+func (s *PRStatus) SetFinding(idx int, finding *RepoFinding) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx >= 0 && idx < len(s.entries) {
+		s.entries[idx].Finding = finding
+	}
+}
+
+// FindingEntries returns the entries a repository setting holds back.
+func (s *PRStatus) FindingEntries() []StatusEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []StatusEntry
+	for _, e := range s.entries {
+		if e.Finding != nil {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // ObsoleteReason names why a PR is not worth fixing.

@@ -103,7 +103,7 @@ func TestPost_trimsASummaryTheGatewayWouldRefuse(t *testing.T) {
 
 	require.NoError(t, client(t, server).Post(t.Context(), "bumblebee", "C0ALXPMB1PW", long))
 
-	require.LessOrEqual(t, len(server.request.Text), textMax)
+	require.LessOrEqual(t, len(server.request.Text), TextMax)
 	require.Contains(t, server.request.Text, "more lines did not fit")
 	require.True(t, strings.HasPrefix(server.request.Text, "• giantswarm/marge#1234"))
 }

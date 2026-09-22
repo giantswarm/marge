@@ -499,6 +499,31 @@ type SweepResult struct {
 	// RepositoriesFailed lists the repositories whose PRs could not be
 	// listed, so a partial sweep is visible as such.
 	RepositoriesFailed []SweepRepoFailure `json:"repositories_failed,omitempty"`
+	// Findings groups the repository settings that hold PRs back, the
+	// setting on the most PRs first. The sweep acts on none of them: the
+	// fix belongs to the repository.
+	Findings []SweepFinding `json:"findings,omitempty"`
+}
+
+// SweepFinding is one repository setting that holds PRs back, with the
+// repositories it holds them in.
+type SweepFinding struct {
+	Cause string `json:"cause"`
+	// PRs counts the pull requests the setting holds across every
+	// repository of this finding.
+	PRs int `json:"prs"`
+	// Repositories are the repositories the setting holds PRs in, the one
+	// with the most PRs first.
+	Repositories []SweepFindingRepo `json:"repositories"`
+}
+
+// SweepFindingRepo is one repository of a finding.
+type SweepFindingRepo struct {
+	Repo string `json:"repo"`
+	PRs  int    `json:"prs"`
+	// Detail carries what the cause needs to be acted on, for instance the
+	// required context that never reported.
+	Detail string `json:"detail,omitempty"`
 }
 
 // SweepRepoFailure names a repository the sweep could not list.
@@ -1283,6 +1308,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 		result.RepositoriesFailed = append(result.RepositoriesFailed, SweepRepoFailure{Repo: f.Repo, Error: f.Err})
 	}
 	result.Unhandled = groupUnhandled(status.UnhandledEntries())
+	result.Findings = groupFindings(status.FindingEntries())
 
 	now := time.Now()
 	toEntry := func(e pr.StatusEntry) SweepPREntry {
@@ -1454,5 +1480,48 @@ func groupUnhandled(entries []pr.StatusEntry) []SweepUnhandled {
 		out = append(out, *bySignature[signature])
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
+// groupFindings collects the repository settings that hold PRs back, by
+// cause and then by repository, the cause on the most PRs first. Honey
+// Badger sweeps 78 repositories, and a report with one line per repository
+// does not reach a reader; a count per cause does.
+func groupFindings(entries []pr.StatusEntry) []SweepFinding {
+	counts := make(map[string]int)
+	repos := make(map[string]map[string]*SweepFindingRepo)
+	var order []string
+	for _, e := range entries {
+		cause := string(e.Finding.Cause)
+		if _, seen := repos[cause]; !seen {
+			repos[cause] = make(map[string]*SweepFindingRepo)
+			order = append(order, cause)
+		}
+		counts[cause]++
+
+		name := e.PR.Owner + "/" + e.PR.Repo
+		repo, known := repos[cause][name]
+		if !known {
+			repo = &SweepFindingRepo{Repo: name, Detail: e.Finding.Detail}
+			repos[cause][name] = repo
+		}
+		repo.PRs++
+	}
+
+	out := make([]SweepFinding, 0, len(order))
+	for _, cause := range order {
+		finding := SweepFinding{Cause: cause, PRs: counts[cause]}
+		for _, repo := range repos[cause] {
+			finding.Repositories = append(finding.Repositories, *repo)
+		}
+		sort.SliceStable(finding.Repositories, func(i, j int) bool {
+			if finding.Repositories[i].PRs != finding.Repositories[j].PRs {
+				return finding.Repositories[i].PRs > finding.Repositories[j].PRs
+			}
+			return finding.Repositories[i].Repo < finding.Repositories[j].Repo
+		})
+		out = append(out, finding)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].PRs > out[j].PRs })
 	return out
 }

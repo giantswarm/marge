@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,14 @@ type guardFixture struct {
 	// branch has no required checks (GitHub answers 404).
 	required []string
 	strict   bool
+	// codeOwnerReviews makes the branch require an approval from a code
+	// owner; false means the branch enforces no review (GitHub answers
+	// 404).
+	codeOwnerReviews bool
+	// checksSettledAt is when the head's completed check runs finished. The
+	// zero time leaves the completion out, as a check run that never
+	// reported one.
+	checksSettledAt time.Time
 	// mergeRefusal, when set, is the 405 message GitHub answers the merge
 	// with instead of merging.
 	mergeRefusal   string
@@ -119,9 +128,13 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 				continue
 			}
 			cr := &github.CheckRun{ID: new(int64(len(runs.CheckRuns) + 1)), Name: new(name), Status: new("completed"), Conclusion: new(state)}
+			if !f.checksSettledAt.IsZero() {
+				cr.CompletedAt = &github.Timestamp{Time: f.checksSettledAt}
+			}
 			if state == "pending" {
 				cr.Status = new("in_progress")
 				cr.Conclusion = nil
+				cr.CompletedAt = nil
 			}
 			runs.CheckRuns = append(runs.CheckRuns, cr)
 		}
@@ -177,6 +190,17 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		writeJSON(w, runs)
 	})
 
+	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_pull_request_reviews", func(w http.ResponseWriter, r *http.Request) {
+		if f.protectionForbidden {
+			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
+			return
+		}
+		if !f.codeOwnerReviews {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, github.PullRequestReviewsEnforcement{RequireCodeOwnerReviews: true})
+	})
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
 		if f.protectionForbidden {
 			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
