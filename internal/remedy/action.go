@@ -36,9 +36,6 @@ const (
 	// FixProtectionContext rewrites the required status check contexts of a
 	// base branch after a migration renamed the jobs that post them.
 	FixProtectionContext Name = "fix-protection-context"
-	// DispatchAlignWorkflow triggers the Align files workflow for one
-	// repository so its alignment branch is regenerated.
-	DispatchAlignWorkflow Name = "dispatch-align-workflow"
 	// DispatchCVEWorkflow triggers a repository's generated Fix Go
 	// vulnerabilities workflow on the pull request's base branch, which
 	// runs nancy-fixer and opens the remediation PR under the Herald App.
@@ -49,9 +46,6 @@ const (
 	// CommentCommand comments the command a gate check named, so the test
 	// suite the gate waits for starts.
 	CommentCommand Name = "comment-command"
-	// StrictChain brings a PR up to date, waits for its required checks,
-	// approves it and merges it, restoring enforce_admins afterwards.
-	StrictChain Name = "strict-chain"
 )
 
 // Deps are the clients an action calls. CircleCI is nil when no token is
@@ -95,7 +89,6 @@ type Request struct {
 	Pull   *github.PullRequest
 	Kind   pr.Kind
 	Update pr.UpdateType
-	Head   string
 	DryRun bool
 
 	// Now is the time the sweep read this PR. Guards read it rather than the
@@ -151,15 +144,12 @@ type Outcome struct {
 	Refused string
 	// Detail is the operator-facing summary of an applied action.
 	Detail string
-	// StopRepository ends the sweep for this repository, for instance when
-	// enforce_admins could not be restored.
+	// StopRepository ends the sweep for this repository, for instance when a
+	// protection write left a required context the head cannot report.
 	StopRepository bool
 	// KeepClassification leaves the PR in the state the sweep classified it
 	// in. An action that only records why a PR waits sets it.
 	KeepClassification bool
-	// Evidence is the marker outcome written on the PR, or "" for an action
-	// that writes none.
-	Evidence string
 }
 
 // Action is one remedy of the vocabulary.
@@ -174,17 +164,12 @@ type Action interface {
 // Registry is the set of actions this build implements.
 type Registry struct {
 	byName map[Name]Action
-	// held names the actions this build implements but does not run. A rule
-	// may name one and validation accepts it, so the catalogue documents
-	// it; Apply refuses it. Enabling one is a Go change, reviewed as code,
-	// not a rule merged into a branch the sweep reads at run time.
-	held map[Name]string
 }
 
 // NewRegistry indexes the actions by name. A duplicate name panics: the
 // vocabulary is built once at start-up.
 func NewRegistry(actions ...Action) *Registry {
-	reg := &Registry{byName: make(map[Name]Action, len(actions)), held: make(map[Name]string)}
+	reg := &Registry{byName: make(map[Name]Action, len(actions))}
 	for _, a := range actions {
 		if _, dup := reg.byName[a.Name()]; dup {
 			panic(fmt.Sprintf("remedy: action %q registered twice", a.Name()))
@@ -199,18 +184,6 @@ func (r *Registry) Lookup(name Name) (Action, bool) {
 	a, ok := r.byName[name]
 	return a, ok
 }
-
-// hold marks an action Apply refuses, with the reason a report prints.
-func (r *Registry) hold(name Name, reason string) {
-	if _, known := r.byName[name]; !known {
-		panic(fmt.Sprintf("remedy: cannot hold unregistered action %q", name))
-	}
-	r.held[name] = reason
-}
-
-// HeldReason says why an action is implemented but not run, or "" when the
-// action runs.
-func (r *Registry) HeldReason(name Name) string { return r.held[name] }
 
 // GuardNames lists the guards an action enforces, in the order it runs them.
 func (r *Registry) GuardNames(name Name) []string {
@@ -243,9 +216,6 @@ func (r *Registry) Apply(ctx context.Context, name Name, req *Request, extra []G
 	action, ok := r.Lookup(name)
 	if !ok {
 		return Outcome{}, fmt.Errorf("remedy: unknown action %q: known actions are %s", name, joinNames(r.Names()))
-	}
-	if reason := r.held[name]; reason != "" {
-		return Outcome{Refused: string(name) + " is held: " + reason}, nil
 	}
 	if reason := refuse(slices.Concat(action.Guards(), extra), req); reason != "" {
 		return Outcome{Refused: reason}, nil

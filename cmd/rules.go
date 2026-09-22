@@ -122,12 +122,8 @@ so a rule cannot land on a signal nobody recorded.`,
 }
 
 // guardSet is what refuses the rule's action: the guards the action itself
-// enforces, then the refusals the rule adds. A held action says so first,
-// because it refuses before any guard runs.
+// enforces, then the refusals the rule adds.
 func guardSet(registry *remedy.Registry, rule *rules.Rule) string {
-	if held := registry.HeldReason(rule.Action.Name); held != "" {
-		return "HELD: " + held
-	}
 	names := registry.GuardNames(rule.Action.Name)
 	for _, refusal := range rule.Refuse {
 		names = append(names, "+"+refusal)
@@ -350,7 +346,7 @@ match:
     pattern: 'TODO an expression that matches the excerpt below and nothing else'
 action:
   # TODO name one action: update-branch, rerun-failed, circleci-retry, close,
-  # mark-wait, dispatch-align-workflow, fix-protection-context, strict-chain.
+  # mark-wait, dispatch-cve-workflow, fix-protection-context, comment-command.
   name: ""
 evidence:
   reason: TODO what the PR should say once this ran.

@@ -132,10 +132,6 @@ func TestNoRuleIsRefusedForEver(t *testing.T) {
 
 			action, known := registry.Lookup(rule.Action.Name)
 			require.True(t, known)
-			if held := registry.HeldReason(rule.Action.Name); held != "" {
-				t.Skipf("%s is held: %s", rule.Action.Name, held)
-			}
-
 			request := requestFor(rule, scenario)
 			for _, guard := range slices.Concat(action.Guards(), rule.Guards()) {
 				require.Empty(t, guard.Refuse(request),

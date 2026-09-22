@@ -11,14 +11,6 @@ import (
 	"github.com/giantswarm/marge/internal/pr"
 )
 
-// alignConfigRepo holds the Align files workflow and the team files.
-const (
-	alignConfigOwner = "giantswarm"
-	alignConfigRepo  = "github"
-	alignWorkflow    = "align-files.yaml"
-	alignWorkflowRef = "main"
-)
-
 // NotAlignFiles refuses an action on an Align files PR. The alignment branch
 // is regenerated every cycle, so closing such a PR only makes the bot open
 // it again.
@@ -68,34 +60,6 @@ func (markWait) Guards() []Guard { return []Guard{TrustedAuthor, NoSecurityFailu
 
 func (markWait) Apply(context.Context, *Request) (Outcome, error) {
 	return Outcome{Applied: true, KeepClassification: true, Detail: "waiting on an external change"}, nil
-}
-
-// dispatchAlignWorkflow triggers the Align files workflow for one
-// repository, which regenerates its alignment branch. It is the remedy for
-// a template fix that has landed in giantswarm/github, never for a defect
-// in the alignment branch itself.
-type dispatchAlignWorkflow struct{}
-
-func (dispatchAlignWorkflow) Name() Name { return DispatchAlignWorkflow }
-func (dispatchAlignWorkflow) Guards() []Guard {
-	return []Guard{TrustedAuthor, OncePerChange(DispatchAlignWorkflow)}
-}
-
-func (dispatchAlignWorkflow) Apply(ctx context.Context, req *Request) (Outcome, error) {
-	_, _, err := req.Deps.GitHub.Actions.CreateWorkflowDispatchEventByFileName(ctx,
-		alignConfigOwner, alignConfigRepo, alignWorkflow,
-		github.CreateWorkflowDispatchEventRequest{
-			Ref:    alignWorkflowRef,
-			Inputs: map[string]any{"repository": req.Info.Repo},
-		})
-	if err != nil {
-		return Outcome{}, fmt.Errorf("dispatch-align-workflow: %w", err)
-	}
-	return Outcome{
-		Applied:            true,
-		KeepClassification: true,
-		Detail:             "Align files dispatched for " + req.Info.Repo,
-	}, nil
 }
 
 // cveWorkflow is the generated workflow every Go repository carries. It

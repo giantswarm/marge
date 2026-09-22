@@ -164,7 +164,7 @@ leaves it; fixing the consumer would be undone on the next generation.
 | A deprecated repository still receiving bumps | `lifecycle: deprecated` on the repository entry | 79 |
 | Two Renovate managers matching one image line | Delete the redundant repo-local regex manager | 76 |
 | Many pin PRs from a curate-generated chart | Renovate grouping, so one PR carries every pin | 69 |
-| A toolchain-version wave stalling the fleet on the linter | `devctl`, then `dispatch-align-workflow` per repository | 96 |
+| A toolchain-version wave stalling the fleet on the linter | `devctl`, then an Align files dispatch per repository | 96 |
 | The same check failing across unrelated repositories in one sweep | Shared CI in `giantswarm/github` or an action it calls | 100, 104 |
 | A CircleCI project setting refusing the whole pipeline | The project setting; the sweep reports it as no verdict | 101 |
 | A central template change waiting to reach the repositories | The Align files workflow dispatch | 105 |
@@ -212,10 +212,10 @@ reason several guards exist. Each cites the runbook row it comes from.
   a stop, not a merge conflict to route around.
 - **A merged rule is live on the next sweep.** Nothing gates the catalogue
   but review on this repository: there is no signature and no release. That
-  is the point, and it is why `strict-chain`, the one action that merges, is
-  **held** in the registry until a measured run shows PRs that need it. A
-  rule may name it and validation accepts it; the sweep refuses it and says
-  so, so the gate is code rather than the absence of a rule.
+  is the point, and it is why no action of the vocabulary merges. The sweep
+  merges from its own path, under the team's policy, and a rule reaches
+  neither. `TestDailyActionsWriteNoCode` pins the action list, so a new
+  action is a Go change that fails a test until it is reviewed.
 - **A context that has not reported is not a context nobody posts** (rows
   36, 46, 93, 94). A
   queued workflow reports nothing, which is what drift looks like. The

@@ -198,7 +198,7 @@ A guard that refuses a merge for a repository reason refuses it on every sweep, 
 
 | Cause | What the sweep saw | What fixes it |
 |---|---|---|
-| `strict_protection` | the base branch requires an up-to-date branch, so every merge puts the siblings behind their base and the repository merges one PR per run | a second daily run, or the held `strict-chain` action |
+| `strict_protection` | the base branch requires an up-to-date branch, so every merge puts the siblings behind their base and the repository merges one PR per run | a second daily run |
 | `code_owner_review` | the base branch sets `require_code_owner_reviews`, which the sweep's own approval never satisfies | the sweep App in `CODEOWNERS`, or the rule dropped |
 | `silent_required_context` | a required context reported nothing, on a head whose other checks settled more than seven days ago, so no run will report it | the context removed from the protection, or the workflow that produces it |
 
@@ -241,11 +241,9 @@ evidence:
   reason: the auto-cancelled build was retried on the same commit
 ```
 
-The actions a rule may name are `update-branch`, `rerun-failed`, `circleci-retry`, `close`, `mark-wait`, `comment-command`, `dispatch-align-workflow`, `dispatch-cve-workflow`, `fix-protection-context` and `strict-chain`. A new action is a Go change, reviewed as code. `rerun-failed` reads the matched check's URL and reruns the failed jobs of the Actions run or the CircleCI workflow behind it, so a rule that names a transient failure remedies it on either provider.
+The actions a rule may name are `update-branch`, `rerun-failed`, `circleci-retry`, `close`, `mark-wait`, `comment-command`, `dispatch-cve-workflow` and `fix-protection-context`. A new action is a Go change, reviewed as code. `rerun-failed` reads the matched check's URL and reruns the failed jobs of the Actions run or the CircleCI workflow behind it, so a rule that names a transient failure remedies it on either provider.
 
 `comment-command` comments the command a pending gate check named, so the test suite the gate waits for starts. It writes no commit, so no approval is dismissed and no CI cycle restarts, and the PR stays in the state the sweep classified it in. The command is the one the rule captured from the check's own message: the action composes none, and the `known-command` guard accepts only a `/run` command with `KEY=value` arguments naming a suite the sweep knows. `only-gate-waiting` refuses while anything else on the PR is red or pending, because the suite costs a cluster and a PR whose other checks fail does not merge when the suite goes green.
-
-`strict-chain` is **held**: it is the one action that merges, and no measured sweep has reported a PR blocked by the plain review rule. A rule may name it and validation accepts it, so the catalogue documents it, but the sweep refuses it and says so. Turning it on is a Go change, not a rule merged into the branch the sweep reads at run time.
 
 Documents are decoded strictly, so an unknown key is an error. A rule whose only signal is a check name or a title is refused: a name says which job went red and a title says which dependency moved, neither says why, and `titlePattern: "."` reads every PR of a classification. Such a rule must carry a log signal, or read the PR's state rather than its text through `baseHead`, `files` or `match.protection.missingContexts`. A glob that matches everything is refused wherever one is accepted, so `files: ["**"]` is no way around it. **A rule cannot do what its action forbids**: each action enforces its own guards, a rule may only add refusals, and there is no syntax for removing one. The guard vocabulary is the trusted bot author, no failing security check, the required checks, checks settled on the head, one attempt per change, a log excerpt behind every write, the commands a comment may carry, the gate being the only wait left, and the generated files a remedy may never hand-edit. Each action carries the subset it needs, not all of them, and `marge rules validate` prints the set an action enforces. Rules are tried most specific first, by how much each one asks of a PR, and by name among equals; the first match wins. A broad rule therefore never shadows a narrow one, and a catalogue decides the same way however it was read.
 
