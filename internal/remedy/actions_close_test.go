@@ -65,27 +65,6 @@ func TestMarkWaitKeepsTheClassification(t *testing.T) {
 	require.True(t, out.KeepClassification)
 }
 
-func TestDispatchAlignWorkflowNamesTheRepository(t *testing.T) {
-	var path string
-	var body map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &body)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-
-	out, err := Default().Apply(t.Context(), DispatchAlignWorkflow, botRequest(apiClient(t, server)), nil)
-
-	require.NoError(t, err)
-	require.True(t, out.Applied)
-	require.True(t, out.KeepClassification)
-	require.Equal(t, "/repos/giantswarm/github/actions/workflows/align-files.yaml/dispatches", path)
-	require.Equal(t, "main", body["ref"])
-	require.Equal(t, map[string]any{"repository": "marge"}, body["inputs"])
-}
-
 func TestDispatchCVEWorkflowRunsOnTheBaseBranch(t *testing.T) {
 	var path string
 	var body map[string]any

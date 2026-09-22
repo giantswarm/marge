@@ -80,9 +80,9 @@ func TestRegistryApplyRuleRefusalsAreAdditive(t *testing.T) {
 // refusal cannot turn it into something the rule controls.
 func TestRegistryApplyRepeatedGuardStillRefuses(t *testing.T) {
 	ran := false
-	reg := NewRegistry(guarded(StrictChain, &ran, RequiredChecksGreen))
+	reg := NewRegistry(guarded(UpdateBranch, &ran, RequiredChecksGreen))
 
-	out, err := reg.Apply(t.Context(), StrictChain, &Request{
+	out, err := reg.Apply(t.Context(), UpdateBranch, &Request{
 		Pull:     botPull("renovate[bot]"),
 		Required: Required{Missing: []string{"pre-commit"}},
 	}, []Guard{RequiredChecksGreen})

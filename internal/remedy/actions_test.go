@@ -41,12 +41,10 @@ func TestDefaultRegistryNames(t *testing.T) {
 		CircleCIRetry,
 		Close,
 		CommentCommand,
-		DispatchAlignWorkflow,
 		DispatchCVEWorkflow,
 		FixProtectionContext,
 		MarkWait,
 		RerunFailed,
-		StrictChain,
 		UpdateBranch,
 	}, Default().Names())
 }

@@ -15,6 +15,9 @@ const idleConnsPerHost = 64
 var (
 	apiTransportOnce sync.Once
 	apiTransport     *http.Transport
+
+	sharedTransportOnce sync.Once
+	sharedTransport     http.RoundTripper
 )
 
 // APITransport returns the connection pool every GitHub client shares. One
@@ -28,4 +31,16 @@ func APITransport() *http.Transport {
 		apiTransport = transport
 	})
 	return apiTransport
+}
+
+// SharedTransport returns the round tripper every GitHub client in the
+// process uses: the pool, behind the rate gate. It is one gate because a
+// refusal for rate is about the token, not about the request, so a sweep
+// that earned one must hold every call it has in flight and not only the
+// one that was refused.
+func SharedTransport() http.RoundTripper {
+	sharedTransportOnce.Do(func() {
+		sharedTransport = newRateLimited(APITransport())
+	})
+	return sharedTransport
 }

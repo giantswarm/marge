@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/google/go-github/v92/github"
 
@@ -36,9 +35,8 @@ type reviewRule struct {
 // owner/repo@base for the lifetime of the Processor: every PR of a
 // repository shares one base.
 type protectionCache struct {
-	protectionMu sync.Mutex
-	protections  map[string]protection
-	reviews      map[string]reviewRule
+	protections memo[protection]
+	reviews     memo[reviewRule]
 }
 
 // requiredProtection reads the base branch's required status checks. A 404
@@ -50,38 +48,28 @@ type protectionCache struct {
 // "nothing required".
 func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base string) (protection, error) {
 	key := info.Owner + "/" + info.Repo + "@" + base
-	p.protectionMu.Lock()
-	if p.protections == nil {
-		p.protections = make(map[string]protection)
-	}
-	if cached, ok := p.protections[key]; ok {
-		p.protectionMu.Unlock()
-		return cached, nil
-	}
-	p.protectionMu.Unlock()
-
-	var result protection
-	checks, resp, err := p.Client.Repositories.GetRequiredStatusChecks(ctx, info.Owner, info.Repo, base)
-	switch {
-	case err == nil:
-		result.Strict = checks.GetStrict()
-		for _, c := range checks.GetChecks() {
-			if c.Context != "" {
-				result.Contexts = append(result.Contexts, c.Context)
+	return p.protections.get(key, func() (protection, error) {
+		var result protection
+		checks, resp, err := p.Client.Repositories.GetRequiredStatusChecks(ctx, info.Owner, info.Repo, base)
+		switch {
+		case err == nil:
+			result.Strict = checks.GetStrict()
+			for _, c := range checks.GetChecks() {
+				if c.Context != "" {
+					result.Contexts = append(result.Contexts, c.Context)
+				}
 			}
+			if len(result.Contexts) == 0 {
+				result.Contexts = append(result.Contexts, checks.GetContexts()...)
+			}
+		case isRateLimit(err):
+			return protection{}, err
+		case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
+		default:
+			return protection{}, err
 		}
-		if len(result.Contexts) == 0 {
-			result.Contexts = append(result.Contexts, checks.GetContexts()...)
-		}
-	case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
-	default:
-		return protection{}, err
-	}
-
-	p.protectionMu.Lock()
-	p.protections[key] = result
-	p.protectionMu.Unlock()
-	return result, nil
+		return result, nil
+	})
 }
 
 // requiredReview reads the base branch's review enforcement. It handles the
@@ -90,30 +78,30 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 // protection, which is not a rule the sweep may claim.
 func (p *Processor) requiredReview(ctx context.Context, info pr.PRInfo, base string) (reviewRule, error) {
 	key := info.Owner + "/" + info.Repo + "@" + base
-	p.protectionMu.Lock()
-	if p.reviews == nil {
-		p.reviews = make(map[string]reviewRule)
-	}
-	if cached, ok := p.reviews[key]; ok {
-		p.protectionMu.Unlock()
-		return cached, nil
-	}
-	p.protectionMu.Unlock()
+	return p.reviews.get(key, func() (reviewRule, error) {
+		var result reviewRule
+		enforcement, resp, err := p.Client.Repositories.GetPullRequestReviewEnforcement(ctx, info.Owner, info.Repo, base)
+		switch {
+		case err == nil:
+			result.CodeOwnerReviews = enforcement.GetRequireCodeOwnerReviews()
+		case isRateLimit(err):
+			return reviewRule{}, err
+		case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
+		default:
+			return reviewRule{}, err
+		}
+		return result, nil
+	})
+}
 
-	var result reviewRule
-	enforcement, resp, err := p.Client.Repositories.GetPullRequestReviewEnforcement(ctx, info.Owner, info.Repo, base)
-	switch {
-	case err == nil:
-		result.CodeOwnerReviews = enforcement.GetRequireCodeOwnerReviews()
-	case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
-	default:
-		return reviewRule{}, err
-	}
-
-	p.protectionMu.Lock()
-	p.reviews[key] = result
-	p.protectionMu.Unlock()
-	return result, nil
+// isRateLimit reports whether the error is GitHub refusing the call for rate
+// rather than for access. Both arrive as 403, and the answer to a rate
+// refusal is to ask again later, never to read it as "the branch requires
+// nothing": the memo would keep that answer for the rest of the sweep.
+func isRateLimit(err error) bool {
+	var primary *github.RateLimitError
+	var secondary *github.AbuseRateLimitError
+	return errors.As(err, &primary) || errors.As(err, &secondary)
 }
 
 func isStatus(err error, resp *github.Response, code int) bool {

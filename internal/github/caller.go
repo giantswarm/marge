@@ -53,7 +53,7 @@ func NewCallerClient(ctx context.Context) (*github.Client, error) {
 	if token == "" {
 		return nil, ErrNoCallerToken
 	}
-	return github.NewClient(github.WithTransport(APITransport()), github.WithAuthToken(token))
+	return github.NewClient(github.WithTransport(SharedTransport()), github.WithAuthToken(token))
 }
 
 // bearerToken returns the credential of an Authorization header carrying the

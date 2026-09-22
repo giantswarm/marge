@@ -211,12 +211,10 @@ func TestDailyActionsWriteNoCode(t *testing.T) {
 		remedy.CircleCIRetry,
 		remedy.Close,
 		remedy.CommentCommand,
-		remedy.DispatchAlignWorkflow,
 		remedy.DispatchCVEWorkflow,
 		remedy.FixProtectionContext,
 		remedy.MarkWait,
 		remedy.RerunFailed,
-		remedy.StrictChain,
 		remedy.UpdateBranch,
 	}
 	require.Equal(t, apiOnly, remedy.Default().Names())

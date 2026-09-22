@@ -84,15 +84,14 @@ the manifest must not name it.
 | Checks | `checks` | read | Read check runs to classify a failure |
 | Commit statuses | `statuses` | read | Read commit statuses, which is how CircleCI reports |
 | Issues | `issues` | write | Labels and comments on a pull request go through the Issues API. `Pull requests: write` also covers this today. The permission is held because D4 grants it. Before you remove it, run one sweep with `issues` dropped from the installation and confirm that labels and comments still land |
-| Actions | `actions` | write | Re-run a wedged workflow run, and dispatch the Align files and Fix Go vulnerabilities workflows |
-| Administration | `administration` | write | Lift `enforce_admins` for an admin merge and restore it in the same run, and repair a renamed required check after an alignment migration |
+| Actions | `actions` | write | Re-run a wedged workflow run, and dispatch the Fix Go vulnerabilities workflow |
+| Administration | `administration` | write | Repair a renamed required check after an alignment migration |
 
-marge dispatches two workflows and no others. `dispatch-align-workflow`
-names `giantswarm/github` and the `align-files.yaml` file as constants, so it
-reaches no other repository. `dispatch-cve-workflow` names the swept
-repository's own generated `zz_generated.fix_vulnerabilities.yaml`, on the
-pull request's base branch. `Actions: write` is organization-wide once the App
-is installed everywhere, so GitHub enforces neither limit; the two actions do.
+marge dispatches one workflow and no other. `dispatch-cve-workflow` names the
+swept repository's own generated `zz_generated.fix_vulnerabilities.yaml`, on
+the pull request's base branch. `Actions: write` is organization-wide once the
+App is installed everywhere, so GitHub enforces no such limit; the action
+does.
 
 The App does **not** hold `Workflows: write`. The align-files App holds it
 because it writes workflow files. marge never writes one.

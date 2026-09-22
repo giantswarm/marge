@@ -134,7 +134,6 @@ func (p *Processor) actionRequest(ctx context.Context, run *prRun) *remedy.Reque
 		Pull:              run.pull,
 		Kind:              run.kind,
 		Update:            run.updateType,
-		Head:              run.pull.GetHead().GetSHA(),
 		DryRun:            p.DryRun,
 		Failing:           run.failing,
 		SecurityFailure:   classifySecurityFailure(run.failing, p.securityPatterns()),

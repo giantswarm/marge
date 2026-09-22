@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/google/go-github/v92/github"
 
@@ -18,8 +17,7 @@ const labelColor = "0e8a16"
 // labelCache remembers, per repository, that a label was already created
 // in this run so a repository with many PRs pays the create once.
 type labelCache struct {
-	labelMu sync.Mutex
-	labels  map[string]bool
+	labels memo[bool]
 }
 
 // setLabel leaves exactly one marge/<class> label on the PR. Every
@@ -68,25 +66,16 @@ func (p *Processor) setLabel(ctx context.Context, run *prRun, class string) {
 
 func (p *Processor) ensureLabel(ctx context.Context, info pr.PRInfo, name string) error {
 	key := info.Owner + "/" + info.Repo + ":" + name
-	p.labelMu.Lock()
-	if p.labels == nil {
-		p.labels = make(map[string]bool)
-	}
-	done := p.labels[key]
-	p.labelMu.Unlock()
-	if done {
-		return nil
-	}
-	_, resp, err := p.Client.Issues.CreateLabel(ctx, info.Owner, info.Repo, github.CreateIssueLabelRequest{
-		Name:        name,
-		Color:       new(labelColor),
-		Description: new("Classification written by the marge sweep; display only"),
+	_, err := p.labels.get(key, func() (bool, error) {
+		_, resp, err := p.Client.Issues.CreateLabel(ctx, info.Owner, info.Repo, github.CreateIssueLabelRequest{
+			Name:        name,
+			Color:       new(labelColor),
+			Description: new("Classification written by the marge sweep; display only"),
+		})
+		if err != nil && !isStatus(err, resp, http.StatusUnprocessableEntity) {
+			return false, err
+		}
+		return true, nil
 	})
-	if err != nil && !isStatus(err, resp, http.StatusUnprocessableEntity) {
-		return err
-	}
-	p.labelMu.Lock()
-	p.labels[key] = true
-	p.labelMu.Unlock()
-	return nil
+	return err
 }
