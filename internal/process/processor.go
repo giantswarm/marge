@@ -295,6 +295,8 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 
+	p.recordMergeFinding(ctx, run)
+
 	if p.DryRun {
 		detail := "dry-run: would " + p.plannedWrites(run, p.changelogApplies(ctx, run, resolved))
 		if p.Actions.Has(ActionApprove) {
@@ -452,6 +454,7 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 		}
 
 		run.set(pr.StatusWaitingChecks, waitingDetail(required, outcome.state))
+		p.recordSilentContext(run, required.Missing, time.Now())
 		if deadline == nil {
 			return false
 		}

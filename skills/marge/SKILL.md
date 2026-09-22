@@ -51,6 +51,12 @@ the matching `marge/<class>` label:
 
 Act on `action_required` only.
 
+A sweep also answers with `findings`: the repository settings that hold PRs
+back, grouped by cause (`strict_protection`, `code_owner_review`,
+`silent_required_context`) with the count of the PRs and the repositories.
+They are not PR groups and they need no rescue. Report them to the team that
+owns the repository.
+
 ## The tools
 
 muster serves marge's five tools as `x_marge_list`, `x_marge_sweep`,
