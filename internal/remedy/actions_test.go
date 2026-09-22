@@ -40,6 +40,7 @@ func TestDefaultRegistryNames(t *testing.T) {
 	require.Equal(t, []Name{
 		CircleCIRetry,
 		Close,
+		CommentCommand,
 		DispatchAlignWorkflow,
 		DispatchCVEWorkflow,
 		FixProtectionContext,

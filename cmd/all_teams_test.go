@@ -210,6 +210,7 @@ func TestDailyActionsWriteNoCode(t *testing.T) {
 	apiOnly := []remedy.Name{
 		remedy.CircleCIRetry,
 		remedy.Close,
+		remedy.CommentCommand,
 		remedy.DispatchAlignWorkflow,
 		remedy.DispatchCVEWorkflow,
 		remedy.FixProtectionContext,

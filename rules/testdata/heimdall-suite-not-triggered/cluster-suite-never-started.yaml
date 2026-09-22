@@ -1,0 +1,21 @@
+name: a cluster repository asks for a different suite, and the gate names it
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update dependency architect to v10.6.1"
+  failing: []
+  pending:
+    - name: "Heimdall - PR Gatekeeper"
+      output: |
+        ## Details for commit: `a42b4994bbb4fa5e4951cb2c565d73c4d11463eb`
+
+        ⚠️ Check Run `E2E Test Suites` is required but wasn't found - you can trigger it by commenting on the PR with `/run cluster-test-suites`
+
+
+        ---
+        _Source: https://github.com/giantswarm/pr-gatekeeper_
+        _Repo Config: https://github.com/giantswarm/pr-gatekeeper/blob/main/config.yaml_
+expect:
+  rule: heimdall-suite-not-triggered
+  check: "Heimdall - PR Gatekeeper"
+  commands: ["/run cluster-test-suites"]

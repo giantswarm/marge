@@ -44,6 +44,7 @@ the index.
 | A required context nobody reported | `required-check-name-drift` | `fix-protection-context` | 21, 44 |
 | A bump waiting on an upstream release | `ecosystem-not-ready` | `mark-wait` | 7, 9, 15, 31 |
 | gosec run without the repository configuration | `upstream-orb-gosec-fixtures` | `mark-wait` | 63 |
+| An e2e suite the gate waits for that nobody started | `heimdall-suite-not-triggered` | `comment-command` | giantswarm/marge#159 |
 
 Rows 5, 6, 86, 89 and 90 of the extraction state these patterns in their
 general form -- a stale branch, a transient failure, a job that never ran, a

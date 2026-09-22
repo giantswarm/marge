@@ -1,0 +1,23 @@
+name: an app repository whose per-provider suite nobody started
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update dependency architect to v10.6.1"
+  failing: []
+  pending:
+    - name: "Heimdall - PR Gatekeeper"
+      output: |
+        ## Details for commit: `8940190bbd923b54fa71cdbc71050f6e8c9697f9`
+
+        ℹ️ App E2E tests are required for every provider configured in `./tests/e2e/config.yaml` and in the per-suite configs under `tests/e2e/suites`: `capa`
+
+        ⚠️ Check Run `App E2E Test Suites - capa` is required but wasn't found - you can trigger it by commenting on the PR with `/run app-test-suites-single PROVIDER=capa`
+
+
+        ---
+        _Source: https://github.com/giantswarm/pr-gatekeeper_
+        _Repo Config: https://github.com/giantswarm/pr-gatekeeper/blob/main/config.yaml_
+expect:
+  rule: heimdall-suite-not-triggered
+  check: "Heimdall - PR Gatekeeper"
+  commands: ["/run app-test-suites-single PROVIDER=capa"]

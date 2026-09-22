@@ -240,3 +240,32 @@ func intersect(have, want []string) []string {
 	}
 	return out
 }
+
+// commentCommand comments the command a gate check named, so the suite the
+// gate waits for starts. The command is the one the check reported: the
+// rule captures it and the guard fences it, and this action composes none
+// of its own.
+type commentCommand struct{}
+
+func (commentCommand) Name() Name { return CommentCommand }
+
+// The comment writes no commit and dismisses no approval, so it asks for no
+// log excerpt. It does ask that the gate be the only thing left, because
+// the pipeline it starts costs a cluster.
+func (commentCommand) Guards() []Guard {
+	return []Guard{TrustedAuthor, NoSecurityFailure, KnownCommand, OnlyGateWaiting, OncePerChange(CommentCommand)}
+}
+
+func (commentCommand) Apply(ctx context.Context, req *Request) (Outcome, error) {
+	body := strings.Join(req.Commands, "\n")
+	_, _, err := req.Deps.GitHub.Issues.CreateComment(ctx, req.Info.Owner, req.Info.Repo, req.Info.Number,
+		github.IssueCommentRequest{Body: body})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("comment command: %w", err)
+	}
+	return Outcome{
+		Applied:            true,
+		KeepClassification: true,
+		Detail:             "commented " + strings.Join(req.Commands, ", "),
+	}, nil
+}

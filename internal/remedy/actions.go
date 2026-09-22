@@ -28,6 +28,7 @@ func Default() *Registry {
 		dispatchCVEWorkflow{},
 		fixProtectionContext{},
 		strictChain{},
+		commentCommand{},
 	)
 	reg.hold(StrictChain, "no measured sweep has reported a PR blocked by the plain review rule")
 	return reg

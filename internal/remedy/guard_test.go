@@ -213,3 +213,93 @@ func TestEveryGuardIsNamed(t *testing.T) {
 		})
 	}
 }
+
+func TestKnownCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		commands []string
+		want     string
+	}{
+		{
+			name:     "the app suite the gate names",
+			commands: []string{"/run app-test-suites-single PROVIDER=capa"},
+		},
+		{
+			name:     "the cluster suite",
+			commands: []string{"/run cluster-test-suites"},
+		},
+		{
+			name:     "one command per provider",
+			commands: []string{"/run app-test-suites-single PROVIDER=capa", "/run app-test-suites-single PROVIDER=capz"},
+		},
+		{
+			name:     "several arguments",
+			commands: []string{"/run app-test-suites-single PROVIDER=capa TARGET_SUITES=basic,defaultapp"},
+		},
+		{
+			name: "no command captured",
+			want: "captured no command",
+		},
+		{
+			name:     "a pipeline the sweep does not start",
+			commands: []string{"/run delete-everything"},
+			want:     `pipeline "delete-everything" is not one the sweep starts`,
+		},
+		{
+			name:     "a command with a shell tail",
+			commands: []string{"/run cluster-test-suites; rm -rf /"},
+			want:     "is not a /run command",
+		},
+		{
+			name:     "prose around the command",
+			commands: []string{"please /run cluster-test-suites"},
+			want:     "is not a /run command",
+		},
+		{
+			name:     "one good command and one bad one",
+			commands: []string{"/run cluster-test-suites", "/merge"},
+			want:     "is not a /run command",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			refusal := KnownCommand.Refuse(&Request{Commands: tc.commands})
+			if tc.want == "" {
+				require.Empty(t, refusal)
+				return
+			}
+			require.Contains(t, refusal, tc.want)
+		})
+	}
+}
+
+func TestOnlyGateWaiting(t *testing.T) {
+	gate := "Heimdall - PR Gatekeeper"
+
+	require.Empty(t, OnlyGateWaiting.Refuse(&Request{
+		Check:    gate,
+		Required: Required{Green: []string{"go-build"}, Pending: []string{gate}},
+	}))
+
+	require.Contains(t, OnlyGateWaiting.Refuse(&Request{
+		Check:    gate,
+		Required: Required{Failed: []string{"ci/circleci: push-to-app-catalog"}},
+	}), "required checks failed")
+
+	require.Contains(t, OnlyGateWaiting.Refuse(&Request{
+		Check:    gate,
+		Required: Required{Pending: []string{gate, "check-values-schema / validate"}},
+	}), "pending besides")
+
+	require.Contains(t, OnlyGateWaiting.Refuse(&Request{
+		Check:    gate,
+		Required: Required{Pending: []string{gate}},
+		Failing:  []string{"semantic-pull-request / Validate PR title"},
+	}), "checks failed")
+
+	require.Contains(t, OnlyGateWaiting.Refuse(&Request{
+		Check:    gate,
+		Required: Required{Missing: []string{"Check sync.sh was called"}},
+	}), "not reported")
+}

@@ -1,0 +1,21 @@
+name: a gate whose suite already reported green names no command
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update dependency ubuntu to v26"
+  failing: []
+  pending:
+    - name: "Heimdall - PR Gatekeeper"
+      output: |
+        ## Details for commit: `9c7001e6863bc8e66aa453f4043856813e620880`
+
+        ℹ️ App E2E tests are required for every provider configured in `./tests/e2e/config.yaml` and in the per-suite configs under `tests/e2e/suites`: `capa`
+
+        ✅ Check Run `App E2E Test Suites - capa` is required and has completed successfully
+
+
+        ---
+        _Source: https://github.com/giantswarm/pr-gatekeeper_
+        _Repo Config: https://github.com/giantswarm/pr-gatekeeper/blob/main/config.yaml_
+expect:
+  rule: ""

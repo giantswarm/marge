@@ -1,0 +1,14 @@
+name: a required check the gate knows no command for is left to a person
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update dependency architect to v10.6.1"
+  failing: []
+  pending:
+    - name: "Heimdall - PR Gatekeeper"
+      output: |
+        ## Details for commit: `a42b499`
+
+        ⚠️ Check Run `Generate MC - capa / goten` is required but wasn't found
+expect:
+  rule: ""
