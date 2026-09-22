@@ -50,15 +50,21 @@ type ScenarioSubject struct {
 	MissingContexts []string          `yaml:"missingContexts"`
 	Files           []string          `yaml:"files"`
 	Logs            map[string]string `yaml:"logs"`
+	// Pending records the checks that had not finished, with the message
+	// each of them reported, verbatim as the gate wrote it.
+	Pending []PendingCheck `yaml:"pending"`
 }
 
 // ScenarioExpect is the outcome the fixture asserts.
 type ScenarioExpect struct {
 	// Rule is the rule that must match, or "" for no match.
 	Rule string `yaml:"rule"`
-	// Check is the failing check the signal must have matched. Empty skips
-	// the assertion.
+	// Check is the check the signal must have matched. Empty skips the
+	// assertion.
 	Check string `yaml:"check"`
+	// Commands are the strings the output signal must have captured, in
+	// order. Empty skips the assertion.
+	Commands []string `yaml:"commands"`
 }
 
 // LoadScenarios reads every fixture under dir, which holds one directory per
@@ -138,6 +144,8 @@ func (s *Scenario) Run(catalogue *Catalogue) string {
 		return fmt.Sprintf("expected rule %q, rule %q matched", s.Expect.Rule, hit.Rule.Name)
 	case s.Expect.Check != "" && hit.Check != s.Expect.Check:
 		return fmt.Sprintf("expected the signal on %q, it matched on %q", s.Expect.Check, hit.Check)
+	case len(s.Expect.Commands) > 0 && !slices.Equal(hit.Commands, s.Expect.Commands):
+		return fmt.Sprintf("expected the commands %q, it captured %q", s.Expect.Commands, hit.Commands)
 	}
 	return ""
 }
@@ -150,6 +158,7 @@ func (s *Scenario) subject() *Subject {
 		Failing:         s.Subject.Failing,
 		BaseState:       s.Subject.BaseState,
 		MissingContexts: s.Subject.MissingContexts,
+		Pending:         s.Subject.Pending,
 	}
 	if len(s.Subject.Files) > 0 {
 		subject.Files = func() []string { return s.Subject.Files }

@@ -100,6 +100,9 @@ func (r *Rule) validateMatch() error {
 			return err
 		}
 		r.compiled.checkRE = compileCheckGlob(c.Name)
+		if err := r.validateCheckState(c); err != nil {
+			return err
+		}
 	}
 	if l := r.Match.Log; l != nil {
 		switch l.Source {
@@ -159,6 +162,44 @@ func (r *Rule) validateMatch() error {
 	return nil
 }
 
+// validateCheckState resolves the check signal's state and its output
+// pattern. A pending check carries no verdict and no log, so a rule that
+// reads one must read what the check says; without that it would select
+// every PR waiting on that check in the fleet.
+func (r *Rule) validateCheckState(c *CheckMatch) error {
+	switch c.State {
+	case MatchFailing, MatchPending:
+	default:
+		return fmt.Errorf("unknown match.check.state %q: use %q, or leave it out to read the checks that failed", c.State, MatchPending)
+	}
+	if c.State == MatchPending {
+		if c.Output == nil {
+			return errors.New("match.check.output is required when match.check.state is pending: a pending check name alone selects every PR waiting on it")
+		}
+		if r.Match.Log != nil {
+			return errors.New("match.check.state pending and a log signal exclude each other: a check that has not finished has no log to read")
+		}
+		if p := r.Match.PR; p != nil && p.BaseHead != BaseAny {
+			return errors.New("match.check.state pending and match.pr.baseHead exclude each other: baseHead reads what the base reported for the failing checks, and the rule selects none")
+		}
+	}
+	if c.Output == nil {
+		return nil
+	}
+	if strings.TrimSpace(c.Output.Pattern) == "" {
+		return errors.New("match.check.output.pattern is required when an output signal is given")
+	}
+	compiled, err := regexp.Compile(c.Output.Pattern)
+	if err != nil {
+		return fmt.Errorf("match.check.output.pattern: %w", err)
+	}
+	if compiled.SubexpIndex(CommandGroup) < 0 {
+		return fmt.Errorf("match.check.output.pattern needs a capture group named %q: the action writes what the check said, and composes nothing of its own", CommandGroup)
+	}
+	r.compiled.outputRE = compiled
+	return nil
+}
+
 // checkGlob refuses an empty glob and one that matches everything. A glob of
 // stars names no file and no context in particular, so it is a
 // classification restated, not a signal, and validateSignalStrength would
@@ -203,12 +244,13 @@ func (r *Rule) validateRefusals() error {
 //
 // A rule must therefore carry a log signal, or read the PR's state rather
 // than its text: what the base head reported, which files the diff touches,
-// or a required context nobody reported.
+// a required context nobody reported, or the message a check reports about
+// this head.
 func (r *Rule) validateSignalStrength() error {
 	if r.Match.Log != nil || r.hasStateSignal() {
 		return nil
 	}
-	return errors.New("a check name or a title is not a diagnosis: add a log signal, or a baseHead, files or protection signal")
+	return errors.New("a check name or a title is not a diagnosis: add a log or check output signal, or a baseHead, files or protection signal")
 }
 
 // hasStateSignal reports whether the rule reads something of the PR that a
@@ -217,6 +259,12 @@ func (r *Rule) validateSignalStrength() error {
 // one literal segment, so a glob of stars does not qualify as one.
 func (r *Rule) hasStateSignal() bool {
 	if r.Match.Protection != nil {
+		return true
+	}
+	// A check's message is computed for this head and says what is wrong
+	// and what fixes it, which is the evidence a log excerpt carries for a
+	// check that ran. A check name is fixed and carries none.
+	if c := r.Match.Check; c != nil && c.Output != nil {
 		return true
 	}
 	p := r.Match.PR

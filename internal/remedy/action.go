@@ -46,6 +46,9 @@ const (
 	// MarkWait records that the PR waits on something outside the
 	// repository and leaves it open.
 	MarkWait Name = "mark-wait"
+	// CommentCommand comments the command a gate check named, so the test
+	// suite the gate waits for starts.
+	CommentCommand Name = "comment-command"
 	// StrictChain brings a PR up to date, waits for its required checks,
 	// approves it and merges it, restoring enforce_admins afterwards.
 	StrictChain Name = "strict-chain"
@@ -128,6 +131,10 @@ type Request struct {
 	// LogMatched reports whether the rule matched an excerpt of the failing
 	// step's log rather than a check name alone.
 	LogMatched bool
+	// Commands are the strings a rule's output signal captured from a
+	// check's own message. An action that comments one writes these
+	// verbatim and composes none of its own.
+	Commands []string
 	// AppliedThisChange names the actions an existing marker records for the
 	// change currently on the branch.
 	AppliedThisChange map[Name]bool

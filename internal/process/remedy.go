@@ -74,6 +74,7 @@ func (p *Processor) subject(ctx context.Context, run *prRun, state pr.StatusStat
 		Kind:            run.kind,
 		Title:           run.pull.GetTitle(),
 		Failing:         run.failing,
+		Pending:         run.pending,
 		BaseState:       p.baseStates(ctx, run),
 		MissingContexts: run.required.Missing,
 		Files:           func() []string { return p.diffFiles(ctx, run) },
@@ -121,6 +122,7 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 	req.CheckURL = run.checkURL(hit.Check)
 	req.LogMatched = hit.LogMatched
 	req.MissingContexts = hit.MissingContexts
+	req.Commands = hit.Commands
 	return req
 }
 
