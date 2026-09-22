@@ -142,7 +142,7 @@ func (p *Processor) classifyStale(ctx context.Context, info pr.PRInfo, pullReq *
 // base, so one sweep asks GitHub once per repo instead of once per failing PR.
 func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha string) (map[string]contextState, error) {
 	key := info.Owner + "/" + info.Repo + "@" + sha
-	return p.baseStates.get(key, func() (map[string]contextState, error) {
+	return p.baseStateCache.get(key, func() (map[string]contextState, error) {
 		return p.readBaseContextStates(ctx, info, sha)
 	})
 }
@@ -232,5 +232,5 @@ func (p *Processor) handleStale(ctx context.Context, run *prRun, res *staleResul
 // staleCache is the per-Processor memo used by baseContextStates. It lives
 // in its own struct so Processor literals in tests stay zero-value friendly.
 type staleCache struct {
-	baseStates memo[map[string]contextState]
+	baseStateCache memo[map[string]contextState]
 }

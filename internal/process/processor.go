@@ -521,12 +521,14 @@ func (p *Processor) updateBranch(ctx context.Context, run *prRun, why string) {
 }
 
 // remedies is the action vocabulary, defaulting to the built-in one so a
-// Processor built without it still performs its own actions.
+// Processor built without it still performs its own actions. It only reads
+// the field: the PRs of a sweep run together on one Processor, and a lazy
+// assignment here would be a write to shared state from every one of them.
 func (p *Processor) remedies() *remedy.Registry {
-	if p.Remedies == nil {
-		p.Remedies = remedy.Default()
+	if p.Remedies != nil {
+		return p.Remedies
 	}
-	return p.Remedies
+	return remedy.Default()
 }
 
 func ghErrorDetail(prefix string, err error) string {
