@@ -102,6 +102,8 @@ func requestFor(rule *rules.Rule, scenario *rules.Scenario) *remedy.Request {
 		ChecksSettledAt: now.Add(-24 * time.Hour),
 		MissingContexts: scenario.Subject.MissingContexts,
 		LogMatched:      rule.Match.Log != nil,
+		Check:           scenario.Expect.Check,
+		Commands:        scenario.Expect.Commands,
 	}
 	req.Required.Missing = scenario.Subject.MissingContexts
 	return req

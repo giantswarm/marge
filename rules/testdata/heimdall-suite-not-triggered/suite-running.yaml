@@ -1,0 +1,14 @@
+name: a suite that is already running is not started a second time
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update dependency architect to v10.6.1"
+  failing: []
+  pending:
+    - name: "Heimdall - PR Gatekeeper"
+      output: |
+        ## Details for commit: `4dc6091`
+
+        ⚠️ Check Run `App E2E Test Suites - capa` is required but is still in progress
+expect:
+  rule: ""

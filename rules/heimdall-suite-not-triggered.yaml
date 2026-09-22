@@ -1,0 +1,16 @@
+name: heimdall-suite-not-triggered
+summary: Heimdall gates the PR on an e2e suite nobody started, and names the command that starts it.
+source: giantswarm/marge#159 (knownTriggers in giantswarm/pr-gatekeeper config.yaml)
+match:
+  states: [waiting-checks]
+  check:
+    name: "Heimdall - PR Gatekeeper"
+    state: pending
+    output:
+      pattern: "Check Run `[^`]+` is required but wasn't found - you can trigger it by commenting on the PR with `(?P<command>/run [^`]+)`"
+action:
+  name: comment-command
+refuse:
+  - once-per-change
+evidence:
+  reason: the required e2e suite was never started, so the command the gate named was commented

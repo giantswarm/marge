@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -505,4 +506,124 @@ evidence:
 	rule, err = Parse("circleci-auto-cancel.yaml", []byte(validRule), testRegistry())
 	require.NoError(t, err)
 	require.Equal(t, []LogSource{LogCircleCI}, rule.LogSources())
+}
+
+// pendingRule is the shape a gate rule takes: a check that has not finished
+// and the message it reports. GATE marks where a variant adds a second
+// signal, inside the match block.
+const pendingRule = `
+name: gate-waits
+summary: the gate names a suite nobody started
+source: giantswarm/marge#159
+match:
+  states: [waiting-checks]
+  check:
+    name: "Heimdall - PR Gatekeeper"
+    state: pending
+    output:
+      pattern: "commenting on the PR with BACKTICK(?P<command>/run [^BACKTICK]+)BACKTICK"
+GATE
+action:
+  name: update-branch
+evidence:
+  reason: the suite the gate waits for was never started
+`
+
+// gateDoc renders the rule with the backticks its pattern needs and any
+// extra signal the case adds.
+func gateDoc(extra string) []byte {
+	doc := strings.Replace(pendingRule, "GATE\n", extra, 1)
+	return []byte(strings.ReplaceAll(doc, "BACKTICK", "`"))
+}
+
+func TestParsePendingCheckSignal(t *testing.T) {
+	rule, err := Parse("gate-waits.yaml", gateDoc(""), testRegistry())
+	require.NoError(t, err)
+
+	require.Equal(t, MatchPending, rule.CheckStateWanted())
+	require.NotNil(t, rule.OutputPattern())
+	require.True(t, rule.OutputPattern().MatchString("commenting on the PR with `/run cluster-test-suites`"))
+}
+
+// A rule reading a pending check needs the message the check reports. The
+// name alone is on every PR waiting on that gate in the fleet.
+func TestParseRejectsPendingSignals(t *testing.T) {
+	tests := []struct {
+		name    string
+		doc     []byte
+		wantErr string
+	}{
+		{
+			name: "a pending check with no output signal",
+			doc: []byte(`
+name: gate-waits
+summary: s
+source: giantswarm/marge#159
+match:
+  check:
+    name: "Heimdall - PR Gatekeeper"
+    state: pending
+action:
+  name: update-branch
+evidence:
+  reason: y
+`),
+			wantErr: "match.check.output is required",
+		},
+		{
+			name:    "an unknown check state",
+			doc:     []byte(strings.Replace(string(gateDoc("")), "state: pending", "state: green", 1)),
+			wantErr: `unknown match.check.state "green"`,
+		},
+		{
+			name:    "an output pattern with no command group",
+			doc:     []byte(strings.Replace(string(gateDoc("")), "(?P<command>/run [^`]+)", "/run .+", 1)),
+			wantErr: `needs a capture group named "command"`,
+		},
+		{
+			name:    "an output pattern that does not compile",
+			doc:     []byte(strings.Replace(string(gateDoc("")), "(?P<command>/run [^`]+)", "(?P<command>/run [", 1)),
+			wantErr: "match.check.output.pattern:",
+		},
+		{
+			name:    "a pending check with a log signal",
+			doc:     gateDoc("  log:\n    pattern: \"anything\"\n"),
+			wantErr: "has no log to read",
+		},
+		{
+			name:    "a pending check with a baseHead signal",
+			doc:     gateDoc("  pr:\n    baseHead: green\n"),
+			wantErr: "baseHead reads what the base reported for the failing checks",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse("gate-waits.yaml", tc.doc, testRegistry())
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+// A check's message is evidence, so a rule that reads one needs no log
+// signal beside it. The same rule without the message stays refused.
+func TestParseAcceptsAnOutputSignalAsEvidence(t *testing.T) {
+	_, err := Parse("gate-waits.yaml", gateDoc(""), testRegistry())
+	require.NoError(t, err)
+
+	nameOnly := []byte(`
+name: gate-waits
+summary: s
+source: giantswarm/marge#159
+match:
+  states: [waiting-checks]
+  check:
+    name: "Heimdall - PR Gatekeeper"
+action:
+  name: update-branch
+evidence:
+  reason: y
+`)
+	_, err = Parse("gate-waits.yaml", nameOnly, testRegistry())
+	require.ErrorContains(t, err, "is not a diagnosis")
 }

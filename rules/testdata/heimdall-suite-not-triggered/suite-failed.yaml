@@ -1,0 +1,14 @@
+name: a suite that ran and failed is a retry decision, not a start
+subject:
+  state: waiting-checks
+  kind: renovate
+  title: "chore(deps): update dependency architect to v10.6.1"
+  failing: []
+  pending:
+    - name: "Heimdall - PR Gatekeeper"
+      output: |
+        ## Details for commit: `4dc6091`
+
+        ⚠️ Check Run `App E2E Test Suites - capa` is required but didn't completed successfully - you can re-trigger it by commenting on the PR with `/run app-test-suites-single PROVIDER=capa`
+expect:
+  rule: ""

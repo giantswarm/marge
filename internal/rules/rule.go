@@ -62,12 +62,42 @@ type ProtectionMatch struct {
 	MissingContexts []string `yaml:"missingContexts"`
 }
 
-// CheckMatch matches the name of a failing check. A check name alone never
-// justifies a write, so a rule whose action writes also needs a log signal.
+// CheckMatch matches the name of a check on the head. A check name alone
+// never justifies a write, so a rule whose action writes also needs a log
+// signal or an output signal.
 type CheckMatch struct {
-	// Name is a glob over the failing check names.
+	// Name is a glob over the check names.
 	Name string `yaml:"name"`
+	// State selects which checks the name is matched against. Empty reads
+	// the checks that failed.
+	State CheckMatchState `yaml:"state"`
+	// Output matches the message the check itself reports. A check that has
+	// not finished has no log, and its message is the only thing it says
+	// about the head.
+	Output *OutputMatch `yaml:"output"`
 }
+
+// CheckMatchState names the checks a check signal reads.
+type CheckMatchState string
+
+const (
+	// MatchFailing is the absence of a choice: the checks that went red.
+	MatchFailing CheckMatchState = ""
+	// MatchPending reads the checks that have not finished.
+	MatchPending CheckMatchState = "pending"
+)
+
+// OutputMatch matches the title, summary and text a check run reports,
+// joined by newlines. Its named capture groups reach the action.
+type OutputMatch struct {
+	// Pattern is an RE2 expression matched against the joined output. Every
+	// match is kept, not only the first: one check can name several things
+	// to do.
+	Pattern string `yaml:"pattern"`
+}
+
+// CommandGroup is the capture group an action reads a command from.
+const CommandGroup = "command"
 
 // LogMatch matches an excerpt of the failing step's log.
 type LogMatch struct {
@@ -140,6 +170,7 @@ type compiled struct {
 	states     map[pr.StatusState]bool
 	kinds      map[pr.Kind]bool
 	checkRE    *regexp.Regexp
+	outputRE   *regexp.Regexp
 	fileREs    []*regexp.Regexp
 	missingREs []*regexp.Regexp
 	logRE      *regexp.Regexp
@@ -159,6 +190,18 @@ func (r *Rule) Kinds() map[pr.Kind]bool { return r.compiled.kinds }
 // CheckPattern returns the compiled check-name glob, or nil when the rule
 // has no check signal.
 func (r *Rule) CheckPattern() *regexp.Regexp { return r.compiled.checkRE }
+
+// OutputPattern returns the compiled output expression, or nil when the rule
+// has no output signal.
+func (r *Rule) OutputPattern() *regexp.Regexp { return r.compiled.outputRE }
+
+// CheckStateWanted reports which checks the check signal reads.
+func (r *Rule) CheckStateWanted() CheckMatchState {
+	if r.Match.Check == nil {
+		return MatchFailing
+	}
+	return r.Match.Check.State
+}
 
 // FilePatterns returns the compiled file globs. Every one of them must match
 // a file of the diff.
@@ -198,9 +241,15 @@ func (r *Rule) specificity() int {
 	score := len(r.Match.States) + len(r.Match.Kinds)
 	if r.Match.Check != nil {
 		score += 2
+		if r.Match.Check.Output != nil {
+			score += 4
+		}
 	}
 	if r.Match.Log != nil {
 		score += 4
+	}
+	if r.Match.Protection != nil {
+		score += 2
 	}
 	if p := r.Match.PR; p != nil {
 		if p.BaseHead != BaseAny {

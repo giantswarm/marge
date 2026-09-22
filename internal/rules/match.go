@@ -1,6 +1,10 @@
 package rules
 
 import (
+	"regexp"
+	"slices"
+	"strings"
+
 	"github.com/giantswarm/marge/internal/pr"
 )
 
@@ -23,6 +27,10 @@ type Subject struct {
 	// Failing names the red checks that produced a verdict, in the order the
 	// classification found them.
 	Failing []string
+	// Pending names the checks that have not finished, with the message
+	// each of them reports. A check that never finishes is the only signal
+	// a PR waiting on a gate carries: it has no log and it is not missing.
+	Pending []PendingCheck
 	// BaseState says what the base head reported for each failing check.
 	// A name absent from the map is CheckAbsent, and absent is not green.
 	BaseState map[string]CheckState
@@ -37,6 +45,14 @@ type Subject struct {
 	// signal never matches when Log is nil or reports false: an unreadable
 	// log leaves the failure as it was classified.
 	Log func(source LogSource, check string, maxBytes int) (string, bool)
+}
+
+// PendingCheck is one unfinished check on the head.
+type PendingCheck struct {
+	Name string
+	// Output is the check run's title, summary and text joined by
+	// newlines, empty for a check that reports none.
+	Output string
 }
 
 // Hit is the rule that matched, with what made it match.
@@ -55,6 +71,10 @@ type Hit struct {
 	// selected. An action that rewrites a protection touches these and no
 	// other.
 	MissingContexts []string
+	// Commands are the strings the output signal captured in its command
+	// group, in the order the check reported them. An action that comments
+	// one writes these and never composes one of its own.
+	Commands []string
 }
 
 // Match returns the first rule of the catalogue that matches the subject, or
@@ -87,6 +107,10 @@ func (r *Rule) match(subject *Subject) *Hit {
 		return nil
 	}
 
+	if r.CheckStateWanted() == MatchPending {
+		return r.matchPending(subject, missing)
+	}
+
 	candidates := r.candidates(subject)
 	if r.Match.Check != nil && len(candidates) == 0 {
 		return nil
@@ -105,6 +129,47 @@ func (r *Rule) match(subject *Subject) *Hit {
 		hit.MissingContexts = missing
 	}
 	return hit
+}
+
+// matchPending selects the first unfinished check whose name the signal
+// names and whose message the output pattern matches. The pattern reads the
+// message the check itself reports: a check that has not finished has no
+// log, so the message is everything it says about this head. Every match of
+// the pattern is kept, because one gate can name several things to do.
+func (r *Rule) matchPending(subject *Subject, missing []string) *Hit {
+	for _, check := range subject.Pending {
+		if !r.CheckPattern().MatchString(check.Name) {
+			continue
+		}
+		commands := captureCommands(r.OutputPattern(), check.Output)
+		if len(commands) == 0 {
+			continue
+		}
+		return &Hit{Rule: r, Check: check.Name, MissingContexts: missing, Commands: commands}
+	}
+	return nil
+}
+
+// captureCommands returns the command group of every match, in order and
+// without repetition. A pattern that captures nothing selects nothing: a
+// rule reading a check's message acts on what the message says, never on
+// the fact that the check exists.
+func captureCommands(re *regexp.Regexp, output string) []string {
+	if re == nil || output == "" {
+		return nil
+	}
+	group := re.SubexpIndex(CommandGroup)
+	if group < 0 {
+		return nil
+	}
+	var out []string
+	for _, match := range re.FindAllStringSubmatch(output, -1) {
+		command := strings.TrimSpace(match[group])
+		if command != "" && !slices.Contains(out, command) {
+			out = append(out, command)
+		}
+	}
+	return out
 }
 
 // matchProtection selects the required contexts the head never reported that

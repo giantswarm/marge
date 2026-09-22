@@ -133,6 +133,9 @@ type prRun struct {
 	updateType pr.UpdateType
 	// failing names the red checks on the head that produced a verdict.
 	failing []string
+	// pending names the checks on the head that have not finished, with the
+	// message each of them reports.
+	pending []rules.PendingCheck
 	// required is what the head reported for the base branch's required
 	// contexts.
 	required remedy.Required
@@ -440,6 +443,7 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 		run.statusTargets = outcome.statusTargets
 		run.detailsURLs = outcome.detailsURLs
 		run.reported = len(outcome.reported)
+		run.pending = outcome.pendingChecks
 		run.checksPending = outcome.state == statePending
 		run.settledAt = outcome.settledAt
 
@@ -565,6 +569,10 @@ type checkOutcome struct {
 	// blockedChecks failed because a GitHub Actions budget block kept the
 	// job from starting.
 	blockedChecks []string
+	// pendingChecks have not finished, with the message each reports. A
+	// gate that waits on a job nobody started says so there, and says
+	// nowhere else.
+	pendingChecks []rules.PendingCheck
 	// noVerdictChecks established nothing about the code: the job was
 	// cancelled, or a project setting refused the pipeline.
 	noVerdictChecks []noVerdictCheck
@@ -609,6 +617,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	var failedChecks []string
 	var detailsURLs map[string]string
 	var blockedChecks []string
+	var pendingChecks []rules.PendingCheck
 	var noVerdictChecks []noVerdictCheck
 	allComplete := true
 	hasFailure := false
@@ -616,6 +625,9 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		name := cr.GetName()
 		if cr.GetStatus() != statusCompleted {
 			allComplete = false
+			if name != "" {
+				pendingChecks = append(pendingChecks, rules.PendingCheck{Name: name, Output: checkOutputText(cr)})
+			}
 			record(name, false, false, time.Time{})
 			continue
 		}
@@ -695,6 +707,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		sha:             combined.GetSHA(),
 		failedChecks:    failedChecks,
 		blockedChecks:   blockedChecks,
+		pendingChecks:   pendingChecks,
 		noVerdictChecks: noVerdictChecks,
 		reported:        reported,
 		statusTargets:   statusTargets,
@@ -722,6 +735,20 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		out.state = stateSuccess
 	}
 	return out, nil
+}
+
+// checkOutputText joins what a check run reports about the head. The three
+// fields are one message split for rendering, and a signal reads the
+// message.
+func checkOutputText(cr *github.CheckRun) string {
+	out := cr.GetOutput()
+	parts := make([]string, 0, 3)
+	for _, part := range []string{out.GetTitle(), out.GetSummary(), out.GetText()} {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // checkKind says what a failing check run actually established.

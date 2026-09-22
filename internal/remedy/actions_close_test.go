@@ -263,3 +263,93 @@ func TestFixProtectionContextReadsTheWriteBack(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, out.StopRepository)
 }
+
+// gateRequest is a PR whose only wait is the gate, with the command the gate
+// named already captured by the rule.
+func gateRequest(client *github.Client, commands ...string) *Request {
+	req := botRequest(client)
+	req.Check = "Heimdall - PR Gatekeeper"
+	req.Required = Required{Green: []string{"go-build"}, Pending: []string{"Heimdall - PR Gatekeeper"}}
+	req.Commands = commands
+	return req
+}
+
+func TestCommentCommandCommentsWhatTheGateNamed(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		_, _ = w.Write([]byte(`{"id": 1}`))
+	}))
+	defer server.Close()
+
+	req := gateRequest(apiClient(t, server), "/run app-test-suites-single PROVIDER=capa")
+
+	out, err := Default().Apply(t.Context(), CommentCommand, req, nil)
+
+	require.NoError(t, err)
+	require.True(t, out.Applied)
+	require.Equal(t, "/run app-test-suites-single PROVIDER=capa", body["body"])
+	// The PR is still waiting on the suite the comment just started.
+	require.True(t, out.KeepClassification)
+}
+
+// A repository that tests several providers needs one command per provider,
+// and Tekton reads one command per line.
+func TestCommentCommandCommentsEveryProvider(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		_, _ = w.Write([]byte(`{"id": 1}`))
+	}))
+	defer server.Close()
+
+	req := gateRequest(apiClient(t, server),
+		"/run app-test-suites-single PROVIDER=capa",
+		"/run app-test-suites-single PROVIDER=capz")
+
+	out, err := Default().Apply(t.Context(), CommentCommand, req, nil)
+
+	require.NoError(t, err)
+	require.True(t, out.Applied)
+	require.Equal(t, "/run app-test-suites-single PROVIDER=capa\n/run app-test-suites-single PROVIDER=capz", body["body"])
+}
+
+// The command is captured from the gate's own message, so a string that is
+// not a suite the sweep starts is refused before anything is written.
+func TestCommentCommandRefusesAnUnknownCommand(t *testing.T) {
+	req := gateRequest(nil, "/run delete-everything")
+
+	out, err := Default().Apply(t.Context(), CommentCommand, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "not one the sweep starts")
+}
+
+// A suite costs a cluster, so a PR that will not merge when the suite goes
+// green does not get one.
+func TestCommentCommandRefusesWhileSomethingElseIsRed(t *testing.T) {
+	req := gateRequest(nil, "/run cluster-test-suites")
+	req.Required.Failed = []string{"ci/circleci: push-to-app-catalog"}
+
+	out, err := Default().Apply(t.Context(), CommentCommand, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "required checks failed")
+}
+
+// One comment per head commit: a sweep that runs every morning must not
+// start the suite every morning.
+func TestCommentCommandRefusesASecondCommentOnTheSameChange(t *testing.T) {
+	req := gateRequest(nil, "/run cluster-test-suites")
+	req.AppliedThisChange = map[Name]bool{CommentCommand: true}
+
+	out, err := Default().Apply(t.Context(), CommentCommand, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Contains(t, out.Refused, "already applied to this change")
+}

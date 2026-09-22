@@ -384,3 +384,117 @@ evidence:
 	require.NotNil(t, hit)
 	require.Equal(t, "actions-only-proxy-drop", hit.Rule.Name)
 }
+
+// gateRule matches a gate that has not finished and captures every command
+// its message names.
+func gateRule(t *testing.T) *Rule {
+	t.Helper()
+	doc := "" +
+		"name: gate-waits\n" +
+		"summary: the gate names a suite nobody started\n" +
+		"source: giantswarm/marge#159\n" +
+		"match:\n" +
+		"  states: [waiting-checks]\n" +
+		"  check:\n" +
+		"    name: \"Heimdall - PR Gatekeeper\"\n" +
+		"    state: pending\n" +
+		"    output:\n" +
+		"      pattern: \"wasn't found - you can trigger it by commenting on the PR with `(?P<command>/run [^`]+)`\"\n" +
+		"action:\n" +
+		"  name: update-branch\n" +
+		"evidence:\n" +
+		"  reason: the suite the gate waits for was never started\n"
+
+	rule, err := Parse("gate-waits.yaml", []byte(doc), testRegistry())
+	require.NoError(t, err)
+	return rule
+}
+
+func TestMatchPendingCheck(t *testing.T) {
+	const missing = "⚠️ Check Run `App E2E Test Suites - capa` is required but wasn't found - you can trigger it by commenting on the PR with `/run app-test-suites-single PROVIDER=capa`"
+
+	tests := []struct {
+		name    string
+		pending []PendingCheck
+		want    []string
+	}{
+		{
+			name:    "the gate names one suite",
+			pending: []PendingCheck{{Name: "Heimdall - PR Gatekeeper", Output: missing}},
+			want:    []string{"/run app-test-suites-single PROVIDER=capa"},
+		},
+		{
+			name: "the gate names one suite per provider",
+			pending: []PendingCheck{{
+				Name: "Heimdall - PR Gatekeeper",
+				Output: missing + "\n" +
+					"⚠️ Check Run `App E2E Test Suites - capz` is required but wasn't found - you can trigger it by commenting on the PR with `/run app-test-suites-single PROVIDER=capz`",
+			}},
+			want: []string{
+				"/run app-test-suites-single PROVIDER=capa",
+				"/run app-test-suites-single PROVIDER=capz",
+			},
+		},
+		{
+			name: "the same suite named twice is commented once",
+			pending: []PendingCheck{{
+				Name:   "Heimdall - PR Gatekeeper",
+				Output: missing + "\n" + missing,
+			}},
+			want: []string{"/run app-test-suites-single PROVIDER=capa"},
+		},
+		{
+			name: "another pending check carrying the same words is not the gate",
+			pending: []PendingCheck{{
+				Name:   "semantic-pull-request / Validate PR title",
+				Output: missing,
+			}},
+		},
+		{
+			name:    "the gate reports no message yet",
+			pending: []PendingCheck{{Name: "Heimdall - PR Gatekeeper"}},
+		},
+		{
+			name: "the gate is waiting on a suite that is running",
+			pending: []PendingCheck{{
+				Name:   "Heimdall - PR Gatekeeper",
+				Output: "⚠️ Check Run `App E2E Test Suites - capa` is required but is still in progress",
+			}},
+		},
+		{
+			name: "nothing is pending",
+		},
+	}
+
+	catalogue := &Catalogue{Rules: []*Rule{gateRule(t)}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hit := catalogue.Match(&Subject{
+				State:   pr.StatusWaitingChecks,
+				Kind:    pr.KindRenovate,
+				Pending: tc.pending,
+			})
+			if tc.want == nil {
+				require.Nil(t, hit)
+				return
+			}
+			require.NotNil(t, hit)
+			require.Equal(t, "Heimdall - PR Gatekeeper", hit.Check)
+			require.Equal(t, tc.want, hit.Commands)
+		})
+	}
+}
+
+// A rule reading the pending checks never reads the failing ones. The two
+// lists answer different questions, and a gate that finally fails is a
+// failure like any other.
+func TestMatchPendingIgnoresFailingChecks(t *testing.T) {
+	catalogue := &Catalogue{Rules: []*Rule{gateRule(t)}}
+
+	hit := catalogue.Match(&Subject{
+		State:   pr.StatusWaitingChecks,
+		Kind:    pr.KindRenovate,
+		Failing: []string{"Heimdall - PR Gatekeeper"},
+	})
+	require.Nil(t, hit)
+}

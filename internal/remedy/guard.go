@@ -3,6 +3,7 @@ package remedy
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -77,6 +78,60 @@ func OncePerChange(name Name) Guard {
 		return ""
 	}}
 }
+
+// knownPipelines are the e2e suites a comment may start. The set is closed
+// and lives in Go, so a rule merged into the branch the sweep reads cannot
+// widen it.
+var knownPipelines = map[string]bool{
+	"app-test-suites-single": true,
+	"cluster-test-suites":    true,
+	"releases-test-suites":   true,
+}
+
+// commandRE is the shape of a command an action may comment: a slash
+// command with KEY=value arguments and nothing else.
+var commandRE = regexp.MustCompile(`^/run ([a-z][a-z0-9-]*)((?: [A-Z][A-Z0-9_]*=[A-Za-z0-9,._-]+)*)$`)
+
+// KnownCommand refuses a command the sweep did not recognise. The command
+// is captured from a check's own message, so this is the fence that says
+// which commands marge is allowed to have been told; it is not a choice
+// between them, which stays with the check that named one.
+var KnownCommand = Guard{"known-command", func(req *Request) string {
+	if len(req.Commands) == 0 {
+		return "the rule captured no command"
+	}
+	for _, command := range req.Commands {
+		match := commandRE.FindStringSubmatch(command)
+		if match == nil {
+			return fmt.Sprintf("command %q is not a /run command with KEY=value arguments", command)
+		}
+		if !knownPipelines[match[1]] {
+			return fmt.Sprintf("pipeline %q is not one the sweep starts", match[1])
+		}
+	}
+	return ""
+}}
+
+// OnlyGateWaiting refuses while anything other than the matched check keeps
+// the PR from merging. A comment starts a real test suite on real
+// infrastructure, and a PR whose other checks are red does not merge when
+// that suite goes green.
+var OnlyGateWaiting = Guard{"only-gate-waiting", func(req *Request) string {
+	switch {
+	case len(req.Required.Failed) > 0:
+		return "required checks failed: " + strings.Join(req.Required.Failed, ", ")
+	case len(req.Required.Missing) > 0:
+		return "required checks not reported: " + strings.Join(req.Required.Missing, ", ")
+	case len(req.Failing) > 0:
+		return "checks failed: " + strings.Join(req.Failing, ", ")
+	}
+	for _, name := range req.Required.Pending {
+		if name != req.Check {
+			return "required checks pending besides " + req.Check + ": " + name
+		}
+	}
+	return ""
+}}
 
 // ChecksSettled refuses while the head may still report a context for the
 // first time. A context nobody reported is drift only once the head has
