@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/go-github/v92/github"
@@ -143,16 +142,13 @@ func (p *Processor) classifyStale(ctx context.Context, info pr.PRInfo, pullReq *
 // base, so one sweep asks GitHub once per repo instead of once per failing PR.
 func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha string) (map[string]contextState, error) {
 	key := info.Owner + "/" + info.Repo + "@" + sha
-	p.baseStateMu.Lock()
-	if p.baseStateCache == nil {
-		p.baseStateCache = make(map[string]map[string]contextState)
-	}
-	if cached, ok := p.baseStateCache[key]; ok {
-		p.baseStateMu.Unlock()
-		return cached, nil
-	}
-	p.baseStateMu.Unlock()
+	return p.baseStateCache.get(key, func() (map[string]contextState, error) {
+		return p.readBaseContextStates(ctx, info, sha)
+	})
+}
 
+// readBaseContextStates reads what baseContextStates caches.
+func (p *Processor) readBaseContextStates(ctx context.Context, info pr.PRInfo, sha string) (map[string]contextState, error) {
 	states := make(map[string]contextState)
 	record := func(name string, success, failed bool, at time.Time) {
 		recordContext(states, name, success, failed, at)
@@ -199,9 +195,6 @@ func (p *Processor) baseContextStates(ctx context.Context, info pr.PRInfo, sha s
 		checkOpts.Page = resp.NextPage
 	}
 
-	p.baseStateMu.Lock()
-	p.baseStateCache[key] = states
-	p.baseStateMu.Unlock()
 	return states, nil
 }
 
@@ -239,6 +232,5 @@ func (p *Processor) handleStale(ctx context.Context, run *prRun, res *staleResul
 // staleCache is the per-Processor memo used by baseContextStates. It lives
 // in its own struct so Processor literals in tests stay zero-value friendly.
 type staleCache struct {
-	baseStateMu    sync.Mutex
-	baseStateCache map[string]map[string]contextState
+	baseStateCache memo[map[string]contextState]
 }

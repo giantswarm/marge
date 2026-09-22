@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 )
 
 // errNoWriteAccess refuses an approval the reviewer's access would not let
@@ -37,23 +36,11 @@ type AppWriteAccess func(ctx context.Context, owner, repo string) (bool, error)
 func (p *Processor) ensureWriteAccess(ctx context.Context, owner, repo string) error {
 	key := owner + "/" + repo
 
-	p.writeAccessMu.Lock()
-	allowed, cached := p.writeAccessCache[key]
-	p.writeAccessMu.Unlock()
-
-	if !cached {
-		var err error
-		allowed, err = p.readWriteAccess(ctx, owner, repo)
-		if err != nil {
-			return err
-		}
-
-		p.writeAccessMu.Lock()
-		if p.writeAccessCache == nil {
-			p.writeAccessCache = make(map[string]bool)
-		}
-		p.writeAccessCache[key] = allowed
-		p.writeAccessMu.Unlock()
+	allowed, err := p.writeAccess.get(key, func() (bool, error) {
+		return p.readWriteAccess(ctx, owner, repo)
+	})
+	if err != nil {
+		return err
 	}
 
 	if !allowed {
@@ -106,6 +93,5 @@ func writeAccessDetail(err error) string {
 // accessCache is the per-Processor memo used by ensureWriteAccess. It lives
 // in its own struct so Processor literals in tests stay zero-value friendly.
 type accessCache struct {
-	writeAccessMu    sync.Mutex
-	writeAccessCache map[string]bool
+	writeAccess memo[bool]
 }
