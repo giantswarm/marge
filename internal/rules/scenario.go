@@ -183,11 +183,6 @@ type Coverage struct {
 	Orphans []string
 }
 
-// Covered reports whether every rule has both cases.
-func (c Coverage) Covered() bool {
-	return len(c.NoPositive) == 0 && len(c.NoNegative) == 0 && len(c.Orphans) == 0
-}
-
 // CheckCoverage matches the catalogue against its scenarios.
 func CheckCoverage(catalogue *Catalogue, scenarios []*Scenario) Coverage {
 	positive := make(map[string]bool)
