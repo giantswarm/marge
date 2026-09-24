@@ -17,6 +17,14 @@ func TestKindOf(t *testing.T) {
 	require.Equal(t, []string{"dependabot[bot]", "giantswarm-align-files[bot]", "heraldbot[bot]", "renovate[bot]"}, TrustedLogins())
 }
 
+func TestLeftToClassification(t *testing.T) {
+	require.True(t, LeftToClassification(KindAlignFiles, "giantswarm", "github", "reposetup/rename-old-name"))
+	require.True(t, LeftToClassification(KindAlignFiles, "GiantSwarm", "GitHub", "reposetup/rename-old-name"), "GitHub names are case-insensitive")
+	require.False(t, LeftToClassification(KindAlignFiles, "giantswarm", "github", "teams-alignment-branch"), "a regular Align files PR")
+	require.False(t, LeftToClassification(KindAlignFiles, "giantswarm", "marge", "reposetup/codeowners"), "another repository")
+	require.False(t, LeftToClassification(KindRenovate, "giantswarm", "github", "reposetup/rename-old-name"), "another bot")
+}
+
 func TestClassifyUpdate(t *testing.T) {
 	renovateBody := func(from, to string) string {
 		return "This PR contains the following updates:\n\n| Package | Change | Age |\n|---|---|---|\n| [foo](https://x) | `" + from + "` → `" + to + "` | ![age](x) |\n"

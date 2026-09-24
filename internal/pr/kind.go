@@ -34,6 +34,27 @@ func KindOf(login string) Kind {
 	return kindByLogin[login]
 }
 
+// classifiedBranches maps a repository to the head-branch prefix of the
+// Align files PRs its own classification decides. In giantswarm/github the
+// repository reconciler opens its team-file corrections from reposetup/
+// branches; the Validate workflow there merges a correction and leaves any
+// other team-file change for the owning team, so a sweep approval would be
+// a second path around it.
+var classifiedBranches = map[string]string{
+	"giantswarm/github": "reposetup/",
+}
+
+// LeftToClassification reports whether a PR of the given kind and head
+// branch in owner/repo is decided by the repository's own classification,
+// which leaves the sweep no write to make on it.
+func LeftToClassification(kind Kind, owner, repo, headRef string) bool {
+	if kind != KindAlignFiles {
+		return false
+	}
+	prefix, ok := classifiedBranches[strings.ToLower(owner+"/"+repo)]
+	return ok && strings.HasPrefix(headRef, prefix)
+}
+
 // TrustedLogins returns the logins of the four trusted bots, sorted.
 func TrustedLogins() []string {
 	out := make([]string, 0, len(kindByLogin))
