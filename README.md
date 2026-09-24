@@ -108,6 +108,8 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 
 marge touches PRs authored by four bots and nothing else: `renovate[bot]` (Renovate), `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, nancy-fixer's security remediation PRs) and `dependabot[bot]`. A PR by a person, the caller's own included, is reported as `Untrusted author` and never approved or merged. There is no flag to widen that set.
 
+In giantswarm/github, an Align files PR whose head branch starts with `reposetup/` is a team-file PR of the repository reconciler. Its gate is that repository's own team-file classification, so the sweep reports it as `Skipped` with that reason and writes nothing to it, no label included. The reconciler's `reposetup/` PRs in any other repository are swept like every Align files PR.
+
 A green PR merges when the resolved [sweep policy](#sweep-policy) says its kind and update size are eligible. The company defaults are: Align files and Herald PRs always; Renovate and Dependabot patch, minor, digest, pin and lockfile updates. A major update, or one whose size marge cannot read, is `Held` for a person. The update size comes from the versions Dependabot writes in the title (or, for a group, per dependency in the body) and Renovate writes in the body's *Change* column.
 
 #### Sweep policy

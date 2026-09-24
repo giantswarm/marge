@@ -45,7 +45,7 @@ the matching `marge/<class>` label:
 | `waiting` | a required check is pending or nobody reported it | the next sweep |
 | `ci_unavailable` | the Actions budget is spent | a person |
 | `ci_no_verdict` | the checks established nothing about the code | the remedy in the detail |
-| `skipped` | untrusted author, a head branch in another repository, or the sweep switched off for the repository | a person |
+| `skipped` | untrusted author, a head branch in another repository, a reconciler team-file PR in giantswarm/github (left to its classification, no label), or the sweep switched off for the repository | a person |
 | `unclassified` | no sweep has labelled this PR yet | call `list` with `refresh: true` |
 | `repositories_failed` | the PRs of this repository could not be read | report it |
 

@@ -123,8 +123,8 @@ type prRun struct {
 	// because they are red on the base head too.
 	preexisting []string
 	// untouched holds a PR of a repository whose policy switched the sweep
-	// off. Such a repository receives no write at all, the classification
-	// label included.
+	// off, or one its repository's own classification decides. Such a PR
+	// receives no write at all, the classification label included.
 	untouched bool
 
 	// kind and updateType are the classification of the PR's author and its
@@ -270,6 +270,11 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	run.kind, run.updateType = kind, updateType
 	status.SetClassification(idx, kind, updateType)
 
+	if pr.LeftToClassification(kind, info.Owner, info.Repo, pullReq.GetHead().GetRef()) {
+		run.untouched = true
+		run.set(pr.StatusSkipped, "team-file PR of the repository reconciler, left to the team-file classification")
+		return
+	}
 	if pullReq.GetMerged() {
 		run.set(pr.StatusAlreadyMerged, "")
 		return
@@ -378,8 +383,8 @@ func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 }
 
 // finish runs on every exit: it attaches a prior rescue marker to failure
-// outcomes, writes the classification label and appends the notes. A PR of
-// a repository the policy excluded gets none of it.
+// outcomes, writes the classification label and appends the notes. An
+// untouched PR gets none of it.
 func (p *Processor) finish(ctx context.Context, run *prRun) {
 	if run.untouched {
 		return

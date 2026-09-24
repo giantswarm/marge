@@ -21,8 +21,8 @@ import (
 )
 
 // guardFixture wires a fake GitHub API for one bot PR (org/repo#7, base
-// "main") whose head checks, base checks, branch protection, merge answer
-// and author are chosen per scenario. Writes land in the fixture's own
+// "main") whose repository, head branch, head checks, base checks, branch
+// protection, merge answer and author are chosen per scenario. Writes land in the fixture's own
 // state, so a second ProcessPR over the same fixture reads back what the
 // first one wrote, and every write is counted.
 type guardFixture struct {
@@ -31,11 +31,15 @@ type guardFixture struct {
 	body           string
 	mergeableState string
 	autoMerge      bool
+	// repo is the full name of the swept repository; empty means org/repo.
 	// headRepo is the full name of the repository the head branch lives in;
 	// empty means the swept repository itself. forkedRepo marks the swept
-	// repository as a fork of an upstream one.
+	// repository as a fork of an upstream one. headRef is the head branch;
+	// empty means renovate/all.
+	repo       string
 	headRepo   string
 	forkedRepo bool
+	headRef    string
 	// headChecks maps a check name on the PR head to "success", "failure",
 	// "pending" or "neutral"; statusContexts lists the names reported as
 	// commit statuses instead of check runs.
@@ -101,9 +105,18 @@ func greenFixture() *guardFixture {
 	}
 }
 
+// fullName is the swept repository.
+func (f *guardFixture) fullName() string {
+	if f.repo == "" {
+		return "org/repo"
+	}
+	return f.repo
+}
+
 func (f *guardFixture) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
+	repo := f.fullName()
 	writeJSON := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
@@ -142,10 +155,10 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		return cs, runs
 	}
 
-	mux.HandleFunc("GET /repos/org/repo", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, github.Repository{Name: new("repo"), Permissions: &github.RepositoryPermissions{Push: new(true), Pull: new(true)}})
 	})
-	mux.HandleFunc("GET /repos/org/repo/pulls/7", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/pulls/7", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		labels := make([]*github.Label, 0, len(f.labels))
 		for _, l := range f.labels {
@@ -154,7 +167,11 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		headRepo := f.headRepo
 		if headRepo == "" {
-			headRepo = "org/repo"
+			headRepo = repo
+		}
+		headRef := f.headRef
+		if headRef == "" {
+			headRef = "renovate/all"
 		}
 		pull := github.PullRequest{
 			Number:         new(7),
@@ -163,8 +180,8 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			ChangedFiles:   new(1),
 			MergeableState: new(f.mergeableState),
 			User:           &github.User{Login: new(f.author)},
-			Head:           &github.PullRequestBranch{SHA: new(gfHead), Ref: new("renovate/all"), Repo: &github.Repository{FullName: new(headRepo), Fork: new(f.forkedRepo)}},
-			Base:           &github.PullRequestBranch{SHA: new(gfBase), Ref: new("main"), Repo: &github.Repository{FullName: new("org/repo"), Fork: new(f.forkedRepo)}},
+			Head:           &github.PullRequestBranch{SHA: new(gfHead), Ref: new(headRef), Repo: &github.Repository{FullName: new(headRepo), Fork: new(f.forkedRepo)}},
+			Base:           &github.PullRequestBranch{SHA: new(gfBase), Ref: new("main"), Repo: &github.Repository{FullName: new(repo), Fork: new(f.forkedRepo)}},
 			Labels:         labels,
 		}
 		if f.autoMerge {
@@ -173,24 +190,24 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		writeJSON(w, pull)
 	})
 
-	mux.HandleFunc("GET /repos/org/repo/commits/refs/pull/7/head/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/commits/refs/pull/7/head/status", func(w http.ResponseWriter, r *http.Request) {
 		cs, _ := checksFor(f.headChecks, true)
 		writeJSON(w, cs)
 	})
-	mux.HandleFunc("GET /repos/org/repo/commits/refs/pull/7/head/check-runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/commits/refs/pull/7/head/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		_, runs := checksFor(f.headChecks, true)
 		writeJSON(w, runs)
 	})
-	mux.HandleFunc("GET /repos/org/repo/commits/"+gfBase+"/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/commits/"+gfBase+"/status", func(w http.ResponseWriter, r *http.Request) {
 		cs, _ := checksFor(f.baseChecks, true)
 		writeJSON(w, cs)
 	})
-	mux.HandleFunc("GET /repos/org/repo/commits/"+gfBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/commits/"+gfBase+"/check-runs", func(w http.ResponseWriter, r *http.Request) {
 		_, runs := checksFor(f.baseChecks, true)
 		writeJSON(w, runs)
 	})
 
-	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_pull_request_reviews", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/branches/main/protection/required_pull_request_reviews", func(w http.ResponseWriter, r *http.Request) {
 		if f.protectionForbidden {
 			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
 			return
@@ -201,7 +218,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, github.PullRequestReviewsEnforcement{RequireCodeOwnerReviews: true})
 	})
-	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
 		if f.protectionForbidden {
 			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
 			return
@@ -217,10 +234,10 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		writeJSON(w, github.RequiredStatusChecks{Strict: f.strict, Checks: &checks})
 	})
 	for _, route := range []string{
-		"DELETE /repos/org/repo/branches/main/protection/enforce_admins",
-		"POST /repos/org/repo/branches/main/protection/enforce_admins",
-		"PUT /repos/org/repo/branches/main/protection",
-		"DELETE /repos/org/repo/branches/main/protection",
+		"DELETE /repos/" + repo + "/branches/main/protection/enforce_admins",
+		"POST /repos/" + repo + "/branches/main/protection/enforce_admins",
+		"PUT /repos/" + repo + "/branches/main/protection",
+		"DELETE /repos/" + repo + "/branches/main/protection",
 	} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			f.protectionWrites.Add(1)
@@ -229,7 +246,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		})
 	}
 
-	mux.HandleFunc("GET /repos/org/repo/compare/main..."+gfHead, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/compare/main..."+gfHead, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.CommitsComparison{
 			Status:     new("ahead"),
 			AheadBy:    new(1),
@@ -238,7 +255,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		})
 	})
 
-	mux.HandleFunc("GET /repos/org/repo/contents/cliff.toml", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/contents/cliff.toml", func(w http.ResponseWriter, r *http.Request) {
 		f.cliffReads.Add(1)
 		if !f.generatedReleaseNotes {
 			http.NotFound(w, r)
@@ -254,7 +271,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		})
 	})
 
-	mux.HandleFunc("GET /repos/org/repo/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		content := f.changelog
 		f.mu.Unlock()
@@ -271,7 +288,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			Content:  new(base64.StdEncoding.EncodeToString([]byte(content))),
 		})
 	})
-	mux.HandleFunc("PUT /repos/org/repo/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /repos/"+repo+"/contents/CHANGELOG.md", func(w http.ResponseWriter, r *http.Request) {
 		var req github.RepositoryContentFileOptions
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.mu.Lock()
@@ -281,7 +298,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		writeJSON(w, github.RepositoryContentResponse{Commit: github.Commit{SHA: new("newsha")}})
 	})
 
-	mux.HandleFunc("GET /repos/org/repo/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		out := make([]*github.IssueComment, 0, len(f.comments))
@@ -290,7 +307,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, out)
 	})
-	mux.HandleFunc("POST /repos/org/repo/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /repos/"+repo+"/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
 		var req github.IssueCommentRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.mu.Lock()
@@ -301,14 +318,14 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		writeJSON(w, github.IssueComment{ID: new(int64(99))})
 	})
 
-	mux.HandleFunc("GET /repos/org/repo/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/"+repo+"/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []*github.PullRequestReview{})
 	})
-	mux.HandleFunc("POST /repos/org/repo/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /repos/"+repo+"/pulls/7/reviews", func(w http.ResponseWriter, r *http.Request) {
 		f.approveCalls.Add(1)
 		writeJSON(w, github.PullRequestReview{State: new("APPROVED")})
 	})
-	mux.HandleFunc("PUT /repos/org/repo/pulls/7/merge", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /repos/"+repo+"/pulls/7/merge", func(w http.ResponseWriter, r *http.Request) {
 		f.mergeCalls.Add(1)
 		if f.mergeRefusal != "" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -317,13 +334,13 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, github.PullRequestMergeResult{Merged: new(true)})
 	})
-	mux.HandleFunc("PUT /repos/org/repo/pulls/7/update-branch", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /repos/"+repo+"/pulls/7/update-branch", func(w http.ResponseWriter, r *http.Request) {
 		f.updateBranchCalls.Add(1)
 		w.WriteHeader(http.StatusAccepted)
 		writeJSON(w, github.PullRequestBranchUpdateResponse{Message: new("Updating pull request branch.")})
 	})
 
-	mux.HandleFunc("POST /repos/org/repo/issues/7/labels", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /repos/"+repo+"/issues/7/labels", func(w http.ResponseWriter, r *http.Request) {
 		f.labelAdds.Add(1)
 		if f.labelForbidden {
 			http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
@@ -336,7 +353,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		writeJSON(w, []*github.Label{})
 	})
-	mux.HandleFunc("DELETE /repos/org/repo/issues/7/labels/{name...}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /repos/"+repo+"/issues/7/labels/{name...}", func(w http.ResponseWriter, r *http.Request) {
 		f.labelRemoves.Add(1)
 		name, _ := url.PathUnescape(r.PathValue("name"))
 		require.True(t, name == pr.LabelPrefix+"pending" || name == pr.LegacyLabelPrefix+"pending",
@@ -352,7 +369,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("POST /repos/org/repo/labels", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /repos/"+repo+"/labels", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, github.Label{})
 	})
@@ -364,8 +381,9 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// run processes org/repo#7 once through a full sweep (every action, no
-// wait) and returns its final entry. configure may narrow the processor.
+// run processes the fixture's PR #7 once through a full sweep (every
+// action, no wait) and returns its final entry. configure may narrow the
+// processor.
 func (f *guardFixture) run(t *testing.T, configure func(*Processor)) pr.StatusEntry {
 	t.Helper()
 	server := f.server(t)
@@ -375,7 +393,8 @@ func (f *guardFixture) run(t *testing.T, configure func(*Processor)) pr.StatusEn
 		configure(proc)
 	}
 	status := pr.NewPRStatus()
-	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 7, Author: f.author}
+	owner, name, _ := strings.Cut(f.fullName(), "/")
+	info := pr.PRInfo{Owner: owner, Repo: name, Number: 7, Author: f.author}
 	idx := status.Add(info)
 	proc.ProcessPR(context.Background(), info, status, idx)
 	return status.Snapshot()[idx]
@@ -801,6 +820,43 @@ func TestGuard_crossRepositoryHeadIsSkipped(t *testing.T) {
 	require.Equal(t, pr.StatusSkipped, got.State, got.Detail)
 	require.Contains(t, got.Detail, "another repository")
 	require.Zero(t, f.approveCalls.Load()+f.mergeCalls.Load())
+}
+
+// TestGuard_reconcilerTeamFilePRIsLeftToClassification leaves the
+// repository reconciler's team-file PRs in giantswarm/github to that
+// repository's classification: no label, review or merge, and the entry
+// says why. Its other Align files PRs there, and a reposetup/ branch in
+// any other repository, are swept as before.
+func TestGuard_reconcilerTeamFilePRIsLeftToClassification(t *testing.T) {
+	cases := []struct {
+		name    string
+		repo    string
+		headRef string
+		want    pr.StatusState
+	}{
+		{"rename correction in giantswarm/github is skipped", "giantswarm/github", "reposetup/rename-old-name", pr.StatusSkipped},
+		{"align files in giantswarm/github merges", "giantswarm/github", "teams-alignment-branch", pr.StatusMerged},
+		{"reposetup codeowners in another repository merges", "giantswarm/marge", "reposetup/codeowners", pr.StatusMerged},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := greenFixture()
+			f.author, f.title = "giantswarm-align-files[bot]", "chore: align files according to platform standards"
+			f.repo, f.headRef = tc.repo, tc.headRef
+			got := f.run(t, nil)
+
+			require.Equal(t, tc.want, got.State, got.Detail)
+			if tc.want == pr.StatusSkipped {
+				require.Contains(t, got.Detail, "left to the team-file classification")
+				require.Zero(t, f.approveCalls.Load()+f.mergeCalls.Load()+f.updateBranchCalls.Load())
+				require.Zero(t, f.labelAdds.Load()+f.labelRemoves.Load()+f.commentPosts.Load(), "the sweep writes nothing to the PR")
+				require.Empty(t, got.Label)
+				return
+			}
+			require.Equal(t, int32(1), f.mergeCalls.Load())
+			require.Equal(t, []string{"marge/merged"}, f.labelSet())
+		})
+	}
 }
 
 func TestGuard_forkedRepositoryOwnBranchIsSwept(t *testing.T) {
