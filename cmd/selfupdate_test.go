@@ -1,14 +1,19 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/creativeprojects/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"
@@ -153,4 +158,124 @@ func read(t *testing.T, name string) []byte {
 		t.Fatalf("reading %s: %v", name, err)
 	}
 	return data
+}
+
+// fakeSource stands in for GitHub: one release, and the bytes every asset
+// download returns.
+type fakeSource struct {
+	release fakeRelease
+	assets  map[int64][]byte
+}
+
+func (s *fakeSource) ListReleases(context.Context, selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	return []selfupdate.SourceRelease{s.release}, nil
+}
+
+func (s *fakeSource) DownloadReleaseAsset(_ context.Context, _ *selfupdate.Release, id int64) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.assets[id])), nil
+}
+
+type fakeAsset struct {
+	id   int64
+	name string
+}
+
+func (a fakeAsset) GetID() int64                  { return a.id }
+func (a fakeAsset) GetName() string               { return a.name }
+func (a fakeAsset) GetSize() int                  { return 3 }
+func (a fakeAsset) GetBrowserDownloadURL() string { return "https://example.test/" + a.name }
+
+type fakeRelease struct {
+	tag    string
+	assets []selfupdate.SourceAsset
+}
+
+func (r fakeRelease) GetID() int64              { return 1 }
+func (r fakeRelease) GetTagName() string        { return r.tag }
+func (r fakeRelease) GetDraft() bool            { return false }
+func (r fakeRelease) GetPrerelease() bool       { return false }
+func (r fakeRelease) GetPublishedAt() time.Time { return time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC) }
+func (r fakeRelease) GetReleaseNotes() string   { return "notes" }
+func (r fakeRelease) GetName() string           { return r.tag }
+func (r fakeRelease) GetURL() string {
+	return "https://github.com/" + repository + "/releases/tag/" + r.tag
+}
+func (r fakeRelease) GetAssets() []selfupdate.SourceAsset { return r.assets }
+
+// accepting stands in for the cosign validator when a download verifies.
+type accepting struct{}
+
+func (accepting) GetValidationAssetName(name string) string { return name + ".bundle" }
+func (accepting) Validate(string, []byte, []byte) error     { return nil }
+
+// A verified release replaces the file the executable path names, symbolic
+// links resolved, with a single rename: the file keeps its mode, the link
+// keeps naming it, and nothing is left beside it.
+func TestSelfUpdateInstallsAVerifiedReleaseInPlace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows the update is go-selfupdate's own swap")
+	}
+	asset := "marge-" + runtime.GOOS + "-" + runtime.GOARCH
+	src := &fakeSource{
+		release: fakeRelease{tag: "v99.0.0", assets: []selfupdate.SourceAsset{
+			fakeAsset{1, asset},
+			fakeAsset{2, asset + ".bundle"},
+		}},
+		assets: map[int64][]byte{1: []byte("a newer marge"), 2: []byte("its bundle")},
+	}
+	exe := filepath.Join(t.TempDir(), "marge")
+	if err := os.WriteFile(exe, []byte("the marge that is installed right now"), 0o755); err != nil { //nolint:gosec // an executable
+		t.Fatal(err)
+	}
+	// A mode the update would not pick itself, set whatever the umask.
+	if err := os.Chmod(exe, 0o750); err != nil { //nolint:gosec // an executable
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "marge")
+	if err := os.Symlink(exe, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	prevSource, prevExe, prevValidator, prevVersion := selfUpdateSource, selfUpdateExecutable, selfUpdateValidator, version
+	t.Cleanup(func() {
+		selfUpdateSource, selfUpdateExecutable, selfUpdateValidator = prevSource, prevExe, prevValidator
+		SetVersion(prevVersion)
+	})
+	selfUpdateSource = src
+	selfUpdateExecutable = func() (string, error) { return link, nil }
+	selfUpdateValidator = func() selfupdate.Validator { return accepting{} }
+	SetVersion("0.1.0")
+
+	cmd := newSelfUpdateCmd()
+	cmd.SetArgs([]string{})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("self-update: %v", err)
+	}
+
+	got, err := os.ReadFile(exe) //nolint:gosec // the test's own temp file
+	if err != nil || string(got) != "a newer marge" {
+		t.Errorf("%s holds %q (%v), want the release's binary", exe, got, err)
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o750 {
+		t.Errorf("%s has mode %v, want it to keep -rwxr-x---", exe, mode)
+	}
+	if dest, err := os.Readlink(link); err != nil || dest != exe {
+		t.Errorf("the link names %q (%v), want %s", dest, err, exe)
+	}
+	entries, err := os.ReadDir(filepath.Dir(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("%s holds %q, want only marge", filepath.Dir(exe), names)
+	}
 }
