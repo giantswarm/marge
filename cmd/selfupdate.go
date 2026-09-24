@@ -13,6 +13,15 @@ import (
 // repository is the GitHub repository marge releases are published from.
 const repository = "giantswarm/marge"
 
+// Seams for the tests: where releases come from (nil is GitHub), which file
+// the update replaces (the running executable) and what a download must verify
+// against before it is installed (its cosign Sigstore bundle).
+var (
+	selfUpdateSource     selfupdate.Source
+	selfUpdateExecutable = selfupdate.ExecutablePath
+	selfUpdateValidator  = func() selfupdate.Validator { return selfupdatecosign.New(repository) }
+)
+
 func init() {
 	rootCmd.AddCommand(newSelfUpdateCmd())
 }
@@ -33,17 +42,12 @@ installed binary is left untouched.`,
 				return err
 			}
 
-			source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
-			if err != nil {
-				return fmt.Errorf("creating update source: %w", err)
-			}
-
 			// The validator makes DetectLatest look for <asset>.bundle next to
-			// the binary and UpdateTo verify the download against it before
+			// the binary and Install verify the download against it before
 			// anything is written.
 			updater, err := selfupdate.NewUpdater(selfupdate.Config{
-				Source:    source,
-				Validator: selfupdatecosign.New(repository),
+				Source:    selfUpdateSource,
+				Validator: selfUpdateValidator(),
 			})
 			if err != nil {
 				return fmt.Errorf("creating updater: %w", err)
@@ -67,12 +71,17 @@ installed binary is left untouched.`,
 
 			fmt.Printf("Updating from %s to %s...\n", version, latest.Version())
 
-			exe, err := selfupdate.ExecutablePath()
+			exe, err := selfUpdateExecutable()
 			if err != nil {
 				return fmt.Errorf("finding executable path: %w", err)
 			}
 
-			if err := updater.UpdateTo(cmd.Context(), latest, exe); err != nil {
+			// Download the binary and its bundle, verify, then rename it over
+			// the current one, symbolic links resolved, in a single step: a
+			// marge started meanwhile runs the old binary or the new one, and
+			// several updates may run at once. A failed verification leaves
+			// the file untouched.
+			if err := selfupdatecosign.Install(cmd.Context(), updater, latest, exe); err != nil {
 				return fmt.Errorf("updating binary (the installed %s is unchanged): %w", version, err)
 			}
 
