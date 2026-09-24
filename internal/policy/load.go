@@ -181,14 +181,23 @@ func (l Loader) document(ctx context.Context, path string) (*Document, error) {
 	return ParseDocument(path, content)
 }
 
+// retired names the lifecycle values of a repository whose work is over:
+// an archived repository takes no write, a deleted one is gone from GitHub.
+// Their entries stay in the team file as the record, and the sweep leaves
+// them out of its scope, as the query scope leaves archived repositories
+// out of its search.
+var retired = map[string]bool{"archived": true, "deleted": true}
+
 // ParseRepositories returns the owner/name entries of a team's repository
 // list together with the botPRsSweep exception of every entry that carries
-// one, keyed by the same owner/name. Only the name and that one key are
+// one, keyed by the same owner/name. An entry whose lifecycle is archived
+// or deleted is left out. Only the name, the lifecycle and that one key are
 // read; every other key of the file belongs to the generators and changes
 // without notice. The repositories live under the list's own owner.
 func ParseRepositories(content, owner, path string) ([]string, map[string]Exception, error) {
 	var entries []struct {
-		Name string `yaml:"name"`
+		Name      string `yaml:"name"`
+		Lifecycle string `yaml:"lifecycle"`
 		// A yaml.Node by value: the decoder leaves a pointer field empty.
 		// Kind is zero on an entry that has no exception.
 		BotPRsSweep yaml.Node `yaml:"botPRsSweep"`
@@ -200,7 +209,7 @@ func ParseRepositories(content, owner, path string) ([]string, map[string]Except
 	exceptions := make(map[string]Exception)
 	for _, entry := range entries {
 		name := strings.TrimSpace(entry.Name)
-		if name == "" {
+		if name == "" || retired[strings.TrimSpace(entry.Lifecycle)] {
 			continue
 		}
 		repo := owner + "/" + name
@@ -221,7 +230,7 @@ func ParseRepositories(content, owner, path string) ([]string, map[string]Except
 		exceptions[repo] = exception
 	}
 	if len(repos) == 0 {
-		return nil, nil, fmt.Errorf("team file %s lists no repositories", path)
+		return nil, nil, fmt.Errorf("team file %s lists no repositories that are not archived or deleted", path)
 	}
 	return repos, exceptions, nil
 }

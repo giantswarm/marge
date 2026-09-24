@@ -177,6 +177,11 @@ func TestParseRepositories_failsLoudly(t *testing.T) {
 			content: "- system: agent-platform\n",
 			want:    "lists no repositories",
 		},
+		{
+			name:    "only retired repositories",
+			content: "- name: old-tool\n  lifecycle: archived\n- name: align-proof\n  lifecycle: deleted\n",
+			want:    "lists no repositories that are not archived or deleted",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,6 +193,33 @@ func TestParseRepositories_failsLoudly(t *testing.T) {
 			require.ErrorContains(t, err, path)
 		})
 	}
+}
+
+// TestParseRepositories_retiredEntriesAreLeftOut keeps archived and deleted
+// entries out of the scope. A deleted repository is gone from GitHub and an
+// archived one takes no write; their entries stay in the file as the record.
+// Their exceptions are not read either: the repository is not swept.
+func TestParseRepositories_retiredEntriesAreLeftOut(t *testing.T) {
+	content := `
+- name: marge
+- name: old-tool
+  lifecycle: archived
+  botPRsSweep:
+    enabled: false
+- name: align-proof
+  lifecycle: deleted
+- name: muster
+  lifecycle: deprecated
+  botPRsSweep:
+    updateTypes: [patch]
+- name: klausctl
+  lifecycle: production
+`
+	repos, exceptions, err := ParseRepositories(content, "giantswarm", RepositoriesFile("bumblebee"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"giantswarm/marge", "giantswarm/muster", "giantswarm/klausctl"}, repos)
+	require.Len(t, exceptions, 1)
+	require.Contains(t, exceptions, "giantswarm/muster")
 }
 
 // TestParseRepositories_otherKeysAreIgnored proves the sweep reads only the
