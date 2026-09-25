@@ -158,7 +158,7 @@ notices:
   name: standup-example  # the channel's name, shown and never used for delivery
 ```
 
-marge reads the file only for a team whose policy sets `summary: true`, strictly like a policy file, and nothing else in it: `asks`, the channel for messages that wait for the team, is known and not read. A team whose policy sets `summary: true` and that has no channel file fails its post: its sweep runs, and its outcome names the missing file. `slackChannel`, the key the channel file replaced, still parses and is not read.
+marge reads the file only for a team whose policy sets `summary: true`, strictly like a policy file, and nothing else in it: `asks`, the channel for messages that wait for the team, is known and not read. A team whose policy sets `summary: true` and that has no channel file fails its post: its sweep runs, and its outcome names the missing file.
 
 The summary reaches the channel through klaus-gateway's team-notice endpoint (`POST /notices`): the gateway holds the Slack app and the workspace credential, and a scheduled run authenticates with the projected ServiceAccount token its pod already carries, so marge holds no Slack token. The chart's `notices.gatewayURL` names the gateway; without it, and for a team whose policy posts no summary, the run does its work, posts nothing and says so in its log.
 

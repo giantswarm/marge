@@ -43,11 +43,6 @@ type Document struct {
 	Changelog   *ChangelogDocument   `yaml:"changelog"`
 	ModelConfig *string              `yaml:"modelConfig"`
 	Summary     *bool                `yaml:"summary"`
-	// SlackChannel is the key the team channel file replaced. It stays
-	// known for one release, so a file that still carries it parses, and
-	// nothing reads it: the summary goes to the notices channel of
-	// teams/team-<name>.yaml.
-	SlackChannel *string `yaml:"slackChannel"`
 
 	// updateTypes is UpdateTypes with every name resolved.
 	updateTypes map[pr.Kind][]pr.UpdateType
