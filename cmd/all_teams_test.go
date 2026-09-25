@@ -60,8 +60,8 @@ func TestTeamsRun_postsOnlyWithAPoster(t *testing.T) {
 // order given, and a team nobody named is not swept.
 func TestTeamsRun_sweepsTheNamedTeamsInOrder(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
-		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
-		"bot-prs-sweep/team-atlas.yaml":     "slackChannel: team-atlas\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "summary: false\n",
+		"bot-prs-sweep/team-atlas.yaml":     "summary: true\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n",
 		"repositories/team-atlas.yaml":      "- name: atlas\n",
 		"repositories/team-phoenix.yaml":    "- name: phoenix\n",
@@ -118,7 +118,7 @@ func TestTeamsRun_namedTeamWithoutARepositoryListFailsAlone(t *testing.T) {
 // and the pod still fails so the failure is visible.
 func TestTeamsRun_oneTeamsBrokenPolicyDoesNotStopTheRest(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
-		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "summary: false\n",
 		"bot-prs-sweep/team-atlas.yaml":     "notAKey: true\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n",
 		"repositories/team-atlas.yaml":      "- name: atlas\n",
@@ -427,13 +427,13 @@ func TestTeamsRun_stoppedRunRecordsTheTeamsItNeverReached(t *testing.T) {
 
 // summaryFiles is a giantswarm/github with one team per way a policy can
 // place its summary: atlas sets summary and has a channel file, phoenix sets
-// summary false, orion still carries the retired slackChannel key, and
-// vega sets summary without a channel file.
+// summary false, orion does not name summary, and vega sets summary without
+// a channel file.
 func summaryFiles() map[string]string {
 	return map[string]string{
 		"bot-prs-sweep/team-atlas.yaml":   "summary: true\n",
 		"bot-prs-sweep/team-phoenix.yaml": "summary: false\n",
-		"bot-prs-sweep/team-orion.yaml":   "slackChannel: C0FAKE0009\n",
+		"bot-prs-sweep/team-orion.yaml":   "updateTypes:\n  renovate: [patch]\n",
 		"bot-prs-sweep/team-vega.yaml":    "summary: true\n",
 		"teams/team-atlas.yaml":           "asks:\n  id: C0FAKE0001\n  name: team-atlas\nnotices:\n  id: C0FAKE0002\n  name: standup-atlas\n",
 		"teams/team-phoenix.yaml":         "notices:\n  id: C0FAKE0003\n  name: standup-phoenix\n",
@@ -448,8 +448,8 @@ func summaryFiles() map[string]string {
 // TestTeamsRun_summaryGoesToTheNoticesChannel is the acceptance criterion of
 // the team channel file: a policy that sets summary posts to the notices ID
 // of teams/team-<name>.yaml, never to asks, and a policy that does not set
-// it posts nowhere, whether it says summary: false or still carries
-// slackChannel, which parses and is not read.
+// it posts nowhere, whether it says summary: false or does not name summary
+// at all.
 func TestTeamsRun_summaryGoesToTheNoticesChannel(t *testing.T) {
 	t.Setenv(teamFileRepoEnv, "")
 	loader, err := policyLoader(contentsMux(t, "giantswarm", "github", summaryFiles()))

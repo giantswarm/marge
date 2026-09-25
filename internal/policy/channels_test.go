@@ -74,19 +74,19 @@ func TestLoaderChannels(t *testing.T) {
 	require.ErrorContains(t, err, "is not a team name")
 }
 
-// TestParseDocument_summaryAndTheRetiredChannelKey pins the one release in
-// which both keys parse: summary is read, and slackChannel is accepted so a
-// file that still carries it does not stop the sweep, and never read.
-func TestParseDocument_summaryAndTheRetiredChannelKey(t *testing.T) {
-	retired, err := ParseDocument(TeamFile("atlas"), "slackChannel: C0FAKE0001\n")
+// TestParseDocument_summary resolves the switch like every key: the company
+// defaults post no summary, the company file can switch it on, and a team
+// file switches it off again.
+func TestParseDocument_summary(t *testing.T) {
+	silent, err := ParseDocument(TeamFile("atlas"), "updateTypes:\n  renovate: [patch]\n")
 	require.NoError(t, err)
-	set, err := NewSet([]File{{Path: TeamFile("atlas"), Doc: retired}}, nil)
+	set, err := NewSet([]File{{Path: TeamFile("atlas"), Doc: silent}}, nil)
 	require.NoError(t, err)
-	require.False(t, set.Base().Summary, "slackChannel alone posts no summary")
+	require.False(t, set.Base().Summary, "a policy that does not name summary posts none")
 
 	defaults, err := ParseDocument(DefaultFile, "summary: true\n")
 	require.NoError(t, err)
-	quiet, err := ParseDocument(TeamFile("atlas"), "summary: false\nslackChannel: C0FAKE0001\n")
+	quiet, err := ParseDocument(TeamFile("atlas"), "summary: false\n")
 	require.NoError(t, err)
 
 	set, err = NewSet([]File{{Path: DefaultFile, Doc: defaults}}, nil)
@@ -99,4 +99,14 @@ func TestParseDocument_summaryAndTheRetiredChannelKey(t *testing.T) {
 
 	_, err = ParseDocument(TeamFile("atlas"), "summary: C0FAKE0001\n")
 	require.Error(t, err, "summary is a switch, not a channel")
+}
+
+// TestParseDocument_refusesSlackChannel keeps the key the team channel file
+// replaced from coming back: a policy file that names it is an unknown key
+// like any other, so the sweep stops instead of leaving a team to believe
+// its summary goes there.
+func TestParseDocument_refusesSlackChannel(t *testing.T) {
+	_, err := ParseDocument(TeamFile("atlas"), "summary: true\nslackChannel: C0FAKE0001\n")
+	require.ErrorContains(t, err, TeamFile("atlas"))
+	require.ErrorContains(t, err, "field slackChannel not found")
 }

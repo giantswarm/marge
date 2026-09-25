@@ -233,7 +233,7 @@ func TestResolve_emptyUpdateTypeListNarrowsToNothing(t *testing.T) {
 	require.NoError(t, err)
 
 	// An absent key on the team file keeps what the default file said.
-	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
+	silent, err := ParseDocument(TeamFile("shield"), "summary: true\n")
 	require.NoError(t, err)
 	set, err := NewSet([]File{{Path: DefaultFile, Doc: defaults}, {Path: TeamFile("shield"), Doc: silent}}, nil)
 	require.NoError(t, err)
@@ -294,7 +294,7 @@ func TestNewSet_refusesAnUnresolvedDocument(t *testing.T) {
 // none keeps the company format, and a team that writes one key keeps the
 // company values for the keys it leaves out.
 func TestResolve_changelog(t *testing.T) {
-	silent, err := ParseDocument(TeamFile("shield"), "slackChannel: team-shield\n")
+	silent, err := ParseDocument(TeamFile("shield"), "summary: true\n")
 	require.NoError(t, err)
 	set, err := NewSet([]File{{Path: TeamFile("shield"), Doc: silent}}, nil)
 	require.NoError(t, err)
