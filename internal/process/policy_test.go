@@ -26,13 +26,13 @@ func policySet(t *testing.T, teamFile string, exceptions map[string]policy.Excep
 func TestPolicy_recordedInTheOutcome(t *testing.T) {
 	fixture := greenFixture()
 	entry := fixture.run(t, func(p *Processor) {
-		p.Policies = policySet(t, "slackChannel: team-bumblebee\n", nil)
+		p.Policies = policySet(t, "summary: true\n", nil)
 	})
 
 	require.Equal(t, pr.StatusMerged, entry.State)
 	require.NotNil(t, entry.Policy)
 	require.True(t, entry.Policy.Sweep)
-	require.Equal(t, "team-bumblebee", entry.Policy.SlackChannel)
+	require.True(t, entry.Policy.Summary)
 	require.Equal(t, []string{"built-in company defaults", policy.TeamFile("bumblebee")}, entry.Policy.Sources)
 	require.Equal(t, []pr.UpdateType{pr.UpdatePatch, pr.UpdateMinor, pr.UpdateDigest, pr.UpdatePin, pr.UpdateLockfile}, entry.Policy.UpdateTypes[pr.KindRenovate])
 }

@@ -77,7 +77,7 @@ func exceptionKey(owner, name string) string {
 }
 
 // Base returns the policy of a repository without an exception. The sweep
-// reads its concurrency and its Slack channel from it.
+// reads its concurrency and whether it posts a summary from it.
 func (s *Set) Base() pr.Policy {
 	if s == nil {
 		return pr.CompanyDefaults()
@@ -144,8 +144,8 @@ func apply(base pr.Policy, path string, doc *Document) pr.Policy {
 	if doc.ModelConfig != nil {
 		out.ModelConfig = *doc.ModelConfig
 	}
-	if doc.SlackChannel != nil {
-		out.SlackChannel = *doc.SlackChannel
+	if doc.Summary != nil {
+		out.Summary = *doc.Summary
 	}
 	return out
 }

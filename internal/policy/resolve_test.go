@@ -33,7 +33,7 @@ modelConfig: default-model-config
 // company defaults, one team's deviations and one repository's exception.
 func TestResolve_defaultTeamAndException(t *testing.T) {
 	teamFile := `
-slackChannel: team-bumblebee
+summary: true
 rescue:
   enabled: true
   timeout: 30m
@@ -75,7 +75,7 @@ updateTypes:
 	// A repository without an exception is swept under the team policy.
 	plain := set.For("giantswarm", "marge")
 	require.True(t, plain.Sweep)
-	require.Equal(t, "team-bumblebee", plain.SlackChannel)
+	require.True(t, plain.Summary)
 	require.Equal(t, "default-model-config", plain.ModelConfig)
 	require.Equal(t, 8, plain.Concurrency.PerTeam)
 	require.Equal(t, 1, plain.Concurrency.PerRepo)

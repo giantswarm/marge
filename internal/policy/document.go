@@ -37,12 +37,17 @@ import (
 // that exists has been resolved, and applying one needs no second pass over
 // the names and no error a caller has to discard.
 type Document struct {
-	UpdateTypes  map[string][]string  `yaml:"updateTypes"`
-	Rescue       *RescueDocument      `yaml:"rescue"`
-	Concurrency  *ConcurrencyDocument `yaml:"concurrency"`
-	Changelog    *ChangelogDocument   `yaml:"changelog"`
-	ModelConfig  *string              `yaml:"modelConfig"`
-	SlackChannel *string              `yaml:"slackChannel"`
+	UpdateTypes map[string][]string  `yaml:"updateTypes"`
+	Rescue      *RescueDocument      `yaml:"rescue"`
+	Concurrency *ConcurrencyDocument `yaml:"concurrency"`
+	Changelog   *ChangelogDocument   `yaml:"changelog"`
+	ModelConfig *string              `yaml:"modelConfig"`
+	Summary     *bool                `yaml:"summary"`
+	// SlackChannel is the key the team channel file replaced. It stays
+	// known for one release, so a file that still carries it parses, and
+	// nothing reads it: the summary goes to the notices channel of
+	// teams/team-<name>.yaml.
+	SlackChannel *string `yaml:"slackChannel"`
 
 	// updateTypes is UpdateTypes with every name resolved.
 	updateTypes map[pr.Kind][]pr.UpdateType

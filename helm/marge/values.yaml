@@ -121,8 +121,8 @@ marge:
 # workspace credential; the sweep holds no Slack token. The run authenticates
 # as its own ServiceAccount: the gateway verifies the projected token with a
 # TokenReview for `audience` and admits the ServiceAccounts named in its
-# `reviews.allowedCallers`. The channel is the team's own: `slackChannel` in
-# its policy file, as a Slack channel ID.
+# `reviews.allowedCallers`. A team whose policy sets `summary: true` gets one,
+# in the notices channel of its channel file `teams/team-<name>.yaml`.
 notices:
   # -- klaus-gateway as reached from the pod, for example `http://klaus-gateway.agent-platform.svc:8080`. Empty posts no summary: the run does its work and reports it on its own output.
   gatewayURL: ""

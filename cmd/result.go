@@ -236,11 +236,13 @@ type SweepPolicyInfo struct {
 	Sweep bool `json:"sweep"`
 	// UpdateTypes lists the update types that merge when green, per bot PR
 	// kind.
-	UpdateTypes  map[string][]string `json:"update_types"`
-	Rescue       SweepRescuePolicy   `json:"rescue"`
-	Concurrency  SweepConcurrency    `json:"concurrency"`
-	ModelConfig  string              `json:"model_config,omitempty"`
-	SlackChannel string              `json:"slack_channel,omitempty"`
+	UpdateTypes map[string][]string `json:"update_types"`
+	Rescue      SweepRescuePolicy   `json:"rescue"`
+	Concurrency SweepConcurrency    `json:"concurrency"`
+	ModelConfig string              `json:"model_config,omitempty"`
+	// Summary says the team's summary is posted to the notices channel of
+	// its channel file.
+	Summary bool `json:"summary"`
 	// Sources names the files that produced the policy, in the order they
 	// were applied.
 	Sources []string `json:"sources,omitempty"`
@@ -297,10 +299,10 @@ func policyInfo(resolved *pr.Policy) *SweepPolicyInfo {
 			RescuesDispatched:  pr.RescuesDispatched,
 			Confirm:            string(resolved.Rescue.Confirm),
 		},
-		Concurrency:  SweepConcurrency{PerTeam: resolved.Concurrency.PerTeam, PerRepo: resolved.Concurrency.PerRepo},
-		ModelConfig:  resolved.ModelConfig,
-		SlackChannel: resolved.SlackChannel,
-		Sources:      resolved.Sources,
+		Concurrency: SweepConcurrency{PerTeam: resolved.Concurrency.PerTeam, PerRepo: resolved.Concurrency.PerRepo},
+		ModelConfig: resolved.ModelConfig,
+		Summary:     resolved.Summary,
+		Sources:     resolved.Sources,
 	}
 	if resolved.Rescue.Timeout > 0 {
 		info.Rescue.Timeout = resolved.Rescue.Timeout.String()

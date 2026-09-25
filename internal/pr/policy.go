@@ -129,12 +129,14 @@ type Policy struct {
 	Sweep bool
 	// UpdateTypes lists the update types that merge when green, per bot PR
 	// kind. A kind that is absent merges nothing.
-	UpdateTypes  map[Kind][]UpdateType
-	Rescue       RescuePolicy
-	Concurrency  Concurrency
-	Changelog    ChangelogPolicy
-	ModelConfig  string
-	SlackChannel string
+	UpdateTypes map[Kind][]UpdateType
+	Rescue      RescuePolicy
+	Concurrency Concurrency
+	Changelog   ChangelogPolicy
+	ModelConfig string
+	// Summary says the team's sweep summary is posted, to the notices
+	// channel of its channel file. The company defaults post none.
+	Summary bool
 	// Sources names every file that produced this policy, in the order the
 	// files were applied, so one outcome explains its own decision.
 	Sources []string
