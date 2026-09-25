@@ -94,7 +94,7 @@ func directoryEntries(files map[string]string, dir string) []github.RepositoryCo
 func TestResolveScope_teamScope(t *testing.T) {
 	client := contentsMux(t, "giantswarm", "github", map[string]string{
 		"bot-prs-sweep/default.yaml":        "updateTypes:\n  renovate: [patch, minor]\n",
-		"bot-prs-sweep/team-bumblebee.yaml": "slackChannel: team-bumblebee\n",
+		"bot-prs-sweep/team-bumblebee.yaml": "summary: true\n",
 		"repositories/team-bumblebee.yaml":  "- name: marge\n- name: muster\n  botPRsSweep:\n    updateTypes: [patch]\n",
 	})
 
@@ -103,7 +103,7 @@ func TestResolveScope_teamScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"giantswarm/marge", "giantswarm/muster"}, scope.Repos)
 
-	require.Equal(t, "team-bumblebee", scope.Policies.Base().SlackChannel)
+	require.True(t, scope.Policies.Base().Summary)
 	require.True(t, scope.Policies.For("giantswarm", "marge").Eligible(pr.KindRenovate, pr.UpdateMinor))
 	require.False(t, scope.Policies.For("giantswarm", "muster").Eligible(pr.KindRenovate, pr.UpdateMinor))
 	// Scope.Repos carries the owner, so both shapes reach the exception.

@@ -424,3 +424,94 @@ func TestTeamsRun_stoppedRunRecordsTheTeamsItNeverReached(t *testing.T) {
 		require.True(t, entry.Stopped, "team %s", entry.Team)
 	}
 }
+
+// summaryFiles is a giantswarm/github with one team per way a policy can
+// place its summary: atlas sets summary and has a channel file, phoenix sets
+// summary false, orion still carries the retired slackChannel key, and
+// vega sets summary without a channel file.
+func summaryFiles() map[string]string {
+	return map[string]string{
+		"bot-prs-sweep/team-atlas.yaml":   "summary: true\n",
+		"bot-prs-sweep/team-phoenix.yaml": "summary: false\n",
+		"bot-prs-sweep/team-orion.yaml":   "slackChannel: C0FAKE0009\n",
+		"bot-prs-sweep/team-vega.yaml":    "summary: true\n",
+		"teams/team-atlas.yaml":           "asks:\n  id: C0FAKE0001\n  name: team-atlas\nnotices:\n  id: C0FAKE0002\n  name: standup-atlas\n",
+		"teams/team-phoenix.yaml":         "notices:\n  id: C0FAKE0003\n  name: standup-phoenix\n",
+		"teams/team-orion.yaml":           "notices:\n  id: C0FAKE0004\n  name: standup-orion\n",
+		"repositories/team-atlas.yaml":    "- name: atlas\n",
+		"repositories/team-phoenix.yaml":  "- name: phoenix\n",
+		"repositories/team-orion.yaml":    "- name: orion\n",
+		"repositories/team-vega.yaml":     "- name: vega\n",
+	}
+}
+
+// TestTeamsRun_summaryGoesToTheNoticesChannel is the acceptance criterion of
+// the team channel file: a policy that sets summary posts to the notices ID
+// of teams/team-<name>.yaml, never to asks, and a policy that does not set
+// it posts nowhere, whether it says summary: false or still carries
+// slackChannel, which parses and is not read.
+func TestTeamsRun_summaryGoesToTheNoticesChannel(t *testing.T) {
+	t.Setenv(teamFileRepoEnv, "")
+	loader, err := policyLoader(contentsMux(t, "giantswarm", "github", summaryFiles()))
+	require.NoError(t, err)
+	result := SweepResult{Summary: SweepSummary{Total: 2, Merged: 2}}
+
+	for team, want := range map[string]string{"atlas": "C0FAKE0002", "phoenix": "", "orion": ""} {
+		t.Run(team, func(t *testing.T) {
+			scope, err := loader.TeamScope(t.Context(), team)
+			require.NoError(t, err)
+
+			poster := &recordingPoster{}
+			run := teamsRun{Notices: poster}
+			channel, err := run.summaryChannel(t.Context(), loader, team, scope.Policies.Base().Summary)
+			require.NoError(t, err)
+			posted, err := run.post(t.Context(), team, channel, result, false)
+			require.NoError(t, err)
+
+			if want == "" {
+				require.False(t, posted)
+				require.Empty(t, poster.posts)
+				return
+			}
+			require.True(t, posted)
+			require.Len(t, poster.posts, 1)
+			require.Equal(t, want, poster.posts[0].channel)
+		})
+	}
+}
+
+// TestTeamsRun_summaryWithoutAChannelFileFailsThePost keeps a missing
+// channel file from passing as a quiet team: the sweep of that team runs,
+// its outcome fails and names the file, and every other team is unaffected.
+// A run without a poster reads no channel file and fails nothing.
+func TestTeamsRun_summaryWithoutAChannelFileFailsThePost(t *testing.T) {
+	client := contentsMux(t, "giantswarm", "github", summaryFiles())
+	t.Setenv(teamFileRepoEnv, "")
+
+	run := teamsRun{
+		Client:  client,
+		Login:   "giantswarm-marge[bot]",
+		Rules:   RulesSource{Path: t.TempDir()},
+		Opts:    RunOptions{DryRun: true, Quiet: true, NoTUI: true},
+		Teams:   []string{"atlas", "orion", "vega"},
+		Notices: &recordingPoster{},
+		Out:     io.Discard,
+	}
+	outcomes, err := run.Run(t.Context())
+	require.NoError(t, err)
+	require.Len(t, outcomes, 3)
+
+	require.NoError(t, outcomes[0].Err, "atlas has its channel file")
+	require.NoError(t, outcomes[1].Err, "orion posts no summary and needs no channel file")
+	vega := outcomes[2]
+	require.ErrorContains(t, vega.Err, "teams/team-vega.yaml")
+	require.Empty(t, vega.Skipped, "the sweep of vega ran")
+	require.Len(t, vega.Result.RepositoriesFailed, 1, "the sweep of vega reached its repository")
+	require.Equal(t, "giantswarm/vega", vega.Result.RepositoriesFailed[0].Repo)
+	require.ErrorContains(t, teamsError(outcomes), "team vega")
+
+	run.Notices = nil
+	outcomes, err = run.Run(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, teamsError(outcomes))
+}

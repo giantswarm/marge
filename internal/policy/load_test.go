@@ -31,7 +31,7 @@ func loader(t *testing.T, files map[string]string) Loader {
 func TestTeamScope(t *testing.T) {
 	l := loader(t, map[string]string{
 		DefaultFile:                   "updateTypes:\n  renovate: [patch, minor]\n",
-		TeamFile("bumblebee"):         "slackChannel: team-bumblebee\nconcurrency:\n  perRepo: 2\n",
+		TeamFile("bumblebee"):         "summary: true\nconcurrency:\n  perRepo: 2\n",
 		RepositoriesFile("bumblebee"): "- name: marge\n- name: muster\n  botPRsSweep:\n    updateTypes: [patch]\n",
 	})
 
@@ -40,7 +40,7 @@ func TestTeamScope(t *testing.T) {
 	require.Equal(t, []string{"giantswarm/marge", "giantswarm/muster"}, scope.Repos)
 
 	base := scope.Policies.Base()
-	require.Equal(t, "team-bumblebee", base.SlackChannel)
+	require.True(t, base.Summary)
 	require.Equal(t, 2, base.Concurrency.PerRepo)
 	require.Equal(t, []string{"built-in company defaults", DefaultFile, TeamFile("bumblebee")}, base.Sources)
 

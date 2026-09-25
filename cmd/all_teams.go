@@ -101,7 +101,10 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 	if err != nil {
 		return teamOutcome{Team: team, Stopped: ctx.Err() != nil, Err: err}
 	}
-	resolved := scope.Policies.Base()
+	// The channel is read before the sweep, under the context a stop has
+	// not cancelled yet. A channel file the policy needs and the team does
+	// not have fails the post alone: the sweep still runs.
+	channel, channelErr := r.summaryChannel(ctx, loader, team, scope.Policies.Base().Summary)
 
 	opts := r.Opts
 	opts.Team = team
@@ -122,11 +125,29 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 		Stopped: ctx.Err() != nil,
 		Result:  buildSweepResult(status, found.Failed, rulesReport),
 	}
-	outcome.Posted, err = r.post(ctx, team, resolved.SlackChannel, outcome.Result, outcome.Stopped)
+	if channelErr != nil {
+		outcome.Err = channelErr
+		return outcome
+	}
+	outcome.Posted, err = r.post(ctx, team, channel, outcome.Result, outcome.Stopped)
 	if err != nil {
 		outcome.Err = err
 	}
 	return outcome
+}
+
+// summaryChannel returns the channel the team's summary goes to: the
+// notices channel of its channel file when its policy sets summary, and
+// none otherwise. A run without a poster posts nothing, so it reads no file.
+func (r teamsRun) summaryChannel(ctx context.Context, loader policy.Loader, team string, summary bool) (string, error) {
+	if r.Notices == nil || !summary {
+		return "", nil
+	}
+	channels, err := loader.Channels(ctx, team)
+	if err != nil {
+		return "", fmt.Errorf("posting the summary of team %s: %w", team, err)
+	}
+	return channels.Notices.ID, nil
 }
 
 // stopNoticeTimeout bounds the notice a stopped run sends. The pod is
@@ -135,9 +156,9 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 const stopNoticeTimeout = 10 * time.Second
 
 // post renders the summary and sends it. It reports false, and no error,
-// both when the run changed nothing and when no channel or no gateway is
-// configured: a sweep that did its work is not a failed run because a chat
-// message had nowhere to go.
+// both when the run changed nothing and when the policy posts no summary or
+// no gateway is configured: a sweep that did its work is not a failed run
+// because a team asked for no chat message.
 //
 // A stopped run posts whatever it reached, changed or not, under a context
 // of its own: the one it was swept under is cancelled, and the notice is

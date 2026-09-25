@@ -121,12 +121,13 @@ A team declares its own appetite for sweeps in `giantswarm/github`, in files the
 | `bot-prs-sweep/default.yaml` | the company defaults | Bumblebee, in CODEOWNERS |
 | `bot-prs-sweep/team-<name>.yaml` | one team's deviations | that team, in CODEOWNERS: a new team file adds its own line, or the directory line leaves it with Bumblebee |
 | `botPRsSweep` on a repository entry of `repositories/team-<name>.yaml` | one repository's exception | that team |
+| `teams/team-<name>.yaml` | the team's Slack channels, which the summary is posted to | that team |
 
 The policy files say what may merge, and nothing about when a team is swept. Each team has its own CronJob in the [chart](helm/marge/README.md), which sweeps that team on its own cadence and is suspended on its own. A team without a policy file is swept under the company defaults.
 
 ```yaml
 # bot-prs-sweep/team-bumblebee.yaml
-slackChannel: C0AUNCS4C2Y  # #standup-bumblebee
+summary: true
 updateTypes:
   renovate: [patch, minor]
 rescue:
@@ -148,7 +149,18 @@ changelog:
   template: "- Update {{ .Dependency }}{{ if .From }} from {{ .From }}{{ end }} to {{ .To }} ({{ .PR }})"
 ```
 
-`slackChannel` is a Slack channel **ID**. The summary reaches it through klaus-gateway's team-notice endpoint (`POST /notices`): the gateway holds the Slack app and the workspace credential, and a scheduled run authenticates with the projected ServiceAccount token its pod already carries, so marge holds no Slack token. The chart's `notices.gatewayURL` names the gateway; without it, and for a team that names no channel, the run does its work, posts nothing and says so in its log.
+`summary` switches the team's summary on; the company defaults post none. The summary goes to the `notices` channel of the team's channel file, the one place in giantswarm/github that names a team's Slack channels for every automation that messages the team:
+
+```yaml
+# teams/team-<name>.yaml
+notices:
+  id: C0123456789        # the channel's Slack ID, which the summary is delivered to
+  name: standup-example  # the channel's name, shown and never used for delivery
+```
+
+marge reads the file only for a team whose policy sets `summary: true`, strictly like a policy file, and nothing else in it: `asks`, the channel for messages that wait for the team, is known and not read. A team whose policy sets `summary: true` and that has no channel file fails its post: its sweep runs, and its outcome names the missing file. `slackChannel`, the key the channel file replaced, still parses and is not read.
+
+The summary reaches the channel through klaus-gateway's team-notice endpoint (`POST /notices`): the gateway holds the Slack app and the workspace credential, and a scheduled run authenticates with the projected ServiceAccount token its pod already carries, so marge holds no Slack token. The chart's `notices.gatewayURL` names the gateway; without it, and for a team whose policy posts no summary, the run does its work, posts nothing and says so in its log.
 
 Every key is optional and an absent key keeps what the file before it said. `updateTypes` replaces the list of the kinds it names; the known update types are `major`, `minor`, `patch`, `digest`, `pin`, `lockfile` and `none`, and an update whose size marge could not read can never be declared eligible. An empty list is a list: `renovate: []` merges no Renovate PR at all.
 
