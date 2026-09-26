@@ -151,8 +151,8 @@ type repoFailure struct {
 // ("owner/name" entries) it lists the bot PRs of exactly those
 // repositories and query is a case-insensitive substring filter on the
 // repository names; without one it runs the GitHub search, where query
-// becomes part of the search string. Only PRs by the four trusted bots
-// are returned.
+// becomes part of the search string. Only PRs of the trusted kinds are
+// returned.
 func searchPRs(ctx context.Context, client *github.Client, query string, login string, repos []string) (discovery, error) {
 	if len(repos) > 0 {
 		return listRepoPRs(ctx, client, repos, query)
@@ -167,8 +167,7 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 	var found discovery
 
 	for _, scope := range scopeFilters {
-		for _, botLogin := range pr.TrustedLogins() {
-			authorFilter := "author:app/" + strings.TrimSuffix(botLogin, "[bot]")
+		for _, authorFilter := range pr.SearchQualifiers() {
 			searchQuery := fmt.Sprintf("%s is:pr is:open archived:false %s %s", query, scope, authorFilter)
 			searchQuery = strings.TrimSpace(searchQuery)
 
@@ -203,7 +202,7 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 						URL:       url,
 						Author:    issue.GetUser().GetLogin(),
 						CreatedAt: issue.GetCreatedAt().Time,
-						Labels:    labelNames(issue.Labels),
+						Labels:    pr.LabelNames(issue.Labels),
 					})
 				}
 
@@ -216,20 +215,6 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 	}
 
 	return found, nil
-}
-
-// labelNames is what the sweep carries out of a discovery besides the PR
-// itself: the label names, so a later step can read the classification a
-// previous sweep stored instead of computing it again.
-func labelNames(labels []*github.Label) []string {
-	if len(labels) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(labels))
-	for _, label := range labels {
-		names = append(names, label.GetName())
-	}
-	return names
 }
 
 // listRepoPRs lists the open bot PRs of the repositories named, in one
@@ -252,7 +237,7 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 	var found discovery
 	seen := make(map[string]bool, len(open))
 	for _, entry := range open {
-		if pr.KindOf(entry.Author) == "" || seen[entry.URL] {
+		if pr.KindOf(entry.Author, entry.Labels) == "" || seen[entry.URL] {
 			continue
 		}
 		seen[entry.URL] = true

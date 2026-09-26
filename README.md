@@ -106,7 +106,7 @@ When run with a query (e.g. a repo name or dependency), it filters PRs directly 
 
 #### Bot PR kinds and eligibility
 
-marge touches PRs authored by four bots and nothing else: `renovate[bot]` (Renovate), `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, nancy-fixer's security remediation PRs) and `dependabot[bot]`. A PR by a person, the caller's own included, is reported as `Untrusted author` and never approved or merged. There is no flag to widen that set.
+marge touches PRs authored by four bots and nothing else: `renovate[bot]` (Renovate), `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, nancy-fixer's security remediation PRs) and `dependabot[bot]`, plus one more kind, the upstream chart sync (`upstream-sync`): the PR that the `sync-from-upstream` workflow of a vendored-chart repository opens as `taylorbot`, labelled `automated-update`. A sync PR's body names only the versions it syncs to, so marge reads the size of the sync from the `version:` and `appVersion:` lines that its diff changes in each `Chart.yaml`. By default a green patch or minor sync merges, and a major waits for review. A PR by a person, the caller's own included, is reported as `Untrusted author` and never approved or merged. There is no flag to widen that set.
 
 In giantswarm/github, an Align files PR whose head branch starts with `reposetup/` is a team-file PR of the repository reconciler. Its gate is that repository's own team-file classification, so the sweep reports it as `Skipped` with that reason and writes nothing to it, no label included. The reconciler's `reposetup/` PRs in any other repository are swept like every Align files PR.
 
@@ -542,7 +542,7 @@ marge sweep --team bumblebee --output json
 
 ## How it works
 
-1. Resolves the scope and the [policy](#sweep-policy): with `--team`, the repositories of the team file in the team-file repository, the company default file and the team's own; otherwise the GitHub search for open PRs by the four bots that request your review or live in your repositories, or the repositories of `--repos-file`, under the company defaults. A scope that names repositories lists their open PRs over GraphQL, twenty-five repositories a request. A repository whose PRs cannot be listed is reported, never silently dropped.
+1. Resolves the scope and the [policy](#sweep-policy): with `--team`, the repositories of the team file in the team-file repository, the company default file and the team's own; otherwise the GitHub search for open PRs of the trusted kinds that request your review or live in your repositories, or the repositories of `--repos-file`, under the company defaults. A scope that names repositories lists their open PRs over GraphQL, twenty-five repositories a request. A repository whose PRs cannot be listed is reported, never silently dropped.
 2. In interactive mode, groups results by repository (or dependency) and presents a selector.
 3. For each PR, in parallel (the policy's `concurrency`, by default 5 repositories at a time and one PR per repository):
    - Reads the PR, its kind and update size, its checks, the base branch's required status checks and its markers.

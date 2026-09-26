@@ -2,6 +2,7 @@ package pr
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,7 +10,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
-// Kind is the bot that authored a PR. The sweep touches PRs of these four
+// Kind is the bot that authored a PR. The sweep touches PRs of these five
 // kinds and nothing else; a human-authored PR has no kind.
 type Kind string
 
@@ -18,6 +19,16 @@ const (
 	KindAlignFiles Kind = "align-files"
 	KindHerald     Kind = "herald"
 	KindDependabot Kind = "dependabot"
+	// KindUpstreamSync is the vendored-chart sync PR the sync-from-upstream
+	// workflow opens: `vendir sync` plus the re-applied Giant Swarm delta.
+	KindUpstreamSync Kind = "upstream-sync"
+)
+
+// The sync-from-upstream workflow opens its PR as taylorbot, a user account
+// that opens other PRs too, so the label tells a sync PR from the rest.
+const (
+	upstreamSyncLogin = "taylorbot"
+	UpstreamSyncLabel = "automated-update"
 )
 
 // kindByLogin maps the GitHub login of each trusted bot to its kind.
@@ -28,10 +39,28 @@ var kindByLogin = map[string]Kind{
 	"dependabot[bot]":             KindDependabot,
 }
 
-// KindOf returns the kind of the bot with the given login, or "" when the
-// login is not one of the four trusted bots.
-func KindOf(login string) Kind {
-	return kindByLogin[login]
+// KindOf returns the kind of a PR from its author's login and its labels,
+// or "" when no trusted bot authored it.
+func KindOf(login string, labels []string) Kind {
+	if kind, ok := kindByLogin[login]; ok {
+		return kind
+	}
+	if login == upstreamSyncLogin && slices.Contains(labels, UpstreamSyncLabel) {
+		return KindUpstreamSync
+	}
+	return ""
+}
+
+// SearchQualifiers returns the GitHub search qualifiers that find the PRs
+// of each trusted kind, sorted.
+func SearchQualifiers() []string {
+	out := make([]string, 0, len(kindByLogin)+1)
+	for login := range kindByLogin {
+		out = append(out, "author:app/"+strings.TrimSuffix(login, "[bot]"))
+	}
+	out = append(out, "author:"+upstreamSyncLogin+" label:"+UpstreamSyncLabel)
+	sort.Strings(out)
+	return out
 }
 
 // classifiedBranches maps a repository to the head-branch prefix of the
@@ -55,12 +84,24 @@ func LeftToClassification(kind Kind, owner, repo, headRef string) bool {
 	return ok && strings.HasPrefix(headRef, prefix)
 }
 
-// TrustedLogins returns the logins of the four trusted bots, sorted.
+// TrustedLogins returns the logins of the four trusted bot Apps, sorted.
 func TrustedLogins() []string {
 	out := make([]string, 0, len(kindByLogin))
 	for login := range kindByLogin {
 		out = append(out, login)
 	}
+	sort.Strings(out)
+	return out
+}
+
+// TrustedAuthors describes the authors of the trusted kinds, sorted, for a
+// refusal to name.
+func TrustedAuthors() []string {
+	out := make([]string, 0, len(kindByLogin)+1)
+	for login := range kindByLogin {
+		out = append(out, login)
+	}
+	out = append(out, upstreamSyncLogin+" (label "+UpstreamSyncLabel+")")
 	sort.Strings(out)
 	return out
 }

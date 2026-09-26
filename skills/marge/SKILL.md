@@ -17,7 +17,11 @@ the GitHub UI under the person's own name.**
 
 Four bot authors and nothing else: `renovate[bot]` (Renovate),
 `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, the
-security remediation PRs of nancy-fixer) and `dependabot[bot]`. A PR a person
+security remediation PRs of nancy-fixer) and `dependabot[bot]`. There is one
+more kind, the upstream chart sync: the `taylorbot` PR labelled
+`automated-update` that a vendored-chart repository's `sync-from-upstream`
+workflow opens. Its size comes from the version lines its diff changes in
+`Chart.yaml`. A PR a person
 authored, the caller's own included, is reported as `Untrusted author` and is
 never approved and never merged.
 
