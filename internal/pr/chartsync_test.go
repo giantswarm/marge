@@ -29,3 +29,11 @@ func TestClassifyChartSync(t *testing.T) {
 	require.Equal(t, UpdateUnknown, ClassifyChartSync([]*github.CommitFile{
 		file("helm/x/Chart.yaml", "@@ -1 +1 @@\n-version: main\n+version: next\n")}), "no semver")
 }
+
+// Another team's sync PR never merges on the company defaults: the kind is
+// opt-in per team.
+func TestCompanyDefaultsMergeNoUpstreamSync(t *testing.T) {
+	for _, u := range []UpdateType{UpdatePatch, UpdateMinor, UpdateMajor} {
+		require.False(t, CompanyDefaults().Eligible(KindUpstreamSync, u), u)
+	}
+}
