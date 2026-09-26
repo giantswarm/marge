@@ -131,9 +131,9 @@ func changelogEntry(ctx context.Context, client *github.Client, policies *policy
 		return entry
 	}
 
-	kind := pr.KindOf(pull.GetUser().GetLogin())
+	kind := pr.KindOf(pull.GetUser().GetLogin(), pr.LabelNames(pull.Labels))
 	if kind == "" {
-		entry.Refused = fmt.Sprintf("%s authored this PR, and only a trusted bot's PR earns an entry: %s", pull.GetUser().GetLogin(), strings.Join(pr.TrustedLogins(), ", "))
+		entry.Refused = fmt.Sprintf("%s authored this PR, and only a trusted bot's PR earns an entry: %s", pull.GetUser().GetLogin(), strings.Join(pr.TrustedAuthors(), ", "))
 		return entry
 	}
 	head := pull.GetHead()

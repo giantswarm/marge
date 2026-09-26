@@ -116,10 +116,11 @@ const (
 // knownKinds maps the bot PR kind names a policy file may use to the kinds
 // the sweep classifies PRs into.
 var knownKinds = map[string]pr.Kind{
-	"renovate":    pr.KindRenovate,
-	"dependabot":  pr.KindDependabot,
-	"align-files": pr.KindAlignFiles,
-	"herald":      pr.KindHerald,
+	"renovate":      pr.KindRenovate,
+	"dependabot":    pr.KindDependabot,
+	"align-files":   pr.KindAlignFiles,
+	"herald":        pr.KindHerald,
+	"upstream-sync": pr.KindUpstreamSync,
 }
 
 // knownUpdateTypes maps the update type names a policy file may use.

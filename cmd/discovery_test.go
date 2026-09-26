@@ -34,7 +34,7 @@ func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, found.PRs, 2)
 	for _, p := range found.PRs {
-		require.NotEqual(t, "", pr.KindOf(p.Author), p.Author)
+		require.NotEqual(t, "", pr.KindOf(p.Author, p.Labels), p.Author)
 	}
 	require.Equal(t, []string{"dependencies", "marge/action-required"}, found.PRs[0].Labels,
 		"the labels carry the classification a previous sweep stored")

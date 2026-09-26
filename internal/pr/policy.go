@@ -143,7 +143,8 @@ type Policy struct {
 }
 
 // CompanyDefaults is the policy that applies where no file says otherwise:
-// patch and minor updates merge when green for Renovate and Dependabot,
+// patch and minor updates merge when green for Renovate and Dependabot and
+// for an upstream chart sync,
 // Align files and Herald PRs carry no version change and always merge, a
 // major and an update whose size could not be read wait for a person. The
 // rescues are off.
@@ -151,10 +152,11 @@ func CompanyDefaults() Policy {
 	return Policy{
 		Sweep: true,
 		UpdateTypes: map[Kind][]UpdateType{
-			KindRenovate:   {UpdatePatch, UpdateMinor, UpdateDigest, UpdatePin, UpdateLockfile},
-			KindDependabot: {UpdatePatch, UpdateMinor, UpdateDigest, UpdatePin, UpdateLockfile},
-			KindAlignFiles: {UpdateNone},
-			KindHerald:     {UpdateNone},
+			KindRenovate:     {UpdatePatch, UpdateMinor, UpdateDigest, UpdatePin, UpdateLockfile},
+			KindDependabot:   {UpdatePatch, UpdateMinor, UpdateDigest, UpdatePin, UpdateLockfile},
+			KindAlignFiles:   {UpdateNone},
+			KindHerald:       {UpdateNone},
+			KindUpstreamSync: {UpdatePatch, UpdateMinor},
 		},
 		Rescue: RescuePolicy{
 			Enabled: false,

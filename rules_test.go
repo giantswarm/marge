@@ -74,7 +74,7 @@ func TestScenarios(t *testing.T) {
 // A scenario that names no kind is a Renovate PR, the commonest.
 func loginFor(kind string) string {
 	for _, login := range pr.TrustedLogins() {
-		if string(pr.KindOf(login)) == kind {
+		if string(pr.KindOf(login, nil)) == kind {
 			return login
 		}
 	}

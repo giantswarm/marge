@@ -574,7 +574,7 @@ func storedStatus(prs []pr.PRInfo) *pr.PRStatus {
 	status := pr.NewPRStatus()
 	for _, info := range prs {
 		idx := status.Add(info)
-		status.SetClassification(idx, pr.KindOf(info.Author), "")
+		status.SetClassification(idx, pr.KindOf(info.Author, info.Labels), "")
 		label, class := pr.StoredClass(info.Labels)
 		state, classified := pr.ClassState(class)
 		if !classified {

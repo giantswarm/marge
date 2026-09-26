@@ -282,7 +282,7 @@ func (r *Rule) validateEvidence() error {
 }
 
 // trustedKinds are the bot PR kinds a rule may name.
-var trustedKinds = []pr.Kind{pr.KindRenovate, pr.KindAlignFiles, pr.KindHerald, pr.KindDependabot}
+var trustedKinds = []pr.Kind{pr.KindRenovate, pr.KindAlignFiles, pr.KindHerald, pr.KindDependabot, pr.KindUpstreamSync}
 
 func joinNames(names []remedy.Name) string {
 	out := make([]string, len(names))

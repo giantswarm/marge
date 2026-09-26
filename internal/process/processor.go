@@ -261,12 +261,15 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 
 	author := pullReq.GetUser().GetLogin()
-	kind := pr.KindOf(author)
+	kind := pr.KindOf(author, pr.LabelNames(pullReq.Labels))
 	if kind == "" {
 		run.set(pr.StatusUntrustedAuthor, fmt.Sprintf("author %q is not a trusted bot", author))
 		return
 	}
 	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
+	if kind == pr.KindUpstreamSync {
+		updateType = p.classifyChartSync(ctx, info, pullReq)
+	}
 	run.kind, run.updateType = kind, updateType
 	status.SetClassification(idx, kind, updateType)
 
@@ -451,6 +454,17 @@ func (p *Processor) classifyObsolete(ctx context.Context, info pr.PRInfo, pullRe
 		return pr.ReasonNoOp, noOpDetail
 	}
 	return "", ""
+}
+
+// classifyChartSync reads the update type of an upstream sync PR off its
+// diff. A comparison that cannot be had, or one truncated at the file limit,
+// is UpdateUnknown: a size read off a partial diff would be a guess.
+func (p *Processor) classifyChartSync(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest) pr.UpdateType {
+	cmp := p.compare(ctx, info, pullReq)
+	if cmp == nil || len(cmp.Files) >= compareFileLimit {
+		return pr.UpdateUnknown
+	}
+	return pr.ClassifyChartSync(cmp.Files)
 }
 
 // compare fetches the base...head comparison of a PR, or nil when it cannot

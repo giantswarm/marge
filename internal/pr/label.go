@@ -1,6 +1,10 @@
 package pr
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/google/go-github/v92/github"
+)
 
 // LabelPrefix is the namespace of the one classification label the sweep
 // keeps on every bot PR it touched. Labels are display only: no guard reads
@@ -98,4 +102,18 @@ func ClassState(class string) (StatusState, bool) {
 	default:
 		return StatusUnclassified, false
 	}
+}
+
+// LabelNames returns the names of a PR's labels: what the sweep carries out
+// of a discovery besides the PR itself, so a later step can read the
+// classification a previous sweep stored and the kind the labels mark.
+func LabelNames(labels []*github.Label) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, label.GetName())
+	}
+	return names
 }

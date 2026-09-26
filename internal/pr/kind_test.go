@@ -7,14 +7,18 @@ import (
 )
 
 func TestKindOf(t *testing.T) {
-	require.Equal(t, KindRenovate, KindOf("renovate[bot]"))
-	require.Equal(t, KindAlignFiles, KindOf("giantswarm-align-files[bot]"))
-	require.Equal(t, KindHerald, KindOf("heraldbot[bot]"))
-	require.Equal(t, KindDependabot, KindOf("dependabot[bot]"))
-	require.Equal(t, Kind(""), KindOf("renovate"))
-	require.Equal(t, Kind(""), KindOf("quentin"))
-	require.Equal(t, Kind(""), KindOf(""))
+	require.Equal(t, KindRenovate, KindOf("renovate[bot]", nil))
+	require.Equal(t, KindAlignFiles, KindOf("giantswarm-align-files[bot]", nil))
+	require.Equal(t, KindHerald, KindOf("heraldbot[bot]", nil))
+	require.Equal(t, KindDependabot, KindOf("dependabot[bot]", nil))
+	require.Equal(t, Kind(""), KindOf("renovate", nil))
+	require.Equal(t, Kind(""), KindOf("quentin", nil))
+	require.Equal(t, Kind(""), KindOf("", nil))
+	require.Equal(t, KindUpstreamSync, KindOf("taylorbot", []string{"dependencies", "automated-update"}))
+	require.Equal(t, Kind(""), KindOf("taylorbot", []string{"dependencies"}), "taylorbot's other PRs carry no sync label")
+	require.Equal(t, Kind(""), KindOf("quentin", []string{"automated-update"}), "the label alone is not a sync PR")
 	require.Equal(t, []string{"dependabot[bot]", "giantswarm-align-files[bot]", "heraldbot[bot]", "renovate[bot]"}, TrustedLogins())
+	require.Equal(t, []string{"author:app/dependabot", "author:app/giantswarm-align-files", "author:app/heraldbot", "author:app/renovate", "author:taylorbot label:automated-update"}, SearchQualifiers())
 }
 
 func TestLeftToClassification(t *testing.T) {
