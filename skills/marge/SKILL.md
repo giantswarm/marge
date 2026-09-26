@@ -21,7 +21,8 @@ security remediation PRs of nancy-fixer) and `dependabot[bot]`. There is one
 more kind, the upstream chart sync: the `taylorbot` PR labelled
 `automated-update` that a vendored-chart repository's `sync-from-upstream`
 workflow opens. Its size comes from the version lines its diff changes in
-`Chart.yaml`. A PR a person
+`Chart.yaml`, and it merges only where the team's policy opts in
+(`updateTypes.upstream-sync`). A PR a person
 authored, the caller's own included, is reported as `Untrusted author` and is
 never approved and never merged.
 
