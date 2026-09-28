@@ -27,7 +27,7 @@ type Guard struct {
 
 // TrustedAuthor refuses a PR no trusted bot authored.
 var TrustedAuthor = Guard{"trusted-author", func(req *Request) string {
-	if pr.KindOf(req.Pull.GetUser().GetLogin(), pr.LabelNames(req.Pull.Labels)) == "" {
+	if pr.KindOfPull(req.Info.Owner, req.Pull) == "" {
 		return fmt.Sprintf("author %q is not a trusted bot", req.Pull.GetUser().GetLogin())
 	}
 	return ""

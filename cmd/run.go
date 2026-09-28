@@ -162,59 +162,73 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 		"review-requested:@me",
 		fmt.Sprintf("user:%s", login),
 	}
+	var filters []string
+	for _, scope := range scopeFilters {
+		for _, authorFilter := range pr.SearchQualifiers() {
+			filters = append(filters, scope+" "+authorFilter)
+		}
+	}
+	// A self-hosted Renovate running as the caller opens its PRs in the
+	// caller's own repositories as the caller.
+	filters = append(filters, fmt.Sprintf("user:%s author:%s head:%s", login, login, pr.RenovateBranchPrefix))
 
 	seen := make(map[string]bool)
 	var found discovery
-
-	for _, scope := range scopeFilters {
-		for _, authorFilter := range pr.SearchQualifiers() {
-			searchQuery := fmt.Sprintf("%s is:pr is:open archived:false %s %s", query, scope, authorFilter)
-			searchQuery = strings.TrimSpace(searchQuery)
-
-			opts := &github.SearchOptions{
-				Sort:        "updated",
-				ListOptions: github.ListOptions{PerPage: 100},
-			}
-
-			for {
-				result, resp, err := client.Search.Issues(ctx, searchQuery, opts)
-				if err != nil {
-					return discovery{}, fmt.Errorf("search failed: %w", err)
-				}
-
-				for _, issue := range result.Issues {
-					url := issue.GetHTMLURL()
-					if seen[url] {
-						continue
-					}
-					seen[url] = true
-
-					owner, repo, err := pr.ExtractOwnerRepo(url)
-					if err != nil {
-						continue
-					}
-
-					found.PRs = append(found.PRs, pr.PRInfo{
-						Owner:     owner,
-						Repo:      repo,
-						Number:    issue.GetNumber(),
-						Title:     issue.GetTitle(),
-						URL:       url,
-						Author:    issue.GetUser().GetLogin(),
-						CreatedAt: issue.GetCreatedAt().Time,
-						Labels:    pr.LabelNames(issue.Labels),
-					})
-				}
-
-				if resp.NextPage == 0 {
-					break
-				}
-				opts.Page = resp.NextPage
-			}
+	for _, filter := range filters {
+		searchQuery := strings.TrimSpace(fmt.Sprintf("%s is:pr is:open archived:false %s", query, filter))
+		prs, err := searchIssuePRs(ctx, client, searchQuery, seen)
+		if err != nil {
+			return discovery{}, err
 		}
+		found.PRs = append(found.PRs, prs...)
 	}
 
 	return found, nil
+}
+
+// searchIssuePRs pages through one GitHub search and returns the PRs not yet
+// seen.
+func searchIssuePRs(ctx context.Context, client *github.Client, searchQuery string, seen map[string]bool) ([]pr.PRInfo, error) {
+	opts := &github.SearchOptions{
+		Sort:        "updated",
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	var prs []pr.PRInfo
+	for {
+		result, resp, err := client.Search.Issues(ctx, searchQuery, opts)
+		if err != nil {
+			return nil, fmt.Errorf("search failed: %w", err)
+		}
+
+		for _, issue := range result.Issues {
+			url := issue.GetHTMLURL()
+			if seen[url] {
+				continue
+			}
+			seen[url] = true
+
+			owner, repo, err := pr.ExtractOwnerRepo(url)
+			if err != nil {
+				continue
+			}
+
+			prs = append(prs, pr.PRInfo{
+				Owner:     owner,
+				Repo:      repo,
+				Number:    issue.GetNumber(),
+				Title:     issue.GetTitle(),
+				URL:       url,
+				Author:    issue.GetUser().GetLogin(),
+				CreatedAt: issue.GetCreatedAt().Time,
+				Labels:    pr.LabelNames(issue.Labels),
+			})
+		}
+
+		if resp.NextPage == 0 {
+			return prs, nil
+		}
+		opts.Page = resp.NextPage
+	}
 }
 
 // listRepoPRs lists the open bot PRs of the repositories named, in one
@@ -237,11 +251,10 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 	var found discovery
 	seen := make(map[string]bool, len(open))
 	for _, entry := range open {
-		if pr.KindOf(entry.Author, entry.Labels) == "" || seen[entry.URL] {
+		if seen[entry.URL] {
 			continue
 		}
-		seen[entry.URL] = true
-		found.PRs = append(found.PRs, pr.PRInfo{
+		info := pr.PRInfo{
 			Owner:     entry.Owner,
 			Repo:      entry.Repo,
 			Number:    entry.Number,
@@ -250,8 +263,14 @@ func listRepoPRs(ctx context.Context, client *github.Client, repos []string, que
 			Author:    entry.Author,
 			CreatedAt: entry.CreatedAt,
 			BaseRef:   entry.BaseRef,
+			HeadRef:   entry.HeadRef,
 			Labels:    entry.Labels,
-		})
+		}
+		if pr.DiscoveredKind(info) == "" {
+			continue
+		}
+		seen[entry.URL] = true
+		found.PRs = append(found.PRs, info)
 	}
 	for _, failure := range failed {
 		found.Failed = append(found.Failed, repoFailure{Repo: failure.Repo, Err: failure.Err})

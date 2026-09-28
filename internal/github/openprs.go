@@ -20,6 +20,7 @@ type OpenPR struct {
 	URL       string
 	Author    string
 	BaseRef   string
+	HeadRef   string
 	CreatedAt time.Time
 	Labels    []string
 }
@@ -56,6 +57,7 @@ type listedPR struct {
 	URL         string    `json:"url"`
 	CreatedAt   time.Time `json:"createdAt"`
 	BaseRefName string    `json:"baseRefName"`
+	HeadRefName string    `json:"headRefName"`
 	Author      *struct {
 		Login    string `json:"login"`
 		TypeName string `json:"__typename"`
@@ -258,6 +260,7 @@ func openPRsOf(ref RepoRef, nodes []listedPR) []OpenPR {
 			URL:       node.URL,
 			Author:    node.login(),
 			BaseRef:   node.BaseRefName,
+			HeadRef:   node.HeadRefName,
 			CreatedAt: node.CreatedAt,
 			Labels:    labels,
 		})
@@ -278,6 +281,7 @@ const prFields = `
         url
         createdAt
         baseRefName
+        headRefName
         author { login __typename }
         labels(first: %d) { nodes { name } }
       }`

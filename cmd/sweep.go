@@ -134,7 +134,8 @@ repositories and organisations without a team file, under the company
 default policy. A team without a policy file is skipped and named in the
 report, and one team's unreadable policy fails that team alone. Only PRs
 authored by Renovate, Align files, Herald or Dependabot are touched, never
-a person's.
+a person's; a self-hosted Renovate's PR in a personal repository, opened as
+the owner from a renovate/ branch and signed by Renovate, is Renovate's.
 
 The policy is read from the default branch at the start of every sweep:
 bot-prs-sweep/default.yaml holds the company defaults, bot-prs-sweep/team-

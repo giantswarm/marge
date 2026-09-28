@@ -34,7 +34,7 @@ func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, found.PRs, 2)
 	for _, p := range found.PRs {
-		require.NotEqual(t, "", pr.KindOf(p.Author, p.Labels), p.Author)
+		require.NotEqual(t, "", pr.DiscoveredKind(p), p.Author)
 	}
 	require.Equal(t, []string{"dependencies", "marge/action-required"}, found.PRs[0].Labels,
 		"the labels carry the classification a previous sweep stored")
@@ -101,4 +101,51 @@ func TestSearchPRs_carriesTheLabels(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, found.PRs, 1, "the same PR is returned by every query and kept once")
 	require.Equal(t, []string{"marge/stale"}, found.PRs[0].Labels)
+}
+
+// TestListRepoPRs_selfHostedRenovate: in a personal repository the owner's
+// PR from a Renovate branch is a self-hosted Renovate candidate; the owner's
+// other PRs and a collaborator's Renovate-named branch are not.
+func TestListRepoPRs_selfHostedRenovate(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /graphql", graphQLPulls(t, map[string][]*github.PullRequest{
+		"jane/app": {
+			{Number: new(1), Title: new("chore(deps): update x to v1.2.3"), HTMLURL: new("https://github.com/jane/app/pull/1"), User: &github.User{Login: new("jane")}, Head: &github.PullRequestBranch{Ref: new("renovate/x-1.x")}},
+			{Number: new(2), Title: new("feat: by the owner"), HTMLURL: new("https://github.com/jane/app/pull/2"), User: &github.User{Login: new("jane")}, Head: &github.PullRequestBranch{Ref: new("feat")}},
+			{Number: new(3), Title: new("chore(deps): update y"), HTMLURL: new("https://github.com/jane/app/pull/3"), User: &github.User{Login: new("quentin")}, Head: &github.PullRequestBranch{Ref: new("renovate/y")}},
+		},
+	}, nil))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	baseURL := server.URL + "/"
+	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
+	require.NoError(t, err)
+
+	found, err := searchPRs(t.Context(), client, "", "me", []string{"jane/app"})
+	require.NoError(t, err)
+	require.Len(t, found.PRs, 1)
+	require.Equal(t, 1, found.PRs[0].Number)
+	require.Equal(t, "renovate/x-1.x", found.PRs[0].HeadRef)
+}
+
+// TestSearchPRs_searchesTheCallersSelfHostedRenovate: the search also asks
+// for the caller's own PRs from Renovate branches in the caller's own
+// repositories, where a self-hosted Renovate running as the caller opens them.
+func TestSearchPRs_searchesTheCallersSelfHostedRenovate(t *testing.T) {
+	var queries []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /search/issues", func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("q"))
+		_ = json.NewEncoder(w).Encode(&github.IssuesSearchResult{})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	baseURL := server.URL + "/"
+	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
+	require.NoError(t, err)
+
+	_, err = searchPRs(t.Context(), client, "", "jane", nil)
+	require.NoError(t, err)
+	require.Contains(t, queries, "is:pr is:open archived:false user:jane author:jane head:renovate/")
+	require.Contains(t, queries, "is:pr is:open archived:false user:jane author:app/renovate")
 }
