@@ -88,6 +88,7 @@ func remedyRun(state pr.StatusState) *prRun {
 		},
 		failing:        []string{"go-build"},
 		filesLoaded:    true,
+		cmpLoaded:      true,
 		commentsLoaded: true,
 	}
 }

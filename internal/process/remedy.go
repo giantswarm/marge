@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-github/v92/github"
+
 	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
@@ -123,6 +125,9 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 	req.LogMatched = hit.LogMatched
 	req.MissingContexts = hit.MissingContexts
 	req.Commands = hit.Commands
+	if cmp := run.comparison(ctx, p); cmp != nil {
+		req.BehindBy, req.BaseCompared = cmp.GetBehindBy(), true
+	}
 	return req
 }
 
@@ -207,7 +212,7 @@ func (p *Processor) diffFiles(ctx context.Context, run *prRun) []string {
 		return run.files
 	}
 	run.filesLoaded = true
-	cmp := p.compare(ctx, run.info, run.pull)
+	cmp := run.comparison(ctx, p)
 	if cmp == nil || len(cmp.Files) >= compareFileLimit {
 		return nil
 	}
@@ -216,6 +221,16 @@ func (p *Processor) diffFiles(ctx context.Context, run *prRun) []string {
 		run.files = append(run.files, f.GetFilename())
 	}
 	return run.files
+}
+
+// comparison returns the base...head comparison of the PR, fetched once per
+// run, or nil when it cannot be had.
+func (run *prRun) comparison(ctx context.Context, p *Processor) *github.CommitsComparison {
+	if !run.cmpLoaded {
+		run.cmpLoaded = true
+		run.cmp = p.compare(ctx, run.info, run.pull)
+	}
+	return run.cmp
 }
 
 // appliedThisChange names the actions an evidence marker records for the

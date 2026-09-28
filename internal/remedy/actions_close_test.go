@@ -250,6 +250,7 @@ func gateRequest(client *github.Client, commands ...string) *Request {
 	req.Check = "Heimdall - PR Gatekeeper"
 	req.Required = Required{Green: []string{"go-build"}, Pending: []string{"Heimdall - PR Gatekeeper"}}
 	req.Commands = commands
+	req.BaseCompared = true
 	return req
 }
 
@@ -293,6 +294,24 @@ func TestCommentCommandCommentsEveryProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, out.Applied)
 	require.Equal(t, "/run app-test-suites-single PROVIDER=capa\n/run app-test-suites-single PROVIDER=capz", body["body"])
+}
+
+// A suite started on a branch behind its base tests code the merge does not
+// ship, so nothing is commented until the branch is up to date.
+func TestCommentCommandRefusesABranchBehindItsBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected %s %s: a branch behind its base must not be commented on", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	req := gateRequest(apiClient(t, server), "/run app-test-suites-single PROVIDER=capa")
+	req.BehindBy = 2
+
+	out, err := Default().Apply(t.Context(), CommentCommand, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Equal(t, "the head is 2 commits behind its base", out.Refused)
 }
 
 // The command is captured from the gate's own message, so a string that is

@@ -128,6 +128,11 @@ type Request struct {
 	// check's own message. An action that comments one writes these
 	// verbatim and composes none of its own.
 	Commands []string
+	// BehindBy counts the base branch commits the head does not contain.
+	// BaseCompared reports whether the comparison could be had; without it
+	// BehindBy is no evidence that the branch is up to date.
+	BehindBy     int
+	BaseCompared bool
 	// AppliedThisChange names the actions an existing marker records for the
 	// change currently on the branch.
 	AppliedThisChange map[Name]bool
