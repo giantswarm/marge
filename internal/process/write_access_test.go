@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
@@ -184,6 +185,35 @@ func TestApprove_SettledPullRequestSkipsTheCheck(t *testing.T) {
 	}
 	if got := repoReads.Load(); got != 0 {
 		t.Errorf("repository read %d times, want 0", got)
+	}
+}
+
+// TestApprove_OwnPullRequestIsNotReviewed: GitHub refuses an author's
+// approval of their own PR, so a self-hosted Renovate PR the caller authored
+// goes to the merge without a review, and nothing is read for one.
+func TestApprove_OwnPullRequestIsNotReviewed(t *testing.T) {
+	var repoReads atomic.Int32
+	mux := repoHandler(t, false, &repoReads)
+	mux.HandleFunc("GET /repos/jane/repo/pulls/1/reviews", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("the reviews of the caller's own PR were read")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	p := &Processor{Client: newTestClient(t, server), Login: "jane"}
+	status := pr.NewPRStatus()
+	info := pr.PRInfo{Owner: "jane", Repo: "repo", Number: 1}
+	idx := status.Add(info)
+	pull := &github.PullRequest{User: &github.User{Login: new("Jane")}}
+
+	if err := p.approve(t.Context(), &prRun{info: info, pull: pull, status: status, idx: idx}); err != nil {
+		t.Fatalf("approve() = %v, want nil", err)
+	}
+	if got := repoReads.Load(); got != 0 {
+		t.Errorf("repository read %d times, want 0", got)
+	}
+	if got := p.plannedWrites(&prRun{info: info, pull: pull}, false); got != "merge (squash)" {
+		t.Errorf("plannedWrites() = %q, want %q", got, "merge (squash)")
 	}
 }
 

@@ -17,6 +17,9 @@ type PRInfo struct {
 	// BaseRef is the branch the PR targets. Empty when the PR came from a
 	// GitHub issue search, which does not report it.
 	BaseRef string
+	// HeadRef is the PR's branch. Empty when the PR came from a GitHub
+	// issue search, which does not report it.
+	HeadRef string
 	// Labels are the names of the labels on the PR, as the discovery read
 	// them. The marge/<class> label among them is the classification the
 	// last sweep stored.

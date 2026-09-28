@@ -75,9 +75,9 @@ func graphQLNodes(pulls []*github.PullRequest) string {
 			created = created.UTC()
 		}
 		nodes = append(nodes, fmt.Sprintf(
-			`{"number":%d,"title":%q,"url":%q,"createdAt":%q,"baseRefName":%q,"author":{"login":%q,"__typename":%q},"labels":{"nodes":[%s]}}`,
+			`{"number":%d,"title":%q,"url":%q,"createdAt":%q,"baseRefName":%q,"headRefName":%q,"author":{"login":%q,"__typename":%q},"labels":{"nodes":[%s]}}`,
 			pull.GetNumber(), pull.GetTitle(), pull.GetHTMLURL(), created.Format("2006-01-02T15:04:05Z"),
-			pull.GetBase().GetRef(), login, typeName, strings.Join(labels, ",")))
+			pull.GetBase().GetRef(), pull.GetHead().GetRef(), login, typeName, strings.Join(labels, ",")))
 	}
 	return strings.Join(nodes, ",")
 }

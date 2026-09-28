@@ -12,6 +12,9 @@ import (
 )
 
 func (p *Processor) approve(ctx context.Context, run *prRun) error {
+	if p.ownPR(run) {
+		return nil
+	}
 	reviews, _, err := p.Client.PullRequests.ListReviews(ctx, run.info.Owner, run.info.Repo, run.info.Number, nil)
 	if err != nil {
 		run.set(pr.StatusFailed, ghErrorDetail("review list error", err))
@@ -40,6 +43,13 @@ func (p *Processor) approve(ctx context.Context, run *prRun) error {
 	}
 
 	return nil
+}
+
+// ownPR reports whether the caller authored the PR, as a self-hosted
+// Renovate running under the caller's account does. GitHub refuses an
+// author's approval of their own PR, and a merge by the owner needs none.
+func (p *Processor) ownPR(run *prRun) bool {
+	return p.Login != "" && strings.EqualFold(run.pull.GetUser().GetLogin(), p.Login)
 }
 
 // isBaseBranchModified returns true when the merge failed because the base

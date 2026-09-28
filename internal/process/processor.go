@@ -24,9 +24,10 @@ const (
 	mergeRetryBaseWait = 10 * time.Second
 )
 
-// Processor sweeps one PR at a time. Only PRs authored by one of the four
-// trusted bots (see pr.KindOf) are touched; there is no way to widen that
-// set, and the caller's own PRs are not in it.
+// Processor sweeps one PR at a time. Only PRs of a trusted kind (see
+// pr.KindOfPull) are touched: the trusted bots', and a self-hosted
+// Renovate's in a personal repository. There is no way to widen that set,
+// and the caller's other PRs are not in it.
 type Processor struct {
 	Client         *github.Client
 	DryRun         bool
@@ -261,7 +262,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 
 	author := pullReq.GetUser().GetLogin()
-	kind := pr.KindOf(author, pr.LabelNames(pullReq.Labels))
+	kind := pr.KindOfPull(info.Owner, pullReq)
 	if kind == "" {
 		run.set(pr.StatusUntrustedAuthor, fmt.Sprintf("author %q is not a trusted bot", author))
 		return
@@ -369,7 +370,7 @@ func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 	if changelog {
 		steps = append(steps, "write the changelog entry")
 	}
-	if p.Actions.Has(ActionApprove) {
+	if p.Actions.Has(ActionApprove) && !p.ownPR(run) {
 		steps = append(steps, "approve")
 	}
 	switch {

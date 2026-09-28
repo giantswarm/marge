@@ -8,10 +8,12 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/go-github/v92/github"
 )
 
 // Kind is the bot that authored a PR. The sweep touches PRs of these five
-// kinds and nothing else; a human-authored PR has no kind.
+// kinds and nothing else; a human-authored PR has no kind, a self-hosted
+// Renovate's is KindRenovate.
 type Kind string
 
 const (
@@ -47,6 +49,57 @@ func KindOf(login string, labels []string) Kind {
 	}
 	if login == upstreamSyncLogin && slices.Contains(labels, UpstreamSyncLabel) {
 		return KindUpstreamSync
+	}
+	return ""
+}
+
+// A self-hosted Renovate that runs under the account owning a personal
+// repository opens its PRs as that account, not as the Renovate App. Such a
+// PR is Renovate's when the owner authored it from a Renovate branch and its
+// body carries one of the markers Renovate ends its PRs with: the debug
+// marker of an update PR, the config hash of an onboarding PR.
+const RenovateBranchPrefix = "renovate/"
+
+var renovateSignatures = []string{"<!--renovate-debug:", "<!--renovate-config-hash:"}
+
+func renovateSigned(body string) bool {
+	return slices.ContainsFunc(renovateSignatures, func(marker string) bool {
+		return strings.Contains(body, marker)
+	})
+}
+
+// SelfHostedRenovateCandidate reports whether the PR could be a self-hosted
+// Renovate PR: its author owns the repository and it comes from a Renovate
+// branch. An organisation never authors a PR, so no organisation repository
+// has one. The discovery reads no PR body; KindOfPull decides with it.
+func SelfHostedRenovateCandidate(login, owner, headRef string) bool {
+	return login != "" && strings.EqualFold(login, owner) && strings.HasPrefix(headRef, RenovateBranchPrefix)
+}
+
+// KindOfPull returns the kind of a pull request of a repository owned by
+// owner: the kind of its bot author, or KindRenovate for a self-hosted
+// Renovate PR, or "" for anyone else's.
+func KindOfPull(owner string, pull *github.PullRequest) Kind {
+	login := pull.GetUser().GetLogin()
+	if kind := KindOf(login, LabelNames(pull.Labels)); kind != "" {
+		return kind
+	}
+	if SelfHostedRenovateCandidate(login, owner, pull.GetHead().GetRef()) &&
+		renovateSigned(pull.GetBody()) {
+		return KindRenovate
+	}
+	return ""
+}
+
+// DiscoveredKind returns the kind a PR's discovery reads: the kind of its
+// bot author, or KindRenovate for a self-hosted Renovate candidate, which
+// KindOfPull confirms before anything is written.
+func DiscoveredKind(info PRInfo) Kind {
+	if kind := KindOf(info.Author, info.Labels); kind != "" {
+		return kind
+	}
+	if SelfHostedRenovateCandidate(info.Author, info.Owner, info.HeadRef) {
+		return KindRenovate
 	}
 	return ""
 }
@@ -97,11 +150,12 @@ func TrustedLogins() []string {
 // TrustedAuthors describes the authors of the trusted kinds, sorted, for a
 // refusal to name.
 func TrustedAuthors() []string {
-	out := make([]string, 0, len(kindByLogin)+1)
+	out := make([]string, 0, len(kindByLogin)+2)
 	for login := range kindByLogin {
 		out = append(out, login)
 	}
 	out = append(out, upstreamSyncLogin+" (label "+UpstreamSyncLabel+")")
+	out = append(out, "the owner of a personal repository (self-hosted Renovate, branch "+RenovateBranchPrefix+")")
 	sort.Strings(out)
 	return out
 }
