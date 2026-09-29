@@ -127,10 +127,10 @@ func (p *Processor) classifyFailure(ctx context.Context, run *prRun, outcome che
 	} else if note != "" {
 		run.note(note)
 	}
-	// The staleness heuristic, the no-op rule and the remedies all read the
-	// base...head comparison, so it is fetched once for the run. An error
-	// leaves it nil and neither classification fires.
-	cmp := run.comparison(ctx, p)
+	// The staleness heuristic and the no-op rule both read the base...head
+	// comparison, so it is fetched once for both. An error leaves it nil and
+	// neither classification fires.
+	cmp := p.compare(ctx, run.info, run.pull)
 	if stale := p.classifyStale(ctx, run.info, run.pull, outcome.failedChecks, cmp); stale != nil {
 		p.handleStale(ctx, run, stale)
 		return false

@@ -125,10 +125,22 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 	req.LogMatched = hit.LogMatched
 	req.MissingContexts = hit.MissingContexts
 	req.Commands = hit.Commands
-	if cmp := run.comparison(ctx, p); cmp != nil {
-		req.BehindBy, req.BaseCompared = cmp.GetBehindBy(), true
+	if p.comparesBase(hit) {
+		if cmp := run.comparison(ctx, p); cmp != nil {
+			req.BehindBy, req.BaseCompared = cmp.GetBehindBy(), true
+		}
 	}
 	return req
+}
+
+// comparesBase reports whether a guard the matched rule runs reads the
+// base...head comparison, which costs a request the other guards do not.
+func (p *Processor) comparesBase(hit *rules.Hit) bool {
+	names := p.Remedies.GuardNames(hit.Rule.Action.Name)
+	for _, guard := range hit.Rule.Guards() {
+		names = append(names, guard.Name)
+	}
+	return slices.Contains(names, remedy.UpToDate.Name)
 }
 
 // actionRequest is what every action reads about a PR, whether a rule

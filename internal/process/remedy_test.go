@@ -189,22 +189,55 @@ func TestRuleStageReportsAGuardRefusal(t *testing.T) {
 }
 
 // The request carries how far the head is behind its base, and says so only
-// when the comparison was had.
+// when the comparison was had. An action that does not guard on it is not
+// charged the request.
 func TestRuleStageRequestCarriesTheComparison(t *testing.T) {
-	var requests []*remedy.Request
-	p := remedyProcessor(t, "failed", &requests)
-	run := remedyRun(pr.StatusFailed)
-	run.cmp = &github.CommitsComparison{BehindBy: new(2)}
+	gated := func(t *testing.T, requests *[]*remedy.Request) *Processor {
+		p := remedyProcessor(t, "failed", requests)
+		p.Remedies = remedy.NewRegistry(recordingAction{name: remedy.UpdateBranch, guards: []remedy.Guard{remedy.UpToDate}, requests: requests})
+		return p
+	}
 
-	p.applyRule(t.Context(), run)
+	t.Run("compared", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+		run.cmp = &github.CommitsComparison{BehindBy: new(0)}
 
-	require.Len(t, requests, 1)
-	require.True(t, requests[0].BaseCompared)
-	require.Equal(t, 2, requests[0].BehindBy)
+		gated(t, &requests).applyRule(t.Context(), run)
 
-	requests = nil
-	p.applyRule(t.Context(), remedyRun(pr.StatusFailed))
+		require.Len(t, requests, 1)
+		require.True(t, requests[0].BaseCompared)
+	})
 
-	require.Len(t, requests, 1)
-	require.False(t, requests[0].BaseCompared)
+	t.Run("behind", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+		run.cmp = &github.CommitsComparison{BehindBy: new(2)}
+
+		gated(t, &requests).applyRule(t.Context(), run)
+
+		require.Empty(t, requests)
+		require.Contains(t, run.notes[0], "the head is 2 commits behind its base")
+	})
+
+	t.Run("not compared", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+
+		gated(t, &requests).applyRule(t.Context(), run)
+
+		require.Empty(t, requests)
+		require.Contains(t, run.notes[0], "could not be compared")
+	})
+
+	t.Run("unguarded", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+		run.cmpLoaded = false
+
+		remedyProcessor(t, "failed", &requests).applyRule(t.Context(), run)
+
+		require.Len(t, requests, 1)
+		require.False(t, run.cmpLoaded, "an action without the up-to-date guard fetched the comparison")
+	})
 }
