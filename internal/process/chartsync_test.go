@@ -45,7 +45,7 @@ func TestClassifyChartSync_readsTheSizeOffTheComparison(t *testing.T) {
 				Head: &github.PullRequestBranch{SHA: new("head"), Ref: new("update-chart")},
 				Base: &github.PullRequestBranch{Ref: new("main")},
 			}
-			got := proc.classifyChartSync(t.Context(), pr.PRInfo{Owner: "org", Repo: "kagent", Number: 80}, pull)
+			got := proc.classifyChartSync(t.Context(), &prRun{info: pr.PRInfo{Owner: "org", Repo: "kagent", Number: 80}, pull: pull})
 			require.Equal(t, tc.want, got)
 		})
 	}
@@ -61,5 +61,5 @@ func TestClassifyChartSync_unknownWithoutAComparison(t *testing.T) {
 		Head: &github.PullRequestBranch{SHA: new("head")},
 		Base: &github.PullRequestBranch{Ref: new("main")},
 	}
-	require.Equal(t, pr.UpdateUnknown, proc.classifyChartSync(t.Context(), pr.PRInfo{Owner: "org", Repo: "kagent", Number: 80}, pull))
+	require.Equal(t, pr.UpdateUnknown, proc.classifyChartSync(t.Context(), &prRun{info: pr.PRInfo{Owner: "org", Repo: "kagent", Number: 80}, pull: pull}))
 }

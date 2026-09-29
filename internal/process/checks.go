@@ -88,6 +88,7 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 			return false
 		case <-time.After(checkPollInterval):
 		}
+		run.forgetComparison()
 	}
 }
 
@@ -127,15 +128,14 @@ func (p *Processor) classifyFailure(ctx context.Context, run *prRun, outcome che
 	} else if note != "" {
 		run.note(note)
 	}
-	// The staleness heuristic and the no-op rule both read the base...head
-	// comparison, so it is fetched once for both. An error leaves it nil and
-	// neither classification fires.
-	cmp := p.compare(ctx, run.info, run.pull)
+	// An error leaves the comparison nil, and neither the staleness heuristic
+	// nor the no-op rule fires.
+	cmp := run.comparison(ctx, p)
 	if stale := p.classifyStale(ctx, run.info, run.pull, outcome.failedChecks, cmp); stale != nil {
 		p.handleStale(ctx, run, stale)
 		return false
 	}
-	if reason, detail := p.classifyObsolete(ctx, run.info, run.pull, cmp); reason != "" {
+	if reason, detail := p.classifyObsolete(ctx, run); reason != "" {
 		run.markObsolete(reason, detail)
 		return false
 	}

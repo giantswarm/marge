@@ -2,6 +2,9 @@ package process
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -240,4 +243,32 @@ func TestRuleStageRequestCarriesTheComparison(t *testing.T) {
 		require.Len(t, requests, 1)
 		require.False(t, run.cmpLoaded, "an action without the up-to-date guard fetched the comparison")
 	})
+}
+
+// A comparison that was had is kept for the poll and dropped with it; a
+// failed fetch is not kept, so the next reader asks again.
+func TestComparisonKeepsOnlyWhatWasHad(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(github.CommitsComparison{BehindBy: new(calls)})
+	}))
+	defer srv.Close()
+	p := &Processor{Client: newTestClient(t, srv)}
+	run := remedyRun(pr.StatusWaitingChecks)
+	run.cmpLoaded = false
+
+	require.Nil(t, run.comparison(t.Context(), p))
+	require.Equal(t, 2, run.comparison(t.Context(), p).GetBehindBy())
+	require.Equal(t, 2, run.comparison(t.Context(), p).GetBehindBy())
+	require.Equal(t, 2, calls)
+
+	run.forgetComparison()
+
+	require.Equal(t, 3, run.comparison(t.Context(), p).GetBehindBy())
 }

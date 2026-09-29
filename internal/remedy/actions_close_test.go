@@ -312,6 +312,7 @@ func TestCommentCommandRefusesABranchBehindItsBase(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, out.Applied)
 	require.Equal(t, "the head is 2 commits behind its base", out.Refused)
+	require.Equal(t, UpToDate.Name, out.RefusedBy)
 }
 
 // The command is captured from the gate's own message, so a string that is
