@@ -293,7 +293,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 			run.markObsolete(reason, detail)
 			return
 		}
-		p.setConflict(run, "merge conflict")
+		p.setConflict(ctx, run, "merge conflict")
 		return
 	}
 	run.set(pr.StatusChecking, "")

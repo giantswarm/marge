@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-github/v92/github"
+
 	"github.com/giantswarm/marge/internal/pr"
 )
 
@@ -56,7 +58,17 @@ func (p *Processor) recordMerge(info pr.PRInfo) {
 // setConflict records a merge conflict. A conflict the sweep caused itself,
 // by merging another PR of the same repository earlier in the run, is not
 // work for a person: the bot rebases the PR and the second pass merges it.
-func (p *Processor) setConflict(run *prRun, detail string) {
+//
+// Renovate rebases only a branch it still considers its own. A Renovate PR
+// whose last commit is a person's is a conflict for a person whoever caused
+// it, and the detail names the one step that hands the branch back.
+func (p *Processor) setConflict(ctx context.Context, run *prRun, detail string) {
+	if author := p.strandingAuthor(ctx, run); author != "" {
+		run.set(pr.StatusConflict, fmt.Sprintf(
+			"%s; the last commit is by %s, so Renovate does not rebase the branch: tick the rebase checkbox in the PR body",
+			detail, author))
+		return
+	}
 	p.rebaseMu.Lock()
 	sibling, caused := p.mergedBy[run.info.Owner+"/"+run.info.Repo]
 	queue := caused && !p.revisiting
@@ -72,6 +84,33 @@ func (p *Processor) setConflict(run *prRun, detail string) {
 		return
 	}
 	run.set(pr.StatusAwaitingRebase, fmt.Sprintf("conflicted by #%d, merged in this run; the bot rebases it", sibling))
+}
+
+// strandingAuthor returns the author of a Renovate PR's last commit when
+// that author stops Renovate rebasing the branch, and "" otherwise. A commit
+// the lookup cannot read leaves the conflict as it was classified before:
+// the second pass still reports a PR the bot did not rebase in time.
+func (p *Processor) strandingAuthor(ctx context.Context, run *prRun) string {
+	if run.kind != pr.KindRenovate {
+		return ""
+	}
+	head := run.pull.GetHead().GetSHA()
+	if head == "" {
+		return ""
+	}
+	commit, _, err := p.Client.Repositories.GetCommit(ctx, run.info.Owner, run.info.Repo, head, &github.ListOptions{PerPage: 1})
+	if err != nil {
+		return ""
+	}
+	login := commit.GetAuthor().GetLogin()
+	email := commit.GetCommit().GetAuthor().GetEmail()
+	if pr.BotRebasesAfter(run.pull.GetUser().GetLogin(), login, email) {
+		return ""
+	}
+	if login != "" {
+		return login
+	}
+	return email
 }
 
 // rebaseWait is how long the second pass waits for the bot.

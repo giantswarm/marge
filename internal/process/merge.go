@@ -129,7 +129,7 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			case isChecksRefusal(err):
 				run.set(pr.StatusWaitingChecks, ghErrorDetail("merge refused", err))
 			case strings.Contains(errMsg, "409") || strings.Contains(errMsg, "conflict"):
-				p.setConflict(run, "merge conflict")
+				p.setConflict(ctx, run, "merge conflict")
 			default:
 				run.set(pr.StatusFailed, ghErrorDetail("merge error", err))
 			}
@@ -159,7 +159,7 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			return
 		}
 		if refreshed.GetMergeableState() == "dirty" {
-			p.setConflict(run, "merge conflict on retry")
+			p.setConflict(ctx, run, "merge conflict on retry")
 			return
 		}
 		if refreshed.GetMergeableState() == "behind" {

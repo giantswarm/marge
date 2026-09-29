@@ -37,6 +37,9 @@ type ChangelogOutcome struct {
 // for. The check is on the line itself, so it survives a rebase, a second
 // sweep and a person who wrote the entry by hand.
 //
+// The commit is authored by the marge App whatever token writes it; see
+// AppAuthor.
+//
 // dryRun renders the line and reads the file, and writes nothing.
 func WriteChangelogEntry(
 	ctx context.Context,
@@ -86,6 +89,7 @@ func WriteChangelogEntry(
 		Content: []byte(next),
 		SHA:     new(sha),
 		Branch:  new(branch),
+		Author:  AppAuthor(),
 	})
 	if err != nil {
 		return outcome, fmt.Errorf("committing the entry: %w", err)
