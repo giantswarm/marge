@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/go-github/v92/github"
@@ -31,15 +32,43 @@ type reviewRule struct {
 	CodeOwnerReviews bool
 }
 
-// protectionCache memoises requiredProtection and requiredReview per
-// owner/repo@base for the lifetime of the Processor: every PR of a
-// repository shares one base.
+// protectionCache memoises requiredProtection, requiredReview and the
+// branch's rulesets per owner/repo@base for the lifetime of the Processor:
+// every PR of a repository shares one base.
 type protectionCache struct {
 	protections memo[protection]
 	reviews     memo[reviewRule]
+	rules       memo[*github.BranchRules]
 }
 
-// requiredProtection reads the base branch's required status checks. A 404
+// branchRules reads the rulesets that apply to the base branch. A branch can
+// carry classic protection, rulesets or both, and GitHub enforces all of
+// them, so every reader of the base branch's rules reads both. A 404 or 403
+// means no ruleset the caller may see; a rate refusal or any other error is
+// returned, for the reasons requiredProtection gives.
+func (p *Processor) branchRules(ctx context.Context, info pr.PRInfo, base string) (*github.BranchRules, error) {
+	key := info.Owner + "/" + info.Repo + "@" + base
+	return p.rules.get(key, func() (*github.BranchRules, error) {
+		rules, resp, err := p.Client.Repositories.ListRulesForBranch(ctx, info.Owner, info.Repo, base, nil)
+		switch {
+		case err == nil:
+			if rules == nil {
+				rules = &github.BranchRules{}
+			}
+			return rules, nil
+		case isRateLimit(err):
+			return nil, err
+		case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
+			return &github.BranchRules{}, nil
+		default:
+			return nil, err
+		}
+	})
+}
+
+// requiredProtection reads the base branch's required status checks, from
+// its classic protection and from its rulesets together: a repository set
+// up by devctl carries only the ruleset. A 404
 // means the branch has no protection or no required checks: nothing is
 // required. A 403 means the caller is not an admin: only an admin may merge
 // past the protection when enforce_admins is off, so GitHub enforces the
@@ -68,11 +97,24 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 		default:
 			return protection{}, err
 		}
+		rules, err := p.branchRules(ctx, info, base)
+		if err != nil {
+			return protection{}, err
+		}
+		for _, rule := range rules.RequiredStatusChecks {
+			result.Strict = result.Strict || rule.Parameters.StrictRequiredStatusChecksPolicy
+			for _, c := range rule.Parameters.RequiredStatusChecks {
+				if c != nil && c.Context != "" && !slices.Contains(result.Contexts, c.Context) {
+					result.Contexts = append(result.Contexts, c.Context)
+				}
+			}
+		}
 		return result, nil
 	})
 }
 
-// requiredReview reads the base branch's review enforcement. It handles the
+// requiredReview reads the base branch's review enforcement, from its classic
+// protection and from its rulesets' pull request rules. It handles the
 // two statuses requiredProtection handles, for the same reasons: a 404 means
 // the branch enforces no review, and a 403 means the caller may not read the
 // protection, which is not a rule the sweep may claim.
@@ -89,6 +131,13 @@ func (p *Processor) requiredReview(ctx context.Context, info pr.PRInfo, base str
 		case isStatus(err, resp, http.StatusNotFound), isStatus(err, resp, http.StatusForbidden):
 		default:
 			return reviewRule{}, err
+		}
+		rules, err := p.branchRules(ctx, info, base)
+		if err != nil {
+			return reviewRule{}, err
+		}
+		for _, rule := range rules.PullRequest {
+			result.CodeOwnerReviews = result.CodeOwnerReviews || rule.Parameters.RequireCodeOwnerReview
 		}
 		return result, nil
 	})

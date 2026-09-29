@@ -83,6 +83,9 @@ func concurrentServer(t *testing.T, prCount int) (*countingServer, *httptest.Ser
 			BaseCommit: &github.RepositoryCommit{SHA: new(concurrentBase)},
 		})
 	})
+	mux.HandleFunc("GET /repos/org/repo/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
 		counted.record("required-status-checks")
 		http.NotFound(w, r)

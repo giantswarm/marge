@@ -233,6 +233,9 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		}
 		writeJSON(w, github.RequiredStatusChecks{Strict: f.strict, Checks: &checks})
 	})
+	mux.HandleFunc("GET /repos/"+repo+"/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, []any{})
+	})
 	for _, route := range []string{
 		"DELETE /repos/" + repo + "/branches/main/protection/enforce_admins",
 		"POST /repos/" + repo + "/branches/main/protection/enforce_admins",

@@ -106,3 +106,85 @@ func TestRequiredReviewRefusesARateLimit(t *testing.T) {
 		})
 	}
 }
+
+// rulesServer answers the classic protection routes with classic, 404 when
+// it is empty, and the branch rules route with rules, the array GitHub
+// sends.
+func rulesServer(t *testing.T, classic map[string]string, rules string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	for route, body := range classic {
+		mux.HandleFunc("GET /repos/org/repo/branches/main/protection/"+route, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		})
+	}
+	mux.HandleFunc("GET /repos/org/repo/rules/branches/main", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(rules))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+// devctlRuleset is the shape of the ruleset devctl sets up: no classic
+// protection, the required checks and the review rule in one ruleset.
+const devctlRuleset = `[
+  {"type":"deletion","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":1},
+  {"type":"pull_request","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":1,
+   "parameters":{"required_approving_review_count":1,"require_code_owner_review":true,"dismiss_stale_reviews_on_push":false,"require_last_push_approval":false,"required_review_thread_resolution":false}},
+  {"type":"required_status_checks","ruleset_source_type":"Repository","ruleset_source":"org/repo","ruleset_id":1,
+   "parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"ci/circleci: go-build"},{"context":"pre-commit"}]}}
+]`
+
+// A branch protected only by a ruleset answers the classic routes with 404.
+// Reading only those made every required context of a devctl-aligned
+// repository look satisfied and hid its code-owner rule.
+func TestRequiredProtectionReadsRulesets(t *testing.T) {
+	processor := &Processor{Client: newTestClient(t, rulesServer(t, nil, devctlRuleset))}
+	info := pr.PRInfo{Owner: "org", Repo: "repo"}
+
+	prot, err := processor.requiredProtection(t.Context(), info, "main")
+	require.NoError(t, err)
+	require.Equal(t, []string{"ci/circleci: go-build", "pre-commit"}, prot.Contexts)
+	require.False(t, prot.Strict)
+
+	review, err := processor.requiredReview(t.Context(), info, "main")
+	require.NoError(t, err)
+	require.True(t, review.CodeOwnerReviews)
+}
+
+// GitHub enforces classic protection and rulesets together, so the required
+// set is their union, a context named by both counted once, and either one
+// being strict makes the branch strict.
+func TestRequiredProtectionUnitesClassicAndRulesets(t *testing.T) {
+	classic := map[string]string{
+		"required_status_checks": `{"strict":false,"checks":[{"context":"pre-commit"},{"context":"lint"}]}`,
+	}
+	rules := `[{"type":"required_status_checks","ruleset_source_type":"Organization","ruleset_source":"org","ruleset_id":2,
+	  "parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"pre-commit"},{"context":"build"}]}}]`
+	processor := &Processor{Client: newTestClient(t, rulesServer(t, classic, rules))}
+
+	prot, err := processor.requiredProtection(t.Context(), pr.PRInfo{Owner: "org", Repo: "repo"}, "main")
+	require.NoError(t, err)
+	require.Equal(t, []string{"pre-commit", "lint", "build"}, prot.Contexts)
+	require.True(t, prot.Strict)
+}
+
+// A rate refusal on the rules read is no more an answer than one on the
+// classic read: nothing is cached and the error reaches the caller.
+func TestBranchRulesRefusesARateLimit(t *testing.T) {
+	for name, shape := range rateLimitShapes() {
+		t.Run(name, func(t *testing.T) {
+			processor := &Processor{Client: newTestClient(t, protectionServer(t, shape.header, http.StatusForbidden, shape.body))}
+			info := pr.PRInfo{Owner: "org", Repo: "repo"}
+
+			_, err := processor.branchRules(t.Context(), info, "main")
+			require.Error(t, err)
+
+			_, err = processor.branchRules(t.Context(), info, "main")
+			require.Error(t, err)
+		})
+	}
+}
