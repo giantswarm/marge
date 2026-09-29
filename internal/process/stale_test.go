@@ -158,6 +158,9 @@ func (f *staleFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
+	mux.HandleFunc("GET /repos/org/repo/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, []any{})
+	})
 	mux.HandleFunc("POST /repos/org/repo/issues/1/labels", func(w http.ResponseWriter, r *http.Request) {
 		f.labelCalls.Add(1)
 		writeJSON(w, []*github.Label{})
