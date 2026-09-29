@@ -210,6 +210,9 @@ func (f *noVerdictFixture) run(t *testing.T) pr.StatusEntry {
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_pull_request_reviews", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
+	mux.HandleFunc("GET /repos/org/repo/rules/branches/main", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("GET /repos/org/repo/branches/main/protection/required_status_checks", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
