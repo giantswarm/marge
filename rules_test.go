@@ -84,8 +84,7 @@ func loginFor(kind string) string {
 // requestFor builds the most favourable action request a scenario allows: a
 // trusted bot's open PR, no failing security check, every required context
 // green, a head that has finished reporting and is up to date with its base,
-// and no earlier attempt. A guard
-// that still refuses here refuses for ever.
+// and no earlier attempt. A guard that still refuses here refuses for ever.
 func requestFor(rule *rules.Rule, scenario *rules.Scenario) *remedy.Request {
 	now := time.Now()
 	req := &remedy.Request{

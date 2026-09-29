@@ -187,3 +187,24 @@ func TestRuleStageReportsAGuardRefusal(t *testing.T) {
 	require.Equal(t, pr.StatusFailed, run.status.StateAt(run.idx))
 	require.Contains(t, run.notes[0], "rule catch-all refused: security check failed: govulncheck")
 }
+
+// The request carries how far the head is behind its base, and says so only
+// when the comparison was had.
+func TestRuleStageRequestCarriesTheComparison(t *testing.T) {
+	var requests []*remedy.Request
+	p := remedyProcessor(t, "failed", &requests)
+	run := remedyRun(pr.StatusFailed)
+	run.cmp = &github.CommitsComparison{BehindBy: new(2)}
+
+	p.applyRule(t.Context(), run)
+
+	require.Len(t, requests, 1)
+	require.True(t, requests[0].BaseCompared)
+	require.Equal(t, 2, requests[0].BehindBy)
+
+	requests = nil
+	p.applyRule(t.Context(), remedyRun(pr.StatusFailed))
+
+	require.Len(t, requests, 1)
+	require.False(t, requests[0].BaseCompared)
+}

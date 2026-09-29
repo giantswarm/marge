@@ -140,7 +140,9 @@ var UpToDate = Guard{"up-to-date", func(req *Request) string {
 	switch {
 	case !req.BaseCompared:
 		return "the head could not be compared with its base"
-	case req.BehindBy > 0:
+	case req.BehindBy == 1:
+		return "the head is 1 commit behind its base"
+	case req.BehindBy > 1:
 		return fmt.Sprintf("the head is %d commits behind its base", req.BehindBy)
 	}
 	return ""

@@ -151,8 +151,8 @@ type prRun struct {
 	// that carries a file signal.
 	files       []string
 	filesLoaded bool
-	// cmp is the base...head comparison, fetched once for the rules and
-	// the action request that read it.
+	// cmp is the base...head comparison, fetched once for the failure
+	// classification, the rules and the action request that read it.
 	cmp       *github.CommitsComparison
 	cmpLoaded bool
 	// statusTargets and detailsURLs say where each failing check's log
