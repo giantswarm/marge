@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +27,9 @@ type rebaseFixture struct {
 	// dirtyReads is how many reads of #2 report a conflict before the bot
 	// rebases it. A large number means the bot never rebases.
 	dirtyReads int32
+	// headAuthor is the login of the last commit on #2's branch; empty is
+	// Renovate's own.
+	headAuthor string
 
 	reads2  atomic.Int32
 	merged1 atomic.Int32
@@ -107,6 +111,13 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 			})
 		})
 	}
+	mux.HandleFunc("GET /repos/org/repo/commits/bbb", func(w http.ResponseWriter, r *http.Request) {
+		author := f.headAuthor
+		if author == "" {
+			author = "renovate[bot]"
+		}
+		writeJSON(w, github.RepositoryCommit{SHA: new("bbb"), Author: &github.User{Login: new(author)}})
+	})
 	mux.HandleFunc("GET /repos/org/repo", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, github.Repository{Permissions: &github.RepositoryPermissions{Push: new(true)}})
 	})
@@ -245,5 +256,45 @@ func TestRebase_NoOverlapCostsNothing(t *testing.T) {
 		if got := status.Snapshot()[i]; got.State != pr.StatusMerged {
 			t.Errorf("entry %d = %v (%s), want StatusMerged", i, got.State, got.Detail)
 		}
+	}
+}
+
+// TestRebase_APersonsCommitStrandsTheBranch is giantswarm/marge#199: a
+// conflict the sweep caused is only the bot's to resolve while the branch is
+// still the bot's. A by-hand sweep that committed as a person left twelve PRs
+// reported as awaiting a rebase that Renovate never does.
+func TestRebase_APersonsCommitStrandsTheBranch(t *testing.T) {
+	f := &rebaseFixture{dirtyReads: 100, headAuthor: "teemow"}
+	proc := NewProcessor(newTestClient(t, f.server(t)), false, false, "marge[bot]")
+	proc.RebaseWait = time.Hour
+
+	status, idx := f.sweep(t, proc)
+
+	got := status.Snapshot()[idx[1]]
+	if got.State != pr.StatusConflict {
+		t.Fatalf("#2 = %v (%s), want StatusConflict: Renovate does not rebase a branch a person committed to", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "by teemow") || !strings.Contains(got.Detail, "tick the rebase checkbox") {
+		t.Errorf("detail = %q, want the commit's author and the rebase checkbox", got.Detail)
+	}
+
+	start := time.Now()
+	proc.Revisit(t.Context(), status)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the second pass waited %s for a rebase that never comes", elapsed)
+	}
+}
+
+// TestRebase_MargesOwnCommitKeepsTheBranchTheBots: marge's changelog commit
+// is authored by the App, which Renovate ignores, so the bot still rebases.
+func TestRebase_MargesOwnCommitKeepsTheBranchTheBots(t *testing.T) {
+	f := &rebaseFixture{dirtyReads: 1, headAuthor: pr.AppLogin}
+	proc := NewProcessor(newTestClient(t, f.server(t)), false, false, "marge[bot]")
+	proc.RebaseWait = time.Second
+
+	status, idx := f.sweep(t, proc)
+
+	if got := status.Snapshot()[idx[1]]; got.State != pr.StatusAwaitingRebase {
+		t.Fatalf("#2 = %v (%s), want StatusAwaitingRebase", got.State, got.Detail)
 	}
 }

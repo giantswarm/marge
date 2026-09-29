@@ -102,6 +102,11 @@ func (f *siblingFixture) run(t *testing.T) pr.StatusEntry {
 			Files:      files,
 		})
 	})
+	// A conflict reads who wrote the head, since only Renovate's own branch
+	// is one Renovate rebases.
+	mux.HandleFunc("GET /repos/org/repo/commits/"+fxHead, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, github.RepositoryCommit{SHA: new(fxHead), Author: &github.User{Login: new("renovate[bot]")}})
+	})
 	// The dry-run path checks the reviewer's write access before it reports
 	// a skip, so a green PR reaches this handler.
 	mux.HandleFunc("GET /repos/org/repo", func(w http.ResponseWriter, r *http.Request) {
