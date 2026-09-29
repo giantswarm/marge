@@ -133,6 +133,21 @@ var OnlyGateWaiting = Guard{"only-gate-waiting", func(req *Request) string {
 	return ""
 }}
 
+// UpToDate refuses while the head lacks a commit of its base branch, or
+// when that cannot be told. A suite run on a stale branch tests code the
+// merge does not ship, and the branch update that follows restarts it.
+var UpToDate = Guard{"up-to-date", func(req *Request) string {
+	switch {
+	case !req.BaseCompared:
+		return "the head could not be compared with its base"
+	case req.BehindBy == 1:
+		return "the head is 1 commit behind its base"
+	case req.BehindBy > 1:
+		return fmt.Sprintf("the head is %d commits behind its base", req.BehindBy)
+	}
+	return ""
+}}
+
 // ChecksSettled refuses while the head may still report a context for the
 // first time. A context nobody reported is drift only once the head has
 // reported something, nothing is running, and the newest report is older

@@ -151,6 +151,10 @@ type prRun struct {
 	// that carries a file signal.
 	files       []string
 	filesLoaded bool
+	// cmp is the base...head comparison while cmpLoaded, shared by every
+	// reader of one poll.
+	cmp       *github.CommitsComparison
+	cmpLoaded bool
 	// statusTargets and detailsURLs say where each failing check's log
 	// lives: a CircleCI build behind a commit status, an Actions job behind
 	// a check run.
@@ -269,7 +273,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	}
 	updateType := pr.ClassifyUpdate(kind, pullReq.GetTitle(), pullReq.GetBody())
 	if kind == pr.KindUpstreamSync {
-		updateType = p.classifyChartSync(ctx, info, pullReq)
+		updateType = p.classifyChartSync(ctx, run)
 	}
 	run.kind, run.updateType = kind, updateType
 	status.SetClassification(idx, kind, updateType)
@@ -289,7 +293,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		return
 	}
 	if pullReq.GetMergeableState() == "dirty" {
-		if reason, detail := p.classifyObsolete(ctx, run.info, pullReq, nil); reason != "" {
+		if reason, detail := p.classifyObsolete(ctx, run); reason != "" {
 			run.markObsolete(reason, detail)
 			return
 		}
@@ -441,17 +445,13 @@ const compareFileLimit = 300
 // changes nothing that executes. An empty reason means neither holds.
 //
 // Supersession is read from the sweep's PR list, so it costs no request and
-// is decided first. cmp is the base...head comparison when the caller
-// already holds it, and nil when it has to be fetched; a comparison that
-// cannot be had only rules out the no-op verdict.
-func (p *Processor) classifyObsolete(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest, cmp *github.CommitsComparison) (pr.ObsoleteReason, string) {
-	if detail, ok := p.SupersededBy[pr.PRKey(info)]; ok {
+// is decided first. A comparison that cannot be had only rules out the
+// no-op verdict.
+func (p *Processor) classifyObsolete(ctx context.Context, run *prRun) (pr.ObsoleteReason, string) {
+	if detail, ok := p.SupersededBy[pr.PRKey(run.info)]; ok {
 		return pr.ReasonSuperseded, detail
 	}
-	if cmp == nil {
-		cmp = p.compare(ctx, info, pullReq)
-	}
-	if cmp != nil && len(cmp.Files) < compareFileLimit && pr.NoOpDiff(cmp.Files) {
+	if cmp := run.comparison(ctx, p); cmp != nil && len(cmp.Files) < compareFileLimit && pr.NoOpDiff(cmp.Files) {
 		return pr.ReasonNoOp, noOpDetail
 	}
 	return "", ""
@@ -460,8 +460,8 @@ func (p *Processor) classifyObsolete(ctx context.Context, info pr.PRInfo, pullRe
 // classifyChartSync reads the update type of an upstream sync PR off its
 // diff. A comparison that cannot be had, or one truncated at the file limit,
 // is UpdateUnknown: a size read off a partial diff would be a guess.
-func (p *Processor) classifyChartSync(ctx context.Context, info pr.PRInfo, pullReq *github.PullRequest) pr.UpdateType {
-	cmp := p.compare(ctx, info, pullReq)
+func (p *Processor) classifyChartSync(ctx context.Context, run *prRun) pr.UpdateType {
+	cmp := run.comparison(ctx, p)
 	if cmp == nil || len(cmp.Files) >= compareFileLimit {
 		return pr.UpdateUnknown
 	}
@@ -522,7 +522,7 @@ func withNote(detail, note string) string {
 // button) through the remedy action, so the hand-written path and a rule
 // that names update-branch run the same code behind the same guards.
 func (p *Processor) updateBranch(ctx context.Context, run *prRun, why string) {
-	outcome, err := p.remedies().Apply(ctx, remedy.UpdateBranch, p.actionRequest(ctx, run), nil)
+	outcome, err := p.remedies().Apply(ctx, remedy.UpdateBranch, p.actionRequest(ctx, run, remedy.UpdateBranch, nil), nil)
 	switch {
 	case err != nil:
 		run.set(pr.StatusFailed, ghErrorDetail("update-branch failed", err))

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-github/v92/github"
+
 	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
@@ -42,10 +44,17 @@ func (p *Processor) applyRule(ctx context.Context, run *prRun) {
 		return
 	}
 
-	outcome, err := p.Remedies.Apply(ctx, hit.Rule.Action.Name, p.request(ctx, run, hit), hit.Rule.Guards())
+	req := p.request(ctx, run, hit)
+	outcome, err := p.Remedies.Apply(ctx, hit.Rule.Action.Name, req, hit.Rule.Guards())
 	switch {
 	case err != nil:
 		run.note(fmt.Sprintf("rule %s failed: %s", hit.Rule.Name, err))
+	case outcome.RefusedBy == remedy.UpToDate.Name && req.BehindBy > 0:
+		// Every guard before up-to-date passed, so the action only waits for
+		// the branch. Nothing else updates a PR that is still waiting on
+		// checks, and a bot that rebases only on conflict never would.
+		run.note(fmt.Sprintf("rule %s refused: %s", hit.Rule.Name, outcome.Refused))
+		p.updateBranch(ctx, run, fmt.Sprintf("behind base; %s applies once the branch is up to date", hit.Rule.Name))
 	case outcome.Refused != "":
 		run.note(fmt.Sprintf("rule %s refused: %s", hit.Rule.Name, outcome.Refused))
 	case outcome.Applied:
@@ -117,7 +126,7 @@ func (p *Processor) logExcerpt(ctx context.Context, run *prRun) func(rules.LogSo
 // request is the action request of a rule match: the PR's own facts plus
 // what made the rule match.
 func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *remedy.Request {
-	req := p.actionRequest(ctx, run)
+	req := p.actionRequest(ctx, run, hit.Rule.Action.Name, hit.Rule.Guards())
 	req.Check = hit.Check
 	req.CheckURL = run.checkURL(hit.Check)
 	req.LogMatched = hit.LogMatched
@@ -126,10 +135,22 @@ func (p *Processor) request(ctx context.Context, run *prRun, hit *rules.Hit) *re
 	return req
 }
 
+// comparesBase reports whether the action or the extra guards read the
+// base...head comparison, which costs a request the other guards do not.
+func (p *Processor) comparesBase(name remedy.Name, extra []remedy.Guard) bool {
+	names := p.remedies().GuardNames(name)
+	for _, guard := range extra {
+		names = append(names, guard.Name)
+	}
+	return slices.Contains(names, remedy.UpToDate.Name)
+}
+
 // actionRequest is what every action reads about a PR, whether a rule
-// selected it or the sweep's own classification did.
-func (p *Processor) actionRequest(ctx context.Context, run *prRun) *remedy.Request {
-	return &remedy.Request{
+// selected it or the sweep's own classification did. name and extra are
+// the action and refusals it runs under, which decide whether the base
+// comparison is fetched.
+func (p *Processor) actionRequest(ctx context.Context, run *prRun, name remedy.Name, extra []remedy.Guard) *remedy.Request {
+	req := &remedy.Request{
 		Info:              run.info,
 		Pull:              run.pull,
 		Kind:              run.kind,
@@ -150,6 +171,12 @@ func (p *Processor) actionRequest(ctx context.Context, run *prRun) *remedy.Reque
 			Login:    p.Login,
 		},
 	}
+	if p.comparesBase(name, extra) {
+		if cmp := run.comparison(ctx, p); cmp != nil {
+			req.BehindBy, req.BaseCompared = cmp.GetBehindBy(), true
+		}
+	}
+	return req
 }
 
 // baseStates says what the base head reported for each failing check. A
@@ -206,9 +233,12 @@ func (p *Processor) diffFiles(ctx context.Context, run *prRun) []string {
 	if run.filesLoaded {
 		return run.files
 	}
+	cmp := run.comparison(ctx, p)
+	if cmp == nil {
+		return nil
+	}
 	run.filesLoaded = true
-	cmp := p.compare(ctx, run.info, run.pull)
-	if cmp == nil || len(cmp.Files) >= compareFileLimit {
+	if len(cmp.Files) >= compareFileLimit {
 		return nil
 	}
 	run.files = make([]string, 0, len(cmp.Files))
@@ -216,6 +246,23 @@ func (p *Processor) diffFiles(ctx context.Context, run *prRun) []string {
 		run.files = append(run.files, f.GetFilename())
 	}
 	return run.files
+}
+
+// comparison returns the base...head comparison of the PR, or nil when it
+// cannot be had. A comparison that was had is kept until forgetComparison;
+// a failed fetch is not, so the next reader asks again.
+func (run *prRun) comparison(ctx context.Context, p *Processor) *github.CommitsComparison {
+	if !run.cmpLoaded {
+		run.cmp = p.compare(ctx, run.info, run.pull)
+		run.cmpLoaded = run.cmp != nil
+	}
+	return run.cmp
+}
+
+// forgetComparison drops the kept comparison. The head is fixed for the
+// run, but the base moves, so a poll that waited reads it again.
+func (run *prRun) forgetComparison() {
+	run.cmp, run.cmpLoaded = nil, false
 }
 
 // appliedThisChange names the actions an evidence marker records for the

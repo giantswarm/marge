@@ -128,6 +128,11 @@ type Request struct {
 	// check's own message. An action that comments one writes these
 	// verbatim and composes none of its own.
 	Commands []string
+	// BehindBy counts the base branch commits the head does not contain.
+	// BaseCompared reports whether the comparison could be had; without it
+	// BehindBy is no evidence that the branch is up to date.
+	BehindBy     int
+	BaseCompared bool
 	// AppliedThisChange names the actions an existing marker records for the
 	// change currently on the branch.
 	AppliedThisChange map[Name]bool
@@ -142,6 +147,9 @@ type Outcome struct {
 	Applied bool
 	// Refused carries the guard's reason when a guard stopped the action.
 	Refused string
+	// RefusedBy names the guard that refused, empty when the action itself
+	// refused or ran.
+	RefusedBy string
 	// Detail is the operator-facing summary of an applied action.
 	Detail string
 	// StopRepository ends the sweep for this repository, for instance when a
@@ -217,22 +225,22 @@ func (r *Registry) Apply(ctx context.Context, name Name, req *Request, extra []G
 	if !ok {
 		return Outcome{}, fmt.Errorf("remedy: unknown action %q: known actions are %s", name, joinNames(r.Names()))
 	}
-	if reason := refuse(slices.Concat(action.Guards(), extra), req); reason != "" {
-		return Outcome{Refused: reason}, nil
+	if guard, reason := refuse(slices.Concat(action.Guards(), extra), req); reason != "" {
+		return Outcome{Refused: reason, RefusedBy: guard}, nil
 	}
 	return action.Apply(ctx, req)
 }
 
-// refuse returns the first guard's reason, or "" when every one of them
-// passed. An action that runs another action's Apply calls it with that
-// action's guards, so no path reaches a write past them.
-func refuse(guards []Guard, req *Request) string {
+// refuse returns the first refusing guard's name and reason, or "" when
+// every one of them passed. An action that runs another action's Apply
+// calls it with that action's guards, so no path reaches a write past them.
+func refuse(guards []Guard, req *Request) (string, string) {
 	for _, guard := range guards {
 		if reason := guard.Refuse(req); reason != "" {
-			return reason
+			return guard.Name, reason
 		}
 	}
-	return ""
+	return "", ""
 }
 
 func joinNames(names []Name) string {

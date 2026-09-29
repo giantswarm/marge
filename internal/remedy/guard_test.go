@@ -303,3 +303,16 @@ func TestOnlyGateWaiting(t *testing.T) {
 		Required: Required{Missing: []string{"Check sync.sh was called"}},
 	}), "not reported")
 }
+
+func TestUpToDate(t *testing.T) {
+	require.Empty(t, UpToDate.Refuse(&Request{BaseCompared: true}))
+
+	require.Equal(t, "the head is 3 commits behind its base",
+		UpToDate.Refuse(&Request{BaseCompared: true, BehindBy: 3}))
+	require.Equal(t, "the head is 1 commit behind its base",
+		UpToDate.Refuse(&Request{BaseCompared: true, BehindBy: 1}))
+
+	// A comparison that cannot be had is no evidence the branch is current.
+	require.Equal(t, "the head could not be compared with its base",
+		UpToDate.Refuse(&Request{}))
+}

@@ -214,10 +214,10 @@ type commentCommand struct{}
 func (commentCommand) Name() Name { return CommentCommand }
 
 // The comment writes no commit and dismisses no approval, so it asks for no
-// log excerpt. It does ask that the gate be the only thing left, because
-// the pipeline it starts costs a cluster.
+// log excerpt. It does ask that the gate be the only thing left and the
+// branch be up to date, because the pipeline it starts costs a cluster.
 func (commentCommand) Guards() []Guard {
-	return []Guard{TrustedAuthor, NoSecurityFailure, KnownCommand, OnlyGateWaiting, OncePerChange(CommentCommand)}
+	return []Guard{TrustedAuthor, NoSecurityFailure, KnownCommand, OnlyGateWaiting, UpToDate, OncePerChange(CommentCommand)}
 }
 
 func (commentCommand) Apply(ctx context.Context, req *Request) (Outcome, error) {

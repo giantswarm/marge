@@ -2,6 +2,9 @@ package process
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,6 +91,7 @@ func remedyRun(state pr.StatusState) *prRun {
 		},
 		failing:        []string{"go-build"},
 		filesLoaded:    true,
+		cmpLoaded:      true,
 		commentsLoaded: true,
 	}
 }
@@ -185,4 +189,86 @@ func TestRuleStageReportsAGuardRefusal(t *testing.T) {
 	require.Empty(t, requests)
 	require.Equal(t, pr.StatusFailed, run.status.StateAt(run.idx))
 	require.Contains(t, run.notes[0], "rule catch-all refused: security check failed: govulncheck")
+}
+
+// The request carries how far the head is behind its base, and says so only
+// when the comparison was had. An action that does not guard on it is not
+// charged the request.
+func TestRuleStageRequestCarriesTheComparison(t *testing.T) {
+	gated := func(t *testing.T, requests *[]*remedy.Request) *Processor {
+		p := remedyProcessor(t, "failed", requests)
+		p.Remedies = remedy.NewRegistry(recordingAction{name: remedy.UpdateBranch, guards: []remedy.Guard{remedy.UpToDate}, requests: requests})
+		return p
+	}
+
+	t.Run("compared", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+		run.cmp = &github.CommitsComparison{BehindBy: new(0)}
+
+		gated(t, &requests).applyRule(t.Context(), run)
+
+		require.Len(t, requests, 1)
+		require.True(t, requests[0].BaseCompared)
+	})
+
+	t.Run("behind", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+		run.cmp = &github.CommitsComparison{BehindBy: new(2)}
+
+		gated(t, &requests).applyRule(t.Context(), run)
+
+		require.Empty(t, requests)
+		require.Contains(t, run.notes[0], "the head is 2 commits behind its base")
+	})
+
+	t.Run("not compared", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+
+		gated(t, &requests).applyRule(t.Context(), run)
+
+		require.Empty(t, requests)
+		require.Contains(t, run.notes[0], "could not be compared")
+	})
+
+	t.Run("unguarded", func(t *testing.T) {
+		var requests []*remedy.Request
+		run := remedyRun(pr.StatusFailed)
+		run.cmpLoaded = false
+
+		remedyProcessor(t, "failed", &requests).applyRule(t.Context(), run)
+
+		require.Len(t, requests, 1)
+		require.False(t, run.cmpLoaded, "an action without the up-to-date guard fetched the comparison")
+	})
+}
+
+// A comparison that was had is kept for the poll and dropped with it; a
+// failed fetch is not kept, so the next reader asks again.
+func TestComparisonKeepsOnlyWhatWasHad(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(github.CommitsComparison{BehindBy: new(calls)})
+	}))
+	defer srv.Close()
+	p := &Processor{Client: newTestClient(t, srv)}
+	run := remedyRun(pr.StatusWaitingChecks)
+	run.cmpLoaded = false
+
+	require.Nil(t, run.comparison(t.Context(), p))
+	require.Equal(t, 2, run.comparison(t.Context(), p).GetBehindBy())
+	require.Equal(t, 2, run.comparison(t.Context(), p).GetBehindBy())
+	require.Equal(t, 2, calls)
+
+	run.forgetComparison()
+
+	require.Equal(t, 3, run.comparison(t.Context(), p).GetBehindBy())
 }
