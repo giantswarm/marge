@@ -80,6 +80,30 @@ func OncePerChange(name Name) Guard {
 	}}
 }
 
+// NoFreshRescue refuses while a rescue marker stands for the change on the
+// branch, rebased since or not: automation already lost on exactly this
+// change, so a newer base cannot help. A stale marker (the change moved on)
+// does not refuse.
+var NoFreshRescue = Guard{"no-fresh-rescue", func(req *Request) string {
+	if req.FreshRescue != nil {
+		return "fresh rescue marker: " + pr.FormatRescue(req.FreshRescue, req.Now)
+	}
+	return ""
+}}
+
+// FreshRescue returns the rescue marker m when it still stands for the PR
+// at head, or nil: a marker for a change that moved on blocks nothing.
+func FreshRescue(m *pr.RescueMarker, head string, current func() pr.Fingerprint) *pr.RescueMarker {
+	if m == nil {
+		return nil
+	}
+	m.MarkStale(head, current)
+	if m.Stale {
+		return nil
+	}
+	return m
+}
+
 // Stands reports whether an evidence marker still records an attempt at the
 // PR as it is now: the change on the branch at head, and for a branch update
 // also the base head it merged, which base reads on demand. A refresh the

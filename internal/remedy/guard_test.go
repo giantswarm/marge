@@ -348,3 +348,36 @@ func TestAppliedTo(t *testing.T) {
 		})
 	}
 }
+
+func TestNoFreshRescue(t *testing.T) {
+	require.Empty(t, NoFreshRescue.Refuse(&Request{}))
+	marker := &pr.RescueMarker{Tool: "klaus", Outcome: "blocked", Reason: "ecosystem blocker"}
+	require.Equal(t, "fresh rescue marker: rescue blocked (klaus): ecosystem blocker",
+		NoFreshRescue.Refuse(&Request{FreshRescue: marker}))
+}
+
+func TestFreshRescue(t *testing.T) {
+	same := func() pr.Fingerprint { return pr.Fingerprint{PatchID: "p1"} }
+	moved := func() pr.Fingerprint { return pr.Fingerprint{PatchID: "p2"} }
+	marker := func() *pr.RescueMarker {
+		return &pr.RescueMarker{Outcome: "failed", HeadSHA: "aaaa", Fingerprint: pr.Fingerprint{PatchID: "p1"}}
+	}
+
+	require.Nil(t, FreshRescue(nil, "aaaa", same))
+	require.NotNil(t, FreshRescue(marker(), "aaaa", same), "same head")
+	rebased := FreshRescue(marker(), "bbbb", same)
+	require.NotNil(t, rebased, "rebased with the same change")
+	require.True(t, rebased.Rebased)
+	require.Nil(t, FreshRescue(marker(), "bbbb", moved), "the change moved on")
+}
+
+func TestUpdateBranchRefusesPastAFreshRescue(t *testing.T) {
+	req := botRequest(nil)
+	req.FreshRescue = &pr.RescueMarker{Outcome: "blocked"}
+
+	out, err := Default().Apply(t.Context(), UpdateBranch, req, nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Equal(t, "no-fresh-rescue", out.RefusedBy)
+}

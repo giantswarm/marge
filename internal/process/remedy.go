@@ -162,6 +162,8 @@ func (p *Processor) actionRequest(ctx context.Context, run *prRun, name remedy.N
 		ChecksPending:     run.checksPending,
 		ChecksSettledAt:   run.settledAt,
 		AppliedThisChange: p.appliedThisChange(ctx, run),
+		FreshRescue: remedy.FreshRescue(run.rescueMarker(ctx, p), run.pull.GetHead().GetSHA(),
+			func() pr.Fingerprint { return run.fingerprint(ctx, p) }),
 		Deps: remedy.Deps{
 			GitHub:   p.Client,
 			CircleCI: p.CircleCI,

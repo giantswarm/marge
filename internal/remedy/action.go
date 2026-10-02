@@ -136,6 +136,9 @@ type Request struct {
 	// AppliedThisChange names the actions an existing marker records for the
 	// change currently on the branch.
 	AppliedThisChange map[Name]bool
+	// FreshRescue is the newest rescue marker when it still stands for the
+	// change on the branch, nil otherwise.
+	FreshRescue *pr.RescueMarker
 	// Writes names the repository paths the action would write.
 	Writes []string
 
