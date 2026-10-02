@@ -18,4 +18,4 @@ subject:
 expect:
   rule: stale-failure-green-on-base
   check: go-build
-  refused: "fresh rescue marker: rescue blocked (klaus), rebased since: same change: ecosystem blocker"
+  refused: "fresh rescue marker: rescue blocked (klaus), rebased since: same change"

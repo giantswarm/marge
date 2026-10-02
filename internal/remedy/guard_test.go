@@ -352,7 +352,7 @@ func TestAppliedTo(t *testing.T) {
 func TestNoFreshRescue(t *testing.T) {
 	require.Empty(t, NoFreshRescue.Refuse(&Request{}))
 	marker := &pr.RescueMarker{Tool: "klaus", Outcome: "blocked", Reason: "ecosystem blocker"}
-	require.Equal(t, "fresh rescue marker: rescue blocked (klaus): ecosystem blocker",
+	require.Equal(t, "fresh rescue marker: rescue blocked (klaus)",
 		NoFreshRescue.Refuse(&Request{FreshRescue: marker}))
 }
 

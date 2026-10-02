@@ -16,4 +16,4 @@ subject:
 expect:
   rule: stale-failure-green-on-base
   check: go-build
-  refused: "fresh rescue marker: rescue failed: ESM-only"
+  refused: "fresh rescue marker: rescue failed"

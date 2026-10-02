@@ -83,12 +83,15 @@ func OncePerChange(name Name) Guard {
 // NoFreshRescue refuses while a rescue marker stands for the change on the
 // branch, rebased since or not: automation already lost on exactly this
 // change, so a newer base cannot help. A stale marker (the change moved on)
-// does not refuse.
+// does not refuse. The refusal names the marker without its reason: the
+// entry carries the marker, reason included, beside it.
 var NoFreshRescue = Guard{"no-fresh-rescue", func(req *Request) string {
-	if req.FreshRescue != nil {
-		return "fresh rescue marker: " + pr.FormatRescue(req.FreshRescue, req.Now)
+	if req.FreshRescue == nil {
+		return ""
 	}
-	return ""
+	named := *req.FreshRescue
+	named.Reason = ""
+	return "fresh rescue marker: " + pr.FormatRescue(&named, req.Now)
 }}
 
 // FreshRescue returns the rescue marker m when it still stands for the PR
