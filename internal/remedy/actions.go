@@ -45,9 +45,10 @@ func (updateBranch) Name() Name { return UpdateBranch }
 // A branch behind its base says nothing about the log, so this action asks
 // for no excerpt. It also runs with a failing security check: it neither
 // merges nor rescues, and a scan the base branch has already fixed is
-// exactly what a refresh is for.
+// exactly what a refresh is for. A rescue that already lost on this change
+// is not helped by a newer base.
 func (updateBranch) Guards() []Guard {
-	return []Guard{TrustedAuthor, OncePerChange(UpdateBranch)}
+	return []Guard{TrustedAuthor, OncePerChange(UpdateBranch), NoFreshRescue}
 }
 
 func (updateBranch) Apply(ctx context.Context, req *Request) (Outcome, error) {

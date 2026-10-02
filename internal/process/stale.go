@@ -200,14 +200,9 @@ func (p *Processor) readBaseContextStates(ctx context.Context, info pr.PRInfo, s
 
 // handleStale records the stale classification and, when the refresh
 // action is selected, updates the PR branch from its base (the same merge the "Update branch" button performs) so CI
-// re-runs against current code.
-//
-// The refresh is skipped when the PR carries a non-stale rescue marker,
-// including one whose branch was merely rebased since: automation already
-// lost on exactly this change, so re-running CI against a newer base cannot
-// help, and for a marker without a content fingerprint the refresh would
-// even age it out and make the PR look rescuable again. The marker is
-// attached to the entry either way so the operator sees it.
+// re-runs against current code. The update-branch action's guards decide
+// whether it runs, a fresh rescue marker among them, so this path and a
+// rule that names update-branch refuse alike.
 func (p *Processor) handleStale(ctx context.Context, run *prRun, res *staleResult) {
 	detail := res.detail()
 	run.set(pr.StatusStale, detail)
@@ -215,16 +210,6 @@ func (p *Processor) handleStale(ctx context.Context, run *prRun, res *staleResul
 	if !p.Actions.Has(ActionRefresh) {
 		return
 	}
-
-	if marker := run.rescueMarker(ctx, p); marker != nil {
-		p.markStale(ctx, run.info, run.pull, marker)
-		run.status.SetRescue(run.idx, marker)
-		if !marker.Stale {
-			run.set(pr.StatusStale, detail+"; refresh skipped: fresh rescue marker")
-			return
-		}
-	}
-
 	p.updateBranch(ctx, run, detail)
 }
 

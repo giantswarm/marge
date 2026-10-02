@@ -165,8 +165,8 @@ func TestClassifyStale_refreshSkippedForRebasedMarker(t *testing.T) {
 	if got.State != pr.StatusStale {
 		t.Fatalf("state = %v (%s), want StatusStale (refresh skipped)", got.State, got.Detail)
 	}
-	if !strings.Contains(got.Detail, "refresh skipped") {
-		t.Errorf("detail %q should say the refresh was skipped", got.Detail)
+	if !strings.Contains(got.Detail, "update-branch refused: fresh rescue marker") {
+		t.Errorf("detail %q should name the fresh rescue marker", got.Detail)
 	}
 	if f.updateBranchCalls.Load() != 0 {
 		t.Errorf("update-branch called %d times despite a valid (rebased) marker, want 0", f.updateBranchCalls.Load())

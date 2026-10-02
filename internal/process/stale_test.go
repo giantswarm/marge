@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/remedy"
+	"github.com/giantswarm/marge/internal/rules"
 )
 
 // staleFixture wires a fake GitHub API for one Renovate PR (org/repo#1,
@@ -394,8 +398,8 @@ func TestClassifyStale_refreshSkippedForFreshMarker(t *testing.T) {
 	if got.State != pr.StatusStale {
 		t.Fatalf("state = %v (%s), want StatusStale (refresh skipped)", got.State, got.Detail)
 	}
-	if !strings.Contains(got.Detail, "refresh skipped") {
-		t.Errorf("detail %q should say the refresh was skipped", got.Detail)
+	if !strings.Contains(got.Detail, "update-branch refused: fresh rescue marker") {
+		t.Errorf("detail %q should name the fresh rescue marker", got.Detail)
 	}
 	if f.updateBranchCalls.Load() != 0 {
 		t.Errorf("update-branch called %d times despite a fresh marker, want 0", f.updateBranchCalls.Load())
@@ -484,5 +488,49 @@ func TestStaleResult_detail(t *testing.T) {
 	bare := &staleResult{Base: "main", Contexts: []string{"go-build"}}
 	if got := bare.detail(); got != "go-build green on main" {
 		t.Errorf("detail() without time/behind = %q", got)
+	}
+}
+
+// staleRuleProcessor runs the shipped stale-failure-green-on-base rule with
+// the sweep's own refresh switched off, so only the rule can update the
+// branch.
+func staleRuleProcessor(t *testing.T) func(*Processor) {
+	t.Helper()
+	dir := t.TempDir()
+	doc, err := os.ReadFile(filepath.Join("..", "..", "rules", "stale-failure-green-on-base.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "stale-failure-green-on-base.yaml"), doc, 0o600))
+	cat, err := rules.Loader{LocalPath: dir}.Load(t.Context(), remedy.Default())
+	require.NoError(t, err)
+	require.Empty(t, cat.Skipped)
+	return func(p *Processor) {
+		p.Actions = ActionSet{ActionClassify: true, ActionRemedy: true, ActionMark: true}
+		p.Rules = cat
+		p.Remedies = remedy.Default()
+	}
+}
+
+// The rule path refuses a refresh past a fresh rescue marker like the
+// sweep's own refresh does, and a stale marker blocks neither.
+func TestStaleRuleRespectsTheRescueMarker(t *testing.T) {
+	cases := map[string]struct {
+		head    string
+		updates int32
+		refused bool
+	}{
+		"fresh marker": {head: fxHead[:8], refused: true},
+		"stale marker": {head: "0ld5ha00", updates: 1},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := &staleFixture{behindBy: 12, baseConclusion: "success", comments: []string{markerComment(tc.head)}}
+			got := f.run(t, staleRuleProcessor(t))
+
+			require.Equal(t, tc.updates, f.updateBranchCalls.Load())
+			if tc.refused {
+				require.Equal(t, pr.StatusStale, got.State, got.Detail)
+				require.Contains(t, got.Detail, "fresh rescue marker: rescue failed")
+			}
+		})
 	}
 }

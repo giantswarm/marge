@@ -1,0 +1,19 @@
+name: a branch a rescue already lost on at its current head is not refreshed
+subject:
+  state: stale
+  kind: renovate
+  title: "chore(deps): update module golang.org/x/net to v0.46.0"
+  failing: ["go-build"]
+  baseState:
+    go-build: green
+  head: 3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c
+  base: 2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
+  patchID: 9f1e2d3c4b5a6978
+  rescue:
+    outcome: failed
+    reason: ESM-only
+    head: 3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c
+expect:
+  rule: stale-failure-green-on-base
+  check: go-build
+  refused: "fresh rescue marker: rescue failed"

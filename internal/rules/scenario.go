@@ -56,12 +56,24 @@ type ScenarioSubject struct {
 	Pending []PendingCheck `yaml:"pending"`
 	// Head and Base are the PR head and the base branch head, and PatchID
 	// the fingerprint of the change, as the sweep saw them. Evidence are the
-	// markers earlier sweeps left on the PR. Together they decide whether
-	// the action's once-per-change guard lets a new attempt run.
+	// markers earlier sweeps left on the PR, and Rescue the newest rescue
+	// attempt's marker. Together they decide whether the action's
+	// once-per-change and no-fresh-rescue guards let a new attempt run.
 	Head     string           `yaml:"head"`
 	Base     string           `yaml:"base"`
 	PatchID  string           `yaml:"patchID"`
 	Evidence []ScenarioMarker `yaml:"evidence"`
+	Rescue   *ScenarioRescue  `yaml:"rescue"`
+}
+
+// ScenarioRescue is the marker a rescue attempt left: its outcome and
+// reason, the head it was written against and the fingerprint of the change.
+type ScenarioRescue struct {
+	Tool    string `yaml:"tool"`
+	Outcome string `yaml:"outcome"`
+	Reason  string `yaml:"reason"`
+	Head    string `yaml:"head"`
+	PatchID string `yaml:"patchID"`
 }
 
 // ScenarioMarker is an evidence marker an earlier sweep wrote: the action it
@@ -84,9 +96,10 @@ type ScenarioExpect struct {
 	// Commands are the strings the output signal must have captured, in
 	// order. Empty skips the assertion.
 	Commands []string `yaml:"commands"`
-	// Refused is the once-per-change guard's reason for the matched rule's
-	// action, empty when a new attempt may run. It is asserted only when the
-	// subject records evidence.
+	// Refused is the reason the matched rule's action refuses on the
+	// subject's markers (once-per-change, no-fresh-rescue), empty when a new
+	// attempt may run. It is asserted only when the subject records evidence
+	// or a rescue.
 	Refused string `yaml:"refused"`
 }
 
@@ -170,18 +183,22 @@ func (s *Scenario) Run(catalogue *Catalogue) string {
 	case len(s.Expect.Commands) > 0 && !slices.Equal(hit.Commands, s.Expect.Commands):
 		return fmt.Sprintf("expected the commands %q, it captured %q", s.Expect.Commands, hit.Commands)
 	}
-	if len(s.Subject.Evidence) == 0 {
+	if len(s.Subject.Evidence) == 0 && s.Subject.Rescue == nil {
 		return ""
 	}
-	if refused := s.oncePerChange(hit.Rule.Action.Name); refused != s.Expect.Refused {
-		return fmt.Sprintf("expected once-per-change to say %q, it said %q", s.Expect.Refused, refused)
+	if refused := s.markerRefusal(hit.Rule.Action.Name); refused != s.Expect.Refused {
+		return fmt.Sprintf("expected the marker guards to say %q, they said %q", s.Expect.Refused, refused)
 	}
 	return ""
 }
 
-// oncePerChange is what the action's once-per-change guard says about the
-// subject's evidence.
-func (s *Scenario) oncePerChange(action remedy.Name) string {
+// markerGuards are the guards that read a PR's markers, the ones a scenario
+// replays. The others read the live PR, which a fixture does not carry.
+var markerGuards = map[string]bool{"once-per-change": true, remedy.NoFreshRescue.Name: true}
+
+// markerRefusal is what the action's marker guards say about the subject's
+// evidence and rescue marker, in the order the action enforces them.
+func (s *Scenario) markerRefusal(action remedy.Name) string {
 	markers := make([]*pr.RescueMarker, len(s.Subject.Evidence))
 	for i, e := range s.Subject.Evidence {
 		markers[i] = &pr.RescueMarker{
@@ -192,10 +209,32 @@ func (s *Scenario) oncePerChange(action remedy.Name) string {
 			Fingerprint: pr.Fingerprint{PatchID: e.PatchID},
 		}
 	}
-	applied := remedy.AppliedTo(markers, s.Subject.Head,
-		func() string { return s.Subject.Base },
-		func() pr.Fingerprint { return pr.Fingerprint{PatchID: s.Subject.PatchID} })
-	return remedy.OncePerChange(action).Refuse(&remedy.Request{AppliedThisChange: applied})
+	current := func() pr.Fingerprint { return pr.Fingerprint{PatchID: s.Subject.PatchID} }
+	req := &remedy.Request{
+		AppliedThisChange: remedy.AppliedTo(markers, s.Subject.Head, func() string { return s.Subject.Base }, current),
+	}
+	if r := s.Subject.Rescue; r != nil {
+		req.FreshRescue = remedy.FreshRescue(&pr.RescueMarker{
+			Tool:        r.Tool,
+			Outcome:     r.Outcome,
+			Reason:      r.Reason,
+			HeadSHA:     r.Head,
+			Fingerprint: pr.Fingerprint{PatchID: r.PatchID},
+		}, s.Subject.Head, current)
+	}
+	impl, ok := remedy.Default().Lookup(action)
+	if !ok {
+		return fmt.Sprintf("unknown action %q", action)
+	}
+	for _, guard := range impl.Guards() {
+		if !markerGuards[guard.Name] {
+			continue
+		}
+		if reason := guard.Refuse(req); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 func (s *Scenario) subject() *Subject {
