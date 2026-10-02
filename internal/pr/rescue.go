@@ -28,9 +28,13 @@ type RescueMarker struct {
 	Outcome string `json:"outcome"`
 	// Kind tells a rescue record ("" or "rescue") from a sweep evidence
 	// record ("evidence"). Evidence never counts as a prior rescue attempt.
-	Kind    string    `json:"kind,omitempty"`
-	Reason  string    `json:"reason,omitempty"`
-	HeadSHA string    `json:"head_sha,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	HeadSHA string `json:"head_sha,omitempty"`
+	// BaseSHA is the base branch head a branch update merged into the head,
+	// set on a marker that records one. A refresh is one attempt per change
+	// and base head, so a base that moved on makes it fair game again.
+	BaseSHA string    `json:"base_sha,omitempty"`
 	At      time.Time `json:"at,omitempty"`
 	Fingerprint
 
@@ -122,6 +126,22 @@ func (m *RescueMarker) MarkStale(currentHeadSHA string, current func() Fingerpri
 		m.Rebased = m.Matches(current())
 	}
 	m.Stale = !m.Rebased
+}
+
+// MergedFrom reports whether the branch update this marker records merged
+// the base head baseSHA, the PR head now being headSHA. An unknown base
+// ("") cannot show the base moved, so the update stands. A marker written
+// before the base was recorded stands while its head is still the PR head:
+// the update has not landed, and once it has, the base it merged is
+// unknown.
+func (m *RescueMarker) MergedFrom(baseSHA, headSHA string) bool {
+	switch {
+	case baseSHA == "":
+		return true
+	case m.BaseSHA != "":
+		return shaPrefixMatch(m.BaseSHA, baseSHA)
+	}
+	return shaPrefixMatch(m.HeadSHA, headSHA)
 }
 
 func shaPrefixMatch(a, b string) bool {

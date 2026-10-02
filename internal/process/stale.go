@@ -199,8 +199,7 @@ func (p *Processor) readBaseContextStates(ctx context.Context, info pr.PRInfo, s
 }
 
 // handleStale records the stale classification and, when the refresh
-// action is selected and this is not a dry run, updates the PR branch from
-// its base (the same merge the "Update branch" button performs) so CI
+// action is selected, updates the PR branch from its base (the same merge the "Update branch" button performs) so CI
 // re-runs against current code.
 //
 // The refresh is skipped when the PR carries a non-stale rescue marker,
@@ -213,7 +212,7 @@ func (p *Processor) handleStale(ctx context.Context, run *prRun, res *staleResul
 	detail := res.detail()
 	run.set(pr.StatusStale, detail)
 
-	if !p.Actions.Has(ActionRefresh) || p.DryRun {
+	if !p.Actions.Has(ActionRefresh) {
 		return
 	}
 

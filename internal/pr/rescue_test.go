@@ -200,3 +200,26 @@ func TestFormatRescue(t *testing.T) {
 		t.Errorf("nil = %q, want empty", got)
 	}
 }
+
+func TestMergedFrom(t *testing.T) {
+	tests := []struct {
+		name       string
+		marker     RescueMarker
+		base, head string
+		want       bool
+	}{
+		{"same base head", RescueMarker{HeadSHA: "a1", BaseSHA: "b1b1b1b1"}, "b1b1b1b1ffff", "c3", true},
+		{"the base moved on", RescueMarker{HeadSHA: "a1", BaseSHA: "b1b1b1b1"}, "b2b2b2b2", "c3", false},
+		{"the base unknown", RescueMarker{HeadSHA: "a1", BaseSHA: "b1b1b1b1"}, "", "c3", true},
+		{"no base recorded, head unchanged", RescueMarker{HeadSHA: "a1a1"}, "b2b2b2b2", "a1a1ffff", true},
+		{"no base recorded, head moved", RescueMarker{HeadSHA: "a1a1"}, "b2b2b2b2", "c3c3", false},
+		{"nothing recorded", RescueMarker{}, "b2b2b2b2", "c3c3", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.marker.MergedFrom(tt.base, tt.head); got != tt.want {
+				t.Errorf("MergedFrom(%q, %q) = %v, want %v", tt.base, tt.head, got, tt.want)
+			}
+		})
+	}
+}

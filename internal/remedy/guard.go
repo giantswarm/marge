@@ -69,7 +69,8 @@ var LogMatched = Guard{"log-matched", func(req *Request) string {
 }}
 
 // OncePerChange refuses a second attempt of the same action against the
-// change currently on the branch. Twice red on the same code is real.
+// change currently on the branch. Twice red on the same code is real. A
+// branch update counts per change and base head: see Stands.
 func OncePerChange(name Name) Guard {
 	return Guard{"once-per-change", func(req *Request) string {
 		if req.AppliedThisChange[name] {
@@ -77,6 +78,31 @@ func OncePerChange(name Name) Guard {
 		}
 		return ""
 	}}
+}
+
+// Stands reports whether an evidence marker still records an attempt at the
+// PR as it is now: the change on the branch at head, and for a branch update
+// also the base head it merged, which base reads on demand. A refresh the
+// base has since moved past says nothing about the current base, so the PR
+// may be refreshed again; the same base head is never merged twice.
+func Stands(m *pr.RescueMarker, head string, base func() string, current func() pr.Fingerprint) bool {
+	m.MarkStale(head, current)
+	if m.Stale {
+		return false
+	}
+	return Name(m.Outcome) != UpdateBranch || m.MergedFrom(base(), head)
+}
+
+// AppliedTo names the actions the evidence markers record for the PR at
+// head, the set OncePerChange reads.
+func AppliedTo(markers []*pr.RescueMarker, head string, base func() string, current func() pr.Fingerprint) map[Name]bool {
+	applied := make(map[Name]bool)
+	for _, m := range markers {
+		if m.IsEvidence() && Stands(m, head, base, current) {
+			applied[Name(m.Outcome)] = true
+		}
+	}
+	return applied
 }
 
 // knownPipelines are the e2e suites a comment may start. The set is closed
