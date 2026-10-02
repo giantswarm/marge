@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/go-github/v92/github"
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -44,6 +45,7 @@ type staleFixture struct {
 	baseLookupCalls   atomic.Int32
 	labelCalls        atomic.Int32
 	commentPosts      atomic.Int32
+	posted            []string
 }
 
 const (
@@ -167,6 +169,9 @@ func (f *staleFixture) server(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("POST /repos/org/repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
 		f.commentPosts.Add(1)
+		var comment github.IssueComment
+		_ = json.NewDecoder(r.Body).Decode(&comment)
+		f.posted = append(f.posted, comment.GetBody())
 		writeJSON(w, github.IssueComment{ID: new(int64(99))})
 	})
 
@@ -311,6 +316,74 @@ func TestClassifyStale_dryRunOnlyClassifies(t *testing.T) {
 	}
 	if f.updateBranchCalls.Load() != 0 {
 		t.Errorf("update-branch called %d times in dry run, want 0", f.updateBranchCalls.Load())
+	}
+	require.Contains(t, got.Detail, "dry-run: update-branch would apply")
+}
+
+// A dry run reports the refusal a real run would meet, so it tells a PR
+// that is refreshed from one that is not.
+func TestClassifyStale_dryRunReportsTheRefusal(t *testing.T) {
+	f := &staleFixture{behindBy: 12, baseConclusion: "success", title: fxTitle,
+		comments: []string{refreshComment(fxHead, fxBase)}}
+	got := f.run(t, func(p *Processor) { p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true}; p.DryRun = true })
+
+	require.Equal(t, pr.StatusStale, got.State, got.Detail)
+	require.Contains(t, got.Detail, "update-branch refused: update-branch already applied to this change")
+}
+
+const fxTitle = "chore(deps): update module golang.org/x/net to v0.46.0"
+
+// refreshComment renders the evidence marker a branch update leaves: the
+// head it was applied to, the base head it merged ("" for a marker written
+// before the base was recorded) and the change, by its title.
+func refreshComment(headSHA, baseSHA string) string {
+	base := ""
+	if baseSHA != "" {
+		base = fmt.Sprintf(",\"base_sha\":%q", baseSHA)
+	}
+	return fmt.Sprintf("**update-branch**\n\n<!-- ai-rescue: {\"tool\":\"marge\",\"kind\":\"evidence\",\"outcome\":\"update-branch\",\"head_sha\":%q%s,\"change_id\":%q,\"at\":\"2026-09-28T07:00:00Z\"} -->",
+		headSHA, base, pr.ChangeID(fxTitle))
+}
+
+// A branch update is one attempt per change and base head: refreshed once,
+// the PR is refreshed again when the base moved on, never twice from the
+// same base head.
+func TestClassifyStale_refreshOncePerBaseHead(t *testing.T) {
+	const preRefreshHead, olderBase = "0ld5ha00", "0ldba5e0"
+	tests := []struct {
+		name    string
+		comment string
+		refresh bool
+	}{
+		{"the base moved on since the refresh", refreshComment(preRefreshHead, olderBase), true},
+		{"refreshed from the current base head", refreshComment(preRefreshHead, fxBase), false},
+		{"a refresh scheduled on this head has not landed", refreshComment(fxHead, fxBase), false},
+		{"a marker naming no base, its refresh landed", refreshComment(preRefreshHead, ""), true},
+		{"a marker naming no base, its refresh not landed", refreshComment(fxHead, ""), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &staleFixture{behindBy: 12, baseConclusion: "success", title: fxTitle, comments: []string{tt.comment}}
+			got := f.run(t, func(p *Processor) {
+				p.Actions = ActionSet{ActionClassify: true, ActionRefresh: true, ActionMark: true}
+			})
+
+			if !tt.refresh {
+				require.Equal(t, pr.StatusStale, got.State, got.Detail)
+				require.Contains(t, got.Detail, "update-branch already applied to this change")
+				require.Zero(t, f.updateBranchCalls.Load())
+				require.Empty(t, f.posted)
+				return
+			}
+			require.Equal(t, pr.StatusRefreshed, got.State, got.Detail)
+			require.Equal(t, int32(1), f.updateBranchCalls.Load())
+			require.Len(t, f.posted, 1, "the new refresh is recorded")
+			marker := pr.ParseRescueMarker(f.posted[0])
+			require.NotNil(t, marker)
+			require.Equal(t, "update-branch", marker.Outcome)
+			require.Equal(t, fxHead, marker.HeadSHA)
+			require.Equal(t, fxBase, marker.BaseSHA, "the marker names the base head it merged")
+		})
 	}
 }
 

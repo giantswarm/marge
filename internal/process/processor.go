@@ -528,6 +528,8 @@ func (p *Processor) updateBranch(ctx context.Context, run *prRun, why string) {
 		run.set(pr.StatusFailed, ghErrorDetail("update-branch failed", err))
 	case outcome.Refused != "":
 		run.note("update-branch refused: " + outcome.Refused)
+	case outcome.DryRun:
+		run.note("dry-run: update-branch would apply")
 	default:
 		run.set(pr.StatusRefreshed, "re-checking; "+why)
 		p.postOnce(ctx, run, pr.MarkerKindEvidence, string(remedy.UpdateBranch), why)

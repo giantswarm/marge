@@ -7,6 +7,7 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/pr"
+	"github.com/giantswarm/marge/internal/remedy"
 )
 
 // markerTool is the tool name every marker written by the sweep carries.
@@ -22,7 +23,7 @@ func (p *Processor) postOnce(ctx context.Context, run *prRun, kind, outcome, rea
 
 // postMarker writes marker unless an equivalent one already stands, and
 // fills in the fields every marker carries: the tool, the head, the time and
-// the fingerprint. The caller sets the kind, the outcome and whatever the
+// the fingerprint, and for a branch update the base head it merged. The caller sets the kind, the outcome and whatever the
 // outcome describes.
 func (p *Processor) postMarker(ctx context.Context, run *prRun, marker *pr.RescueMarker) {
 	if p.DryRun || !p.Actions.Has(ActionMark) {
@@ -30,14 +31,17 @@ func (p *Processor) postMarker(ctx context.Context, run *prRun, marker *pr.Rescu
 	}
 	head := run.pull.GetHead().GetSHA()
 	current := run.fingerprint(ctx, p)
+	base := func() string { return run.baseHead(ctx, p) }
 	for _, existing := range run.markers(ctx, p) {
 		if existing.Kind != marker.Kind || existing.Outcome != marker.Outcome {
 			continue
 		}
-		existing.MarkStale(head, func() pr.Fingerprint { return current })
-		if !existing.Stale {
+		if remedy.Stands(existing, head, base, func() pr.Fingerprint { return current }) {
 			return
 		}
+	}
+	if remedy.Name(marker.Outcome) == remedy.UpdateBranch {
+		marker.BaseSHA = base()
 	}
 
 	marker.Tool = markerTool

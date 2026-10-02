@@ -142,9 +142,13 @@ type Request struct {
 	Deps Deps
 }
 
-// Outcome is what an action did. Exactly one of Applied and Refused is set.
+// Outcome is what an action did. Exactly one of Applied, Refused and DryRun
+// is set.
 type Outcome struct {
 	Applied bool
+	// DryRun says every guard passed and the action was not applied, the
+	// request being a dry run.
+	DryRun bool
 	// Refused carries the guard's reason when a guard stopped the action.
 	Refused string
 	// RefusedBy names the guard that refused, empty when the action itself
@@ -227,6 +231,9 @@ func (r *Registry) Apply(ctx context.Context, name Name, req *Request, extra []G
 	}
 	if guard, reason := refuse(slices.Concat(action.Guards(), extra), req); reason != "" {
 		return Outcome{Refused: reason, RefusedBy: guard}, nil
+	}
+	if req.DryRun {
+		return Outcome{DryRun: true}, nil
 	}
 	return action.Apply(ctx, req)
 }

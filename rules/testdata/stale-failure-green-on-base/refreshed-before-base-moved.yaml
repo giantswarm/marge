@@ -1,0 +1,20 @@
+name: a branch refreshed before and behind a base that moved on is refreshed again
+subject:
+  state: stale
+  kind: renovate
+  title: "chore(deps): update module golang.org/x/net to v0.46.0"
+  failing: ["go-build"]
+  baseState:
+    go-build: green
+  head: 3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c
+  base: 2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
+  patchID: 9f1e2d3c4b5a6978
+  evidence:
+    - outcome: update-branch
+      head: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
+      base: 1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b
+      patchID: 9f1e2d3c4b5a6978
+expect:
+  rule: stale-failure-green-on-base
+  check: go-build
+  refused: ""

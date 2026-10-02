@@ -316,3 +316,35 @@ func TestUpToDate(t *testing.T) {
 	require.Equal(t, "the head could not be compared with its base",
 		UpToDate.Refuse(&Request{}))
 }
+
+// A branch update counts once per change and base head; every other action
+// once per change, whatever the base did.
+func TestAppliedTo(t *testing.T) {
+	const head, base = "c3c3c3c3", "b2b2b2b2"
+	change := pr.Fingerprint{PatchID: "p1"}
+	current := func() pr.Fingerprint { return change }
+	evidence := func(outcome, head, base string) *pr.RescueMarker {
+		return &pr.RescueMarker{Kind: pr.MarkerKindEvidence, Outcome: outcome, HeadSHA: head, BaseSHA: base, Fingerprint: change}
+	}
+	tests := []struct {
+		name   string
+		marker *pr.RescueMarker
+		base   string
+		want   bool
+	}{
+		{"refreshed from the current base", evidence("update-branch", "a1a1a1a1", base), base, true},
+		{"refreshed from a base that moved on", evidence("update-branch", "a1a1a1a1", "b1b1b1b1"), base, false},
+		{"the current base unknown", evidence("update-branch", "a1a1a1a1", "b1b1b1b1"), "", true},
+		{"no base recorded, refresh landed", evidence("update-branch", "a1a1a1a1", ""), base, false},
+		{"no base recorded, refresh not landed", evidence("update-branch", head, ""), base, true},
+		{"another action, the base moved on", evidence("rerun-failed", "a1a1a1a1", "b1b1b1b1"), base, true},
+		{"another change", &pr.RescueMarker{Kind: pr.MarkerKindEvidence, Outcome: "update-branch", HeadSHA: "a1a1a1a1", BaseSHA: base, Fingerprint: pr.Fingerprint{PatchID: "p0"}}, base, false},
+		{"a rescue, not evidence", &pr.RescueMarker{Outcome: "update-branch", HeadSHA: head, BaseSHA: base}, base, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			applied := AppliedTo([]*pr.RescueMarker{tt.marker}, head, func() string { return tt.base }, current)
+			require.Equal(t, tt.want, applied[Name(tt.marker.Outcome)])
+		})
+	}
+}

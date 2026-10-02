@@ -39,11 +39,6 @@ func (p *Processor) applyRule(ctx context.Context, run *prRun) {
 		p.recordUnhandled(ctx, run)
 		return
 	}
-	if p.DryRun {
-		run.note(fmt.Sprintf("dry-run: rule %s would apply %s", hit.Rule.Name, hit.Rule.Action.Name))
-		return
-	}
-
 	req := p.request(ctx, run, hit)
 	outcome, err := p.Remedies.Apply(ctx, hit.Rule.Action.Name, req, hit.Rule.Guards())
 	switch {
@@ -57,6 +52,8 @@ func (p *Processor) applyRule(ctx context.Context, run *prRun) {
 		p.updateBranch(ctx, run, fmt.Sprintf("behind base; %s applies once the branch is up to date", hit.Rule.Name))
 	case outcome.Refused != "":
 		run.note(fmt.Sprintf("rule %s refused: %s", hit.Rule.Name, outcome.Refused))
+	case outcome.DryRun:
+		run.note(fmt.Sprintf("dry-run: rule %s would apply %s", hit.Rule.Name, hit.Rule.Action.Name))
 	case outcome.Applied:
 		if !outcome.KeepClassification {
 			run.set(pr.StatusRemedied, fmt.Sprintf("%s: %s", hit.Rule.Name, outcome.Detail))
@@ -259,6 +256,12 @@ func (run *prRun) comparison(ctx context.Context, p *Processor) *github.CommitsC
 	return run.cmp
 }
 
+// baseHead is the base branch head the comparison was made against, or ""
+// when the comparison cannot be had.
+func (run *prRun) baseHead(ctx context.Context, p *Processor) string {
+	return run.comparison(ctx, p).GetBaseCommit().GetSHA()
+}
+
 // forgetComparison drops the kept comparison. The head is fixed for the
 // run, but the base moves, so a poll that waited reads it again.
 func (run *prRun) forgetComparison() {
@@ -268,18 +271,9 @@ func (run *prRun) forgetComparison() {
 // appliedThisChange names the actions an evidence marker records for the
 // change currently on the branch, so an action runs once per change.
 func (p *Processor) appliedThisChange(ctx context.Context, run *prRun) map[remedy.Name]bool {
-	applied := make(map[remedy.Name]bool)
-	head := run.pull.GetHead().GetSHA()
-	for _, marker := range run.markers(ctx, p) {
-		if !marker.IsEvidence() {
-			continue
-		}
-		marker.MarkStale(head, func() pr.Fingerprint { return run.fingerprint(ctx, p) })
-		if !marker.Stale {
-			applied[remedy.Name(marker.Outcome)] = true
-		}
-	}
-	return applied
+	return remedy.AppliedTo(run.markers(ctx, p), run.pull.GetHead().GetSHA(),
+		func() string { return run.baseHead(ctx, p) },
+		func() pr.Fingerprint { return run.fingerprint(ctx, p) })
 }
 
 // recordUnhandled notes a failure no rule recognised, with a signature that

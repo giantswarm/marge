@@ -120,3 +120,20 @@ func TestNewRegistryRefusesDuplicateNames(t *testing.T) {
 		NewRegistry(guarded(UpdateBranch, &ran), guarded(UpdateBranch, &ran))
 	})
 }
+
+// A dry run meets every guard a real run meets and applies nothing.
+func TestRegistryApplyDryRunRunsTheGuardsOnly(t *testing.T) {
+	ran := false
+	reg := NewRegistry(guarded(UpdateBranch, &ran, TrustedAuthor))
+
+	out, err := reg.Apply(t.Context(), UpdateBranch, &Request{Pull: botPull("renovate[bot]"), DryRun: true}, nil)
+	require.NoError(t, err)
+	require.Equal(t, Outcome{DryRun: true}, out)
+	require.False(t, ran)
+
+	out, err = reg.Apply(t.Context(), UpdateBranch, &Request{Pull: botPull("someone"), DryRun: true}, nil)
+	require.NoError(t, err)
+	require.False(t, out.DryRun)
+	require.Equal(t, "trusted-author", out.RefusedBy)
+	require.False(t, ran)
+}
