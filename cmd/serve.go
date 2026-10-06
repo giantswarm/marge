@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -63,11 +64,29 @@ Transports:
                    at /healthz and /readyz; this is what the Helm chart runs`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// A server that finds its binary replaced cancels ctx and so stops
+		// the way an interrupt would.
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		ctx, replaced := context.WithCancel(ctx)
+		defer replaced()
+		guard := server.WithToolHandlerMiddleware(restartGuard(watchBinary(), replaced, cmd.ErrOrStderr()))
+
 		switch serveOpts.transport {
 		case transportStdio:
-			return server.ServeStdio(newMCPServer(gh.NewClient))
+			ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			// Listen answers a cancelled context with its error; stopping on
+			// a signal or a replaced binary is a clean exit.
+			err := server.NewStdioServer(newMCPServer(gh.NewClient, guard)).Listen(ctx, os.Stdin, os.Stdout)
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
 		case transportStreamableHTTP:
-			return serveHTTP(cmd.Context(), newMCPServer(gh.NewCallerClient), serveOpts.httpAddr, cmd.ErrOrStderr())
+			return serveHTTP(ctx, newMCPServer(gh.NewCallerClient, guard), serveOpts.httpAddr, cmd.ErrOrStderr())
 		default:
 			return fmt.Errorf("unknown transport %q: use %s or %s", serveOpts.transport, transportStdio, transportStreamableHTTP)
 		}
@@ -90,11 +109,11 @@ type toolset struct {
 
 // newMCPServer builds the MCP server and its tools over newClient; the
 // transport is chosen by the caller.
-func newMCPServer(newClient clientFactory) *server.MCPServer {
+func newMCPServer(newClient clientFactory, options ...server.ServerOption) *server.MCPServer {
 	mcpServer := server.NewMCPServer(
 		"marge",
 		version,
-		server.WithToolCapabilities(true),
+		append([]server.ServerOption{server.WithToolCapabilities(true)}, options...)...,
 	)
 
 	tools := toolset{newClient: newClient}

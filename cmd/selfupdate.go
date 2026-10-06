@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/creativeprojects/go-selfupdate"
@@ -86,6 +88,9 @@ installed binary is left untouched.`,
 			}
 
 			fmt.Printf("Successfully updated to %s (signature verified)\n", latest.Version())
+			if pids := runningServers(exe); len(pids) > 0 {
+				fmt.Printf("marge serve is still running the old binary (pid %s): it stops at its next call, restart it to serve %s now\n", joinPIDs(pids), latest.Version())
+			}
 			return nil
 		},
 	}
@@ -99,4 +104,12 @@ func checkReleased(v string) error {
 		return fmt.Errorf("self-update is only available for released builds (current version: %s)", v)
 	}
 	return nil
+}
+
+func joinPIDs(pids []int) string {
+	parts := make([]string, len(pids))
+	for i, pid := range pids {
+		parts[i] = strconv.Itoa(pid)
+	}
+	return strings.Join(parts, ", ")
 }
