@@ -393,3 +393,57 @@ func TestClient_HasToken_nilSafe(t *testing.T) {
 		t.Error("client with token must report it")
 	}
 }
+
+func TestClient_RevisionPipelines_filtersRevision(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/project/gh/org/repo/pipeline" || r.URL.Query().Get("branch") != "renovate/a b" {
+			t.Errorf("unexpected request %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"p2","number":2,"vcs":{"revision":"bbb"}},{"id":"p1","number":1,"vcs":{"revision":"aaa"}}],"next_page_token":"more"}`))
+	}))
+	defer srv.Close()
+	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL}
+
+	got, err := c.RevisionPipelines(context.Background(), "org", "repo", "renovate/a b", "aaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "p1" {
+		t.Errorf("pipelines = %+v, want p1 only", got)
+	}
+}
+
+func TestClient_WorkflowJobs_followsPages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("page-token") {
+		case "":
+			_, _ = w.Write([]byte(`{"items":[{"name":"go-build","status":"success"}],"next_page_token":"p2"}`))
+		case "p2":
+			_, _ = w.Write([]byte(`{"items":[{"name":"go-test","status":"success"}],"next_page_token":null}`))
+		default:
+			t.Errorf("unexpected page token %q", r.URL.Query().Get("page-token"))
+		}
+	}))
+	defer srv.Close()
+	c := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL}
+
+	got, err := c.WorkflowJobs(context.Background(), "wf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "go-build" || got[1].Name != "go-test" {
+		t.Errorf("jobs = %+v, want both pages", got)
+	}
+}
+
+func TestPipelineWorkflow_states(t *testing.T) {
+	if (PipelineWorkflow{Status: "running"}).Finished() || (PipelineWorkflow{Status: "on_hold"}).Finished() {
+		t.Error("a running or on-hold workflow reported finished")
+	}
+	if !(PipelineWorkflow{Status: "success"}).Finished() {
+		t.Error("a successful workflow reported unfinished")
+	}
+	if !(PipelineWorkflow{Tag: "rerun-workflow-from-beginning"}).IsRerun() || (PipelineWorkflow{Tag: "setup"}).IsRerun() {
+		t.Error("rerun tag misread")
+	}
+}

@@ -5,6 +5,8 @@
 //
 // Builds are read through the v1.1 API; reruns go through the v2 workflow
 // rerun endpoint, which also releases the jobs the cancel left blocked.
+// The v2 pipeline, workflow and job lists tell marge whether a head whose
+// "ci/circleci: <job>" contexts never reached GitHub was built at all.
 //
 // Only the handful of fields marge needs are modelled. The v1.1 build JSON
 // is public for public projects; private projects and every rerun endpoint
@@ -306,13 +308,138 @@ func (c *Client) Retry(ctx context.Context, ref BuildRef) (*Build, error) {
 // the new workflow run is not read; the caller identifies the rerun by the
 // workflow it asked for. The endpoint requires a token.
 func (c *Client) RerunWorkflowFromFailed(ctx context.Context, workflowID string) error {
-	payload, err := json.Marshal(map[string]bool{"from_failed": true})
+	return c.rerunWorkflow(ctx, workflowID, true)
+}
+
+// RerunWorkflow asks CircleCI to run every job of the workflow again from
+// the beginning, on the same commit. It is the rerun for a workflow that
+// has no failed job, for instance one that succeeded without posting its
+// statuses to GitHub. The endpoint requires a token.
+func (c *Client) RerunWorkflow(ctx context.Context, workflowID string) error {
+	return c.rerunWorkflow(ctx, workflowID, false)
+}
+
+func (c *Client) rerunWorkflow(ctx context.Context, workflowID string, fromFailed bool) error {
+	payload, err := json.Marshal(map[string]bool{"from_failed": fromFailed})
 	if err != nil {
 		return err
 	}
 	path := "/api/v2/workflow/" + url.PathEscape(workflowID) + "/rerun"
 	_, err = c.request(ctx, http.MethodPost, path, payload)
 	return err
+}
+
+// Pipeline is the subset of a v2 pipeline that marge inspects.
+type Pipeline struct {
+	ID     string `json:"id"`
+	Number int    `json:"number"`
+	VCS    struct {
+		Revision string `json:"revision"`
+		Branch   string `json:"branch"`
+	} `json:"vcs"`
+}
+
+// PipelineWorkflow is one workflow run of a pipeline. A rerun is a workflow
+// run of its own in the same pipeline, with the same name and a Tag that
+// says which kind of rerun it is.
+type PipelineWorkflow struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Tag    string `json:"tag"`
+}
+
+// Finished reports whether the workflow ended. A running, failing or
+// on-hold workflow still has jobs to report.
+func (w PipelineWorkflow) Finished() bool {
+	switch w.Status {
+	case "success", "failed", "error", "canceled", "not_run", "unauthorized":
+		return true
+	}
+	return false
+}
+
+// IsRerun reports whether the workflow run is a rerun of an earlier one
+// ("rerun-workflow-from-beginning", "rerun-workflow-from-failed", ...).
+func (w PipelineWorkflow) IsRerun() bool {
+	return strings.HasPrefix(w.Tag, "rerun")
+}
+
+// WorkflowJob is one job of a workflow run; its name is the job part of the
+// "ci/circleci: <job>" context the job posts to GitHub.
+type WorkflowJob struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+// listPages caps how many pages a v2 list call reads. A pipeline has a
+// handful of workflows and a workflow a few dozen jobs; the cap only keeps
+// a misbehaving server from paging for ever.
+const listPages = 5
+
+// RevisionPipelines returns the pipelines CircleCI ran for revision on
+// branch, newest first. It reads the branch's most recent pipelines only:
+// a revision is built when it is pushed, so an old one has scrolled out of
+// interest anyway. For a public project no token is needed.
+func (c *Client) RevisionPipelines(ctx context.Context, owner, repo, branch, revision string) ([]Pipeline, error) {
+	path := fmt.Sprintf("/api/v2/project/gh/%s/%s/pipeline?branch=%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.QueryEscape(branch))
+	all, err := list[Pipeline](ctx, c, path, 1)
+	if err != nil {
+		return nil, err
+	}
+	var out []Pipeline
+	for _, p := range all {
+		if p.VCS.Revision == revision {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// PipelineWorkflows returns the workflow runs of a pipeline, reruns
+// included, newest first.
+func (c *Client) PipelineWorkflows(ctx context.Context, pipelineID string) ([]PipelineWorkflow, error) {
+	return list[PipelineWorkflow](ctx, c, "/api/v2/pipeline/"+url.PathEscape(pipelineID)+"/workflow", listPages)
+}
+
+// WorkflowJobs returns the jobs of a workflow run.
+func (c *Client) WorkflowJobs(ctx context.Context, workflowID string) ([]WorkflowJob, error) {
+	return list[WorkflowJob](ctx, c, "/api/v2/workflow/"+url.PathEscape(workflowID)+"/job", listPages)
+}
+
+// list reads up to pages pages of a v2 list endpoint, following its
+// next_page_token.
+func list[T any](ctx context.Context, c *Client, path string, pages int) ([]T, error) {
+	var out []T
+	token := ""
+	for range pages {
+		p := path
+		if token != "" {
+			sep := "?"
+			if strings.Contains(p, "?") {
+				sep = "&"
+			}
+			p += sep + "page-token=" + url.QueryEscape(token)
+		}
+		body, err := c.request(ctx, http.MethodGet, p, nil)
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Items         []T    `json:"items"`
+			NextPageToken string `json:"next_page_token"`
+		}
+		if err := json.Unmarshal(escapeControlChars(body), &page); err != nil {
+			return nil, fmt.Errorf("decoding %s: %w", path, err)
+		}
+		out = append(out, page.Items...)
+		if page.NextPageToken == "" {
+			break
+		}
+		token = page.NextPageToken
+	}
+	return out, nil
 }
 
 // StepOutput returns the console output of one action of a build. An action

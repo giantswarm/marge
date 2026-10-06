@@ -80,8 +80,10 @@ type Processor struct {
 
 	// CircleCI looks behind failing "ci/circleci: <job>" commit statuses to
 	// tell an auto-cancelled build from a real failure (see
-	// classifyCancelled). Nil disables the lookup and every CircleCI
-	// failure is taken at face value.
+	// classifyCancelled), and behind required CircleCI contexts that never
+	// reported on a settled head (see handleUnposted). Nil disables the
+	// lookup: every CircleCI failure is taken at face value and every
+	// missing context is waited for.
 	CircleCI *circleci.Client
 
 	// SupersededBy maps a PR to the sibling that carries a higher version of
