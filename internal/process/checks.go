@@ -75,7 +75,11 @@ func (p *Processor) evaluateChecks(ctx context.Context, run *prRun) bool {
 			return true
 		}
 
-		run.set(pr.StatusWaitingChecks, waitingDetail(required, outcome.state))
+		waiting := waitingDetail(required, outcome.state)
+		if p.handleUnposted(ctx, run, required, waiting, time.Now()) {
+			return false
+		}
+		run.set(pr.StatusWaitingChecks, waiting)
 		p.recordSilentContext(run, required.Missing, time.Now())
 		if deadline == nil {
 			return false
