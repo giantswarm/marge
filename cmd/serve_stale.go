@@ -86,6 +86,11 @@ var procRoot = "/proc"
 // executable was at path before an update replaced it. Without /proc the
 // answer is empty.
 func runningServers(path string) []int {
+	root, err := os.OpenRoot(procRoot)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = root.Close() }()
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil
@@ -101,7 +106,7 @@ func runningServers(path string) []int {
 		if err != nil || target != path+" (deleted)" {
 			continue
 		}
-		cmdline, err := os.ReadFile(filepath.Join(dir, "cmdline"))
+		cmdline, err := root.ReadFile(filepath.Join(entry.Name(), "cmdline"))
 		if err != nil {
 			continue
 		}
