@@ -10,7 +10,11 @@ import (
 
 // SweepResult is the structured JSON output returned by the sweep MCP tool.
 type SweepResult struct {
-	Summary SweepSummary `json:"summary"`
+	// MargeVersion is the marge that produced this result, so a long-lived
+	// server running code older than the installed binary shows in its
+	// reports.
+	MargeVersion string       `json:"marge_version"`
+	Summary      SweepSummary `json:"summary"`
 	// Rules says which rule catalogue the sweep ran, and what it could not
 	// use. An absent catalogue leaves every remedy refused.
 	Rules *SweepRules `json:"rules,omitempty"`
@@ -333,7 +337,8 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 	blockedEntries := status.BlockedEntries()
 
 	result := SweepResult{
-		Rules: sweepRules,
+		MargeVersion: version,
+		Rules:        sweepRules,
 		Summary: SweepSummary{
 			Total:            total,
 			Merged:           counts.Merged,
