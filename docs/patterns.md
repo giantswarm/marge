@@ -31,6 +31,7 @@ the index.
 | Pattern | Rule | Action | Runbook row |
 |---|---|---|---|
 | A CircleCI build the platform cancelled | `circleci-auto-cancel` | `circleci-retry` | 74 |
+| A CircleCI executor image pull the registry rate-limited | `circleci-executor-image-pull-rate-limited` | `circleci-retry` | observed 2026-10-09 |
 | cosign transparency-log conflict | `cosign-transparency-log-conflict` | `circleci-retry` | 32 |
 | A chart push that lost the race on the shared app catalog | `circleci-catalog-push-race` | `circleci-retry` | observed 2026-09-18 to 2026-09-21 |
 | A release asset 404 moments after publication | `release-asset-404-race` | `rerun-failed` | 33 |
