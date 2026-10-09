@@ -7,7 +7,7 @@ match:
     name: "ci/circleci: push-*"
   log:
     source: circleci
-    pattern: "failed to push some refs to [^\\n]*giantswarm/[a-z0-9-]*catalog\\.git[^\\n]*\\n(?:[^\\n]*\\n){0,20}Giving up after \\d+ failures"
+    pattern: "failed to push some refs to [^\\n]*giantswarm/[a-z0-9-]*catalog\\.git[^\\n]*\\n(?:[^\\n]*\\n){0,20}Giving up after \\d+ (?:failures|push attempts to [a-z0-9-]*catalog)"
 action:
   name: circleci-retry
 evidence:
