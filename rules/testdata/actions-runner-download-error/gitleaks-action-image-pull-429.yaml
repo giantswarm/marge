@@ -1,0 +1,24 @@
+name: a Docker action whose image pull ACR rate-limited is a rerun, not a finding
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update gsoci.azurecr.io/giantswarm/agent-sandbox-controller docker tag to v1.0.6"
+  failing: ["publish / gitleaks"]
+  logs:
+    "actions:publish / gitleaks": |
+      ##[command]/usr/bin/docker build -t 6aaebc:8a3610aa87b24813a1d3b7346ba9d446 -f "/home/runner/work/_actions/giantswarm/gitleaks-action/main/Dockerfile" "/home/runner/work/_actions/giantswarm/gitleaks-action/main"
+      #1 [internal] load build definition from Dockerfile
+      #1 transferring dockerfile: 441B done
+      #1 DONE 0.0s
+      #2 [internal] load metadata for gsoci.azurecr.io/giantswarm/gitleaks:v7.4.0
+      #2 ERROR: unexpected status from HEAD request to https://gsoci.azurecr.io/v2/giantswarm/gitleaks/manifests/v7.4.0: 429 Too Many Requests
+      Dockerfile:1
+      --------------------
+         1 | >>> FROM gsoci.azurecr.io/giantswarm/gitleaks:v7.4.0
+         2 |
+         3 |     LABEL "com.github.actions.name"="gitleaks-action"
+      --------------------
+      ERROR: failed to build: failed to solve: gsoci.azurecr.io/giantswarm/gitleaks:v7.4.0: failed to resolve source metadata for gsoci.azurecr.io/giantswarm/gitleaks:v7.4.0: unexpected status from HEAD request to https://gsoci.azurecr.io/v2/giantswarm/gitleaks/manifests/v7.4.0: 429 Too Many Requests
+      ##[error]Docker build failed with exit code 1
+expect:
+  rule: actions-runner-download-error
