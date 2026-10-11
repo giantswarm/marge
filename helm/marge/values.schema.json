@@ -359,6 +359,10 @@
                 "timeZone": {
                     "type": "string",
                     "description": "IANA timezone the cron expressions are read in."
+                },
+                "ttlSecondsAfterFinished": {
+                    "type": "integer",
+                    "description": "Seconds a finished Job is kept before Kubernetes deletes it with its pod, so no run outlives the chart that made it. Three days keep the last run of a weekday schedule over a weekend."
                 }
             }
         },

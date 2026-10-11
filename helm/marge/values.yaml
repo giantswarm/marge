@@ -150,6 +150,8 @@ scheduleDefaults:
   successfulJobsHistoryLimit: 3
   # -- Failed Jobs kept
   failedJobsHistoryLimit: 3
+  # -- Seconds a finished Job is kept before Kubernetes deletes it with its pod, so no run outlives the chart that made it. Three days keep the last run of a weekday schedule over a weekend.
+  ttlSecondsAfterFinished: 259200
   # -- Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
   resources:
     limits:
