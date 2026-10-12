@@ -209,6 +209,10 @@ func markTool() mcp.Tool {
 	)
 }
 
+// maxMCPBodyBytes bounds an MCP request body. mcp-go reads a POST body whole
+// before validating it (CVE-2026-108859); the bound keeps that read small.
+const maxMCPBodyBytes = 1 << 20
+
 // httpHandler routes the MCP endpoint and the probe paths. Everything else
 // is a 404, so a misconfigured client gets a clear answer instead of an MCP
 // error.
@@ -227,7 +231,7 @@ func httpHandler(mcpServer *server.MCPServer) (http.Handler, *server.StreamableH
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", ok)
 	mux.HandleFunc("/readyz", ok)
-	mux.Handle(mcpEndpoint, gh.RequireBearer(streamable))
+	mux.Handle(mcpEndpoint, http.MaxBytesHandler(gh.RequireBearer(streamable), maxMCPBodyBytes))
 	return mux, streamable
 }
 
