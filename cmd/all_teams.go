@@ -25,7 +25,7 @@ type poster interface {
 
 // teamOutcome is what one team's sweep produced. A skipped team carries
 // neither a result nor an error. A swept team carries a result, and an error
-// as well when the summary could not be posted.
+// as well when its summary was refused.
 type teamOutcome struct {
 	Team string
 	// Skipped says why the team was not swept. Empty when the team was
@@ -35,6 +35,12 @@ type teamOutcome struct {
 	Err     error
 	// Posted reports that the summary reached the team's channel.
 	Posted bool
+	// Unposted is a summary the run rendered and could not post. The log
+	// carries it instead. One the gateway was unavailable for fails no run:
+	// the sweep's outcome is its PR actions, which are done by then. One the
+	// gateway refused is Err as well, since a refused credential or channel
+	// is a fault of the configuration that every later run repeats.
+	Unposted *unpostedSummary
 	// Stopped says the run's context was cancelled before the team was
 	// finished. On a scheduled run that is Kubernetes at
 	// activeDeadlineSeconds, and the counts of Result cover only the PRs
@@ -129,12 +135,29 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 		outcome.Err = channelErr
 		return outcome
 	}
-	outcome.Posted, err = r.post(ctx, team, channel, outcome.Result, outcome.Stopped)
-	if err != nil {
+	return r.postOutcome(ctx, outcome, channel)
+}
+
+// postOutcome posts the summary of a swept team and records how that went.
+func (r teamsRun) postOutcome(ctx context.Context, outcome teamOutcome, channel string) teamOutcome {
+	posted, err := r.post(ctx, outcome.Team, channel, outcome.Result, outcome.Stopped)
+	outcome.Posted = posted
+	errors.As(err, &outcome.Unposted)
+	if err != nil && !notify.Unavailable(err) {
 		outcome.Err = err
 	}
 	return outcome
 }
+
+// unpostedSummary is a summary whose post failed, kept so the log can carry
+// what the channel did not get.
+type unpostedSummary struct {
+	Text string
+	Err  error
+}
+
+func (u *unpostedSummary) Error() string { return u.Err.Error() }
+func (u *unpostedSummary) Unwrap() error { return u.Err }
 
 // summaryChannel returns the channel the team's summary goes to: the
 // notices channel of its channel file when its policy sets summary, and
@@ -178,7 +201,7 @@ func (r teamsRun) post(ctx context.Context, team, channel string, result SweepRe
 		return false, nil
 	}
 	if err := r.Notices.Post(ctx, team, channel, text); err != nil {
-		return false, err
+		return false, &unpostedSummary{Text: text, Err: err}
 	}
 	return true, nil
 }
@@ -203,6 +226,25 @@ func (r teamsRun) report(outcome teamOutcome) {
 		_, _ = fmt.Fprintf(r.Out, "team %s: %d PRs, %s, summary posted: %t\n",
 			outcome.Team, outcome.Result.Summary.Total, headline(outcome.Result.Summary), outcome.Posted)
 		r.reportReasons(outcome.Result)
+	}
+	r.reportUnposted(outcome)
+}
+
+// reportUnposted logs the error of a summary that was not posted and the
+// summary itself, so the run's log holds what the team channel missed.
+func (r teamsRun) reportUnposted(outcome teamOutcome) {
+	unposted := outcome.Unposted
+	if unposted == nil {
+		return
+	}
+	verdict := "the gateway was unavailable; the sweep's work is done, so the run does not fail on it"
+	if outcome.Err != nil {
+		verdict = "the gateway refused it, which no retry repairs"
+	}
+	_, _ = fmt.Fprintf(r.Out, "error: team %s: the summary was not posted (%s): %s\n", outcome.Team, verdict, unposted.Err)
+	_, _ = fmt.Fprintf(r.Out, "team %s: the summary that was not posted:\n", outcome.Team)
+	for _, line := range strings.Split(unposted.Text, "\n") {
+		_, _ = fmt.Fprintf(r.Out, "  | %s\n", line)
 	}
 }
 
@@ -315,6 +357,8 @@ type TeamSweep struct {
 	Skipped string `json:"skipped,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Posted  bool   `json:"summary_posted"`
+	// SummaryError says why the summary was not posted.
+	SummaryError string `json:"summary_error,omitempty"`
 	// Stopped says the run did not finish this team, so Result covers only
 	// the PRs it reached.
 	Stopped bool         `json:"stopped,omitempty"`
@@ -328,6 +372,9 @@ func teamsResult(outcomes []teamOutcome) []TeamSweep {
 		entry := TeamSweep{Team: outcome.Team, Skipped: outcome.Skipped, Posted: outcome.Posted, Stopped: outcome.Stopped}
 		if outcome.Err != nil {
 			entry.Error = outcome.Err.Error()
+		}
+		if outcome.Unposted != nil {
+			entry.SummaryError = outcome.Unposted.Err.Error()
 		}
 		if outcome.Skipped == "" && outcome.Err == nil {
 			result := outcome.Result

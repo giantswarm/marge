@@ -3,15 +3,20 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
 
+	"github.com/giantswarm/marge/internal/notify"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
 )
@@ -514,4 +519,101 @@ func TestTeamsRun_summaryWithoutAChannelFileFailsThePost(t *testing.T) {
 	outcomes, err = run.Run(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, teamsError(outcomes))
+}
+
+// noticeGateway stands in for the gateway's POST /notices: it answers each
+// post with the next status of its script, the last one for every post after
+// it, and keeps the summaries it took.
+type noticeGateway struct {
+	*httptest.Server
+	posts int
+	taken []string
+}
+
+func newNoticeGateway(t *testing.T, statuses ...int) (*noticeGateway, *notify.Client) {
+	t.Helper()
+	gateway := &noticeGateway{}
+	gateway.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gateway.posts++
+		status := statuses[min(gateway.posts, len(statuses))-1]
+		if status != http.StatusCreated {
+			http.Error(w, "posting the notice failed", status)
+			return
+		}
+		var body struct{ Text string }
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		gateway.taken = append(gateway.taken, body.Text)
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(gateway.Close)
+
+	token := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(token, []byte("sa-token\n"), 0o600))
+	return gateway, &notify.Client{BaseURL: gateway.URL, TokenFile: token, HTTP: gateway.Client(), Backoff: time.Millisecond}
+}
+
+// postedOutcome posts the summary of a finished honeybadger sweep that
+// merged two PRs through client, and returns the outcome, the run's log
+// and its error.
+func postedOutcome(t *testing.T, client poster) (teamOutcome, string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	run := teamsRun{Notices: client, Out: &out}
+	outcome := run.postOutcome(t.Context(), teamOutcome{
+		Team:   "honeybadger",
+		Result: SweepResult{Summary: SweepSummary{Total: 325, Merged: 2}},
+	}, "C0FAKE0002")
+	run.report(outcome)
+	return outcome, out.String(), teamsError([]teamOutcome{outcome})
+}
+
+// TestTeamsRun_summaryOverOneGatewayHiccup is a 502 the retry carries: the
+// summary reaches the channel once and the run succeeds.
+func TestTeamsRun_summaryOverOneGatewayHiccup(t *testing.T) {
+	gateway, client := newNoticeGateway(t, http.StatusBadGateway, http.StatusCreated)
+
+	outcome, log, err := postedOutcome(t, client)
+	require.NoError(t, err)
+	require.True(t, outcome.Posted)
+	require.Equal(t, 2, gateway.posts)
+	require.Len(t, gateway.taken, 1)
+	require.NotContains(t, log, "error:")
+}
+
+// TestTeamsRun_gatewayDownDoesNotFailAFinishedSweep is the acceptance
+// criterion: the PRs are swept, the gateway answers 5xx on every try, and
+// the run logs the error and the summary and succeeds.
+func TestTeamsRun_gatewayDownDoesNotFailAFinishedSweep(t *testing.T) {
+	gateway, client := newNoticeGateway(t, http.StatusBadGateway)
+
+	outcome, log, err := postedOutcome(t, client)
+	require.NoError(t, err, "a summary the gateway could not take fails no finished sweep")
+	require.False(t, outcome.Posted)
+	require.Equal(t, 4, gateway.posts, "the retries are bounded")
+	require.Empty(t, gateway.taken)
+
+	require.Contains(t, log, "error: team honeybadger: the summary was not posted")
+	require.Contains(t, log, "502 Bad Gateway")
+	require.Contains(t, log, "  | *honeybadger* swept 325 bot PRs", "the log carries the summary the channel missed")
+
+	entry := teamsResult([]teamOutcome{outcome})[0]
+	require.Contains(t, entry.SummaryError, "502")
+	require.Empty(t, entry.Error)
+	require.NotNil(t, entry.Result)
+}
+
+// TestTeamsRun_refusedSummaryFailsTheRun keeps a 4xx a failure: a refused
+// token or channel is a configuration fault every later run repeats, and the
+// Job's failure is what reports it. It is not retried, and the log still
+// carries the summary.
+func TestTeamsRun_refusedSummaryFailsTheRun(t *testing.T) {
+	gateway, client := newNoticeGateway(t, http.StatusForbidden)
+
+	outcome, log, err := postedOutcome(t, client)
+	require.ErrorContains(t, err, "team honeybadger")
+	require.ErrorContains(t, err, "403")
+	require.False(t, outcome.Posted)
+	require.Equal(t, 1, gateway.posts)
+	require.Contains(t, log, "team honeybadger failed:")
+	require.Contains(t, log, "  | *honeybadger* swept 325 bot PRs")
 }
