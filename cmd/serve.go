@@ -117,9 +117,9 @@ func newMCPServer(newClient clientFactory, options ...server.ServerOption) *serv
 	)
 
 	tools := toolset{newClient: newClient}
-	mcpServer.AddTool(listTool(), tools.handleList)
-	mcpServer.AddTool(sweepTool(), tools.handleSweep)
-	mcpServer.AddTool(remedyTool(), tools.handleRemedy)
+	mcpServer.AddTool(listTool(), reportProgress(tools.handleList))
+	mcpServer.AddTool(sweepTool(), reportProgress(tools.handleSweep))
+	mcpServer.AddTool(remedyTool(), reportProgress(tools.handleRemedy))
 	mcpServer.AddTool(markTool(), tools.handleMark)
 	mcpServer.AddTool(changelogTool(), tools.handleChangelog)
 

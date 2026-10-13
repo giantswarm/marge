@@ -130,6 +130,8 @@ func teamFileRepo() (owner, name string, err error) {
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
+	progress := progressFrom(ctx)
+	progress.Planned(len(prs))
 	if len(prs) == 0 {
 		if !opts.Quiet {
 			fmt.Fprintln(os.Stderr, "No matching PRs found.")
@@ -222,10 +224,12 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	forEachPR(pr.GroupByRepo(prs), concurrency, func(info pr.PRInfo) {
 		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
+		progress.Finished()
 	})
 
 	// Second pass: the PRs a merge of this sweep made dirty, once the bot
 	// has rebased them.
+	progress.Revisiting(proc.Deferred())
 	proc.Revisit(ctx, status)
 
 	close(stopRefresh)
