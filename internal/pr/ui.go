@@ -230,6 +230,40 @@ func PrintPlainResults(w io.Writer, status *PRStatus) {
 		}
 		_, _ = fmt.Fprintln(w)
 	}
+
+	printHandoff(w, status.Handoff())
+}
+
+// printHandoff lists the PRs the run handed over for rescue, one repository
+// at a time, and the candidates it turned away. The agent reads the JSON
+// output; this is the person's view of the same handoff.
+func printHandoff(w io.Writer, h *Handoff) {
+	if h == nil {
+		return
+	}
+	if h.Error != "" {
+		_, _ = fmt.Fprintf(w, "Rescue handoff: nothing handed over: %s\n\n", h.Error)
+		return
+	}
+	if !h.Budget.Counted {
+		_, _ = fmt.Fprintf(w, "Rescue handoff: no candidate, the weekly count of %d was not read.\n\n", h.Budget.Weekly)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Rescue handoff (%d, weekly count %d of %d used before this run):\n", h.Count(), h.Budget.Used, h.Budget.Weekly)
+	for _, repo := range h.Repos {
+		language := repo.Language
+		if repo.LanguageNote != "" {
+			language += "; " + repo.LanguageNote
+		}
+		_, _ = fmt.Fprintf(w, "  %s (%s)\n", repo.Repo, language)
+		for _, p := range repo.PRs {
+			_, _ = fmt.Fprintf(w, "    %s  %s  write to %s  failing: %s\n", p.PR.URL, p.Kind, p.WriteTarget, strings.Join(p.Checks, ", "))
+		}
+	}
+	for _, refusal := range h.Refused {
+		_, _ = fmt.Fprintf(w, "  not handed over: %s: %s\n", refusal.PR.URL, refusal.Reason)
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 // Section headers shared by the plain-text and TUI summaries for the stale

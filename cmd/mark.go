@@ -16,26 +16,46 @@ import (
 	"github.com/giantswarm/marge/internal/process"
 )
 
-var markOpts struct {
+// markRequest is one marker to write: the rescue outcome on a PR, and what
+// the attempt cost and who started it.
+type markRequest struct {
+	PRRef   string
 	Outcome string
 	Reason  string
 	Tool    string
 	DryRun  bool
+	// CostUSD is the cost the attempt reported; nil when it reported none.
+	CostUSD      *float64
+	Duration     time.Duration
+	DispatchedBy string
+	RunID        string
 }
 
-// validMarkOutcomes are the rescue outcomes a marker may record. "failed"
-// means a rescue was attempted on the current code and could not fix it;
-// "blocked" means the fix is known but waits on something external
-// (upstream release, ecosystem support, budget).
+var markOpts struct {
+	markRequest
+	costUSD float64
+}
+
+// validMarkOutcomes are the rescue outcomes a marker may record. "fixed"
+// means a fix was pushed and CI runs again; "merged" means the rescue saw
+// the PR merge; "failed" means a rescue was attempted on the current code
+// and could not fix it; "blocked" means the fix is known but waits on
+// something external (upstream release, ecosystem support, budget).
 var validMarkOutcomes = map[string]bool{
-	"failed":  true,
-	"blocked": true,
+	pr.RescueOutcomeFixed:   true,
+	pr.RescueOutcomeMerged:  true,
+	pr.RescueOutcomeFailed:  true,
+	pr.RescueOutcomeBlocked: true,
 }
 
 func init() {
-	markCmd.Flags().StringVar(&markOpts.Outcome, "outcome", "failed", "Rescue outcome: \"failed\" or \"blocked\"")
-	markCmd.Flags().StringVar(&markOpts.Reason, "reason", "", "Short explanation of why the rescue did not succeed")
+	markCmd.Flags().StringVar(&markOpts.Outcome, "outcome", "failed", "Rescue outcome: \"fixed\", \"merged\", \"failed\" or \"blocked\"")
+	markCmd.Flags().StringVar(&markOpts.Reason, "reason", "", "Short explanation of the outcome")
 	markCmd.Flags().StringVar(&markOpts.Tool, "tool", "ai", "Name of the tool/agent that attempted the rescue (e.g. \"klaus\")")
+	markCmd.Flags().Float64Var(&markOpts.costUSD, "cost-usd", 0, "Estimated cost of the attempt in US dollars, as the agent reported it; unset records \"cost not reported\"")
+	markCmd.Flags().DurationVar(&markOpts.Duration, "duration", 0, "How long the attempt took")
+	markCmd.Flags().StringVar(&markOpts.DispatchedBy, "dispatched-by", "", "Who started the run, as the rescue handoff's triggered_by names it")
+	markCmd.Flags().StringVar(&markOpts.RunID, "run-id", "", "The run the attempt belongs to")
 	markCmd.Flags().BoolVar(&markOpts.DryRun, "dry-run", false, "Show the marker that would be written without posting it")
 
 	rootCmd.AddCommand(markCmd)
@@ -43,7 +63,7 @@ func init() {
 
 var markCmd = &cobra.Command{
 	Use:   "mark <pr-url>",
-	Short: "Record a failed AI rescue attempt on a PR",
+	Short: "Record the outcome of an AI rescue attempt on a PR",
 	Long: `Post a machine-readable ai-rescue marker comment on a pull request.
 
 Subsequent sweeps read the marker and annotate the PR's failure entry with
@@ -66,7 +86,12 @@ a convenience so callers do not need to know the marker format.`,
 			return err
 		}
 
-		marker, owner, repo, number, err := markRescue(ctx, client, args[0], markOpts.Outcome, markOpts.Reason, markOpts.Tool, markOpts.DryRun)
+		req := markOpts.markRequest
+		req.PRRef = args[0]
+		if cmd.Flags().Changed("cost-usd") {
+			req.CostUSD = &markOpts.costUSD
+		}
+		marker, owner, repo, number, err := markRescue(ctx, client, req)
 		if err != nil {
 			return err
 		}
@@ -97,13 +122,19 @@ func pinned(m *pr.RescueMarker) string {
 // marker that was written. Shared by the CLI command and the MCP tool. A dry
 // run builds the marker, head SHA and fingerprint included, and posts
 // nothing, so a caller sees exactly what the write would say.
-func markRescue(ctx context.Context, client *github.Client, prRef, outcome, reason, tool string, dryRun bool) (*pr.RescueMarker, string, string, int, error) {
-	outcome = strings.ToLower(strings.TrimSpace(outcome))
+func markRescue(ctx context.Context, client *github.Client, req markRequest) (*pr.RescueMarker, string, string, int, error) {
+	outcome := strings.ToLower(strings.TrimSpace(req.Outcome))
 	if !validMarkOutcomes[outcome] {
-		return nil, "", "", 0, fmt.Errorf("invalid outcome %q (must be \"failed\" or \"blocked\")", outcome)
+		return nil, "", "", 0, fmt.Errorf("invalid outcome %q (must be \"fixed\", \"merged\", \"failed\" or \"blocked\")", outcome)
+	}
+	if req.CostUSD != nil && *req.CostUSD < 0 {
+		return nil, "", "", 0, fmt.Errorf("invalid cost %v: a cost is not negative", *req.CostUSD)
+	}
+	if req.Duration < 0 {
+		return nil, "", "", 0, fmt.Errorf("invalid duration %v: a duration is not negative", req.Duration)
 	}
 
-	owner, repo, number, err := pr.ParsePRRef(prRef)
+	owner, repo, number, err := pr.ParsePRRef(req.PRRef)
 	if err != nil {
 		return nil, "", "", 0, err
 	}
@@ -114,15 +145,19 @@ func markRescue(ctx context.Context, client *github.Client, prRef, outcome, reas
 	}
 
 	marker := &pr.RescueMarker{
-		Tool:        tool,
-		Outcome:     outcome,
-		Reason:      reason,
-		HeadSHA:     pullReq.GetHead().GetSHA(),
-		At:          time.Now().UTC().Truncate(time.Second),
-		Fingerprint: process.FingerprintPR(ctx, client, owner, repo, pullReq),
+		Tool:         req.Tool,
+		Outcome:      outcome,
+		Reason:       req.Reason,
+		HeadSHA:      pullReq.GetHead().GetSHA(),
+		At:           time.Now().UTC().Truncate(time.Second),
+		Fingerprint:  process.FingerprintPR(ctx, client, owner, repo, pullReq),
+		CostUSD:      req.CostUSD,
+		DurationS:    int(req.Duration.Round(time.Second).Seconds()),
+		DispatchedBy: req.DispatchedBy,
+		RunID:        req.RunID,
 	}
 
-	if dryRun {
+	if req.DryRun {
 		return marker, owner, repo, number, nil
 	}
 

@@ -18,6 +18,10 @@ import (
 	"github.com/giantswarm/marge/internal/rules"
 )
 
+// mergeableDirty is GitHub's mergeable_state for a PR that conflicts with
+// its base.
+const mergeableDirty = "dirty"
+
 const (
 	checkPollInterval = 15 * time.Second
 
@@ -306,7 +310,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		run.set(pr.StatusSkipped, "head branch lives in another repository")
 		return
 	}
-	if pullReq.GetMergeableState() == "dirty" {
+	if pullReq.GetMergeableState() == mergeableDirty {
 		if reason, detail := p.classifyObsolete(ctx, run); reason != "" {
 			run.markObsolete(reason, detail)
 			return
@@ -413,15 +417,17 @@ func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 	return strings.Join(steps, ", ")
 }
 
-// finish runs on every exit: it attaches a prior rescue marker to failure
-// outcomes, writes the classification label and appends the notes. An
-// untouched PR gets none of it.
+// finish runs on every exit: it applies the matching rule, attaches a prior
+// rescue marker to failure outcomes, records a rescue candidate, writes the
+// classification label and appends the notes. An untouched PR gets none of
+// it.
 func (p *Processor) finish(ctx context.Context, run *prRun) {
 	if run.untouched || cutShort(ctx, run) {
 		return
 	}
 	p.applyRule(ctx, run)
 	p.attachRescueMarker(ctx, run)
+	p.rescueCandidate(ctx, run)
 	state := run.status.StateAt(run.idx)
 	if class := pr.LabelClass(state); class != "" && !p.DryRun {
 		p.setLabel(ctx, run, class)
