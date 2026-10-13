@@ -63,6 +63,9 @@ and merge the eligible green ones.`,
 		if err != nil {
 			return err
 		}
+		if actions.Selected(process.ActionRescue) {
+			return errRescueNeedsTeam
+		}
 		runOpts.Actions = actions
 		runOpts.CheckTimeout = interactiveCheckTimeout
 
@@ -102,7 +105,7 @@ and merge the eligible green ones.`,
 			reportRules(os.Stderr, rulesReport)
 
 			opts := runOpts
-			opts.Policies = scope.Policies
+			opts.useScope(scope)
 			opts.Rules = catalogue
 			opts.Cols = pr.FullColumns()
 

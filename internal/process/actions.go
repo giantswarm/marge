@@ -2,6 +2,7 @@ package process
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -26,6 +27,10 @@ const (
 	// ActionRemedy applies the catalogue rule that matches a classified PR,
 	// through the action the rule names and that action's guards.
 	ActionRemedy Action = "remedy"
+	// ActionRescue hands the PRs no rule recognised to the agent the run
+	// executes inside, within the team's weekly count. It writes no marker
+	// and pushes nothing: the agent does the work and writes the outcome.
+	ActionRescue Action = "rescue"
 	// ActionChangelog commits the team's changelog entry to a PR that will
 	// merge, before anything is approved. A team's policy switches it off.
 	ActionChangelog Action = "changelog"
@@ -36,22 +41,29 @@ const (
 // AllActions lists every action in execution order. changelog comes before
 // approve: the entry is a commit, and a commit pushed after an approval
 // dismisses it wherever the branch protection dismisses stale reviews.
-var AllActions = []Action{ActionClassify, ActionChangelog, ActionApprove, ActionMerge, ActionRefresh, ActionRetry, ActionRemedy, ActionMark}
+var AllActions = []Action{ActionClassify, ActionChangelog, ActionApprove, ActionMerge, ActionRefresh, ActionRetry, ActionRemedy, ActionRescue, ActionMark}
+
+// optIn are the actions an empty list leaves out: a caller names them. A
+// rescue spends the team's weekly count, so no default selects one.
+var optIn = map[Action]bool{ActionRescue: true}
 
 // ActionSet is the subset of actions one sweep performs.
 type ActionSet map[Action]bool
 
 // ParseActions reads a comma-separated action list. An empty list selects
-// every action; an unknown name is an error naming the valid ones.
+// every action but the opt-in ones; an unknown name is an error naming the
+// valid ones.
 func ParseActions(csv string) (ActionSet, error) {
 	set := ActionSet{}
 	if strings.TrimSpace(csv) == "" {
 		for _, a := range AllActions {
-			set[a] = true
+			if !optIn[a] {
+				set[a] = true
+			}
 		}
 		return set, nil
 	}
-	for _, raw := range strings.Split(csv, ",") {
+	for raw := range strings.SplitSeq(csv, ",") {
 		name := Action(strings.ToLower(strings.TrimSpace(raw)))
 		if name == "" {
 			continue
@@ -65,6 +77,9 @@ func ParseActions(csv string) (ActionSet, error) {
 	if set[ActionRemedy] && !set[ActionMark] {
 		return nil, fmt.Errorf("action %q needs %q: the once-per-change guard reads the evidence marker, so a remedy without it repeats on every sweep", ActionRemedy, ActionMark)
 	}
+	if set[ActionRescue] && !set[ActionRemedy] {
+		return nil, fmt.Errorf("action %q needs %q: only the rule stage says that no rule recognised a failure", ActionRescue, ActionRemedy)
+	}
 	return set, nil
 }
 
@@ -75,6 +90,12 @@ func (s ActionSet) Has(a Action) bool {
 		return true
 	}
 	return s[a]
+}
+
+// Selected reports whether the set names the action. Unlike Has, a nil set
+// selects nothing, so an opt-in action never runs by default.
+func (s ActionSet) Selected(a Action) bool {
+	return s != nil && s[a]
 }
 
 // ClassifyOnly reports whether the set performs the classify step alone.
@@ -96,7 +117,7 @@ func (s ActionSet) ClassifyOnly() bool {
 func (s ActionSet) String() string {
 	var names []string
 	for _, a := range AllActions {
-		if s.Has(a) {
+		if s.Has(a) && (!optIn[a] || s.Selected(a)) {
 			names = append(names, string(a))
 		}
 	}
@@ -104,12 +125,7 @@ func (s ActionSet) String() string {
 }
 
 func isAction(a Action) bool {
-	for _, known := range AllActions {
-		if known == a {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(AllActions, a)
 }
 
 // ActionNames lists every action name in execution order.

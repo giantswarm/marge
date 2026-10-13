@@ -53,8 +53,9 @@ var serveCmd = &cobra.Command{
 	Long: `Start a Model Context Protocol (MCP) server.
 The server exposes "list", "sweep", "remedy" and "mark", which mirror the CLI
 commands of those names and return structured JSON instead of terminal
-output, and "changelog", which writes one changelog entry on a bot PR in the
-team's own format.
+output; "rescue", which is the sweep's rescue action on one PR and returns
+its handoff; and "changelog", which writes one changelog entry on a bot PR in
+the team's own format.
 
 Transports:
   stdio            JSON-RPC over stdin/stdout, for a local MCP client that
@@ -120,6 +121,7 @@ func newMCPServer(newClient clientFactory, options ...server.ServerOption) *serv
 	mcpServer.AddTool(listTool(), reportProgress(tools.handleList))
 	mcpServer.AddTool(sweepTool(), reportProgress(tools.handleSweep))
 	mcpServer.AddTool(remedyTool(), reportProgress(tools.handleRemedy))
+	mcpServer.AddTool(rescueTool(), reportProgress(tools.handleRescue))
 	mcpServer.AddTool(markTool(), tools.handleMark)
 	mcpServer.AddTool(changelogTool(), tools.handleChangelog)
 
@@ -182,22 +184,61 @@ func remedyTool() mcp.Tool {
 	)
 }
 
+func rescueTool() mcp.Tool {
+	return mcp.NewTool("rescue",
+		mcp.WithDescription("WRITES (destructive): classify one PR, apply the catalogue rule that matches it, and when none does, decide whether the PR may be rescued and return the handoff. "+
+			"This is the sweep engine's classify, remedy, rescue and mark steps on a single PR under the team's policy, so a rule that matches still wins and the rescue only takes what no rule recognised. "+
+			"A PR is handed over when the team's policy allows rescues, no security check failed, every required check reported, no rescue marker stands for the change, the team's weekly count is not spent, the PR is still open without a conflict and no teammate PR is open on the same module. "+
+			"A PR handed over is labelled marge/rescued; the rescue itself is the caller's to run, and the caller writes the outcome with the mark tool, dispatched_by included. "+
+			"The answer's rescue_handoff carries the PR, its failing checks with their logs, the language, where the fix is written and the weekly count left; refused names why a PR was not handed over."),
+		mcp.WithString("pr_url",
+			mcp.Required(),
+			mcp.Description("The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER"),
+		),
+		mcp.WithString("team",
+			mcp.Required(),
+			mcp.Description("The team the rescue is counted against. Its policy decides whether rescues are on, and its weekly count bounds them."),
+		),
+		mcp.WithBoolean("dry_run",
+			mcp.Description("Return the handoff that would be made and write nothing: no label, no evidence comment, no rule action (default: false)"),
+		),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
+	)
+}
+
 func markTool() mcp.Tool {
 	return mcp.NewTool("mark",
-		mcp.WithDescription("WRITES: record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
+		mcp.WithDescription("WRITES: record the outcome of an AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment, with what the attempt cost and who started its run. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted, and every marker counts against the team's weekly rescue number. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
 		mcp.WithString("pr_url",
 			mcp.Required(),
 			mcp.Description("The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER"),
 		),
 		mcp.WithString("outcome",
-			mcp.Description("Rescue outcome (default: \"failed\")"),
-			mcp.Enum("failed", "blocked"),
+			mcp.Description("Rescue outcome (default: \"failed\"): fixed (a fix is pushed and CI runs again), merged, failed (attempted and could not fix it) or blocked (the fix waits on something outside the repository)"),
+			mcp.Enum(pr.RescueOutcomeFixed, pr.RescueOutcomeMerged, pr.RescueOutcomeFailed, pr.RescueOutcomeBlocked),
 		),
 		mcp.WithString("reason",
-			mcp.Description("Short explanation of why the rescue did not succeed"),
+			mcp.Description("Short explanation of the outcome"),
 		),
 		mcp.WithString("tool",
 			mcp.Description("Name of the tool/agent that attempted the rescue (default: \"ai\")"),
+		),
+		mcp.WithNumber("cost_usd",
+			mcp.Description("Estimated cost of the attempt in US dollars, as the agent reported it. Left out, the marker says the cost was not reported."),
+			mcp.Min(0),
+		),
+		mcp.WithNumber("duration_s",
+			mcp.Description("How long the attempt took, in seconds"),
+			mcp.Min(0),
+		),
+		mcp.WithString("dispatched_by",
+			mcp.Description("Who started the run: the rescue handoff's triggered_by"),
+		),
+		mcp.WithString("run_id",
+			mcp.Description("The run the attempt belongs to"),
 		),
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Return the marker that would be written, head SHA and fingerprint included, and post nothing (default: false)"),
@@ -448,6 +489,9 @@ func (r sweepRequest) validate() error {
 	if r.Opts.Team != "" && (r.Opts.Query != "" || len(r.Repos) > 0 || r.Opts.Org != "" || r.Opts.ReposFile != "") {
 		return errors.New("team is mutually exclusive with query, org, repos and repos_file")
 	}
+	if r.Opts.Actions.Selected(process.ActionRescue) && r.Opts.Team == "" {
+		return errRescueNeedsTeam
+	}
 	return nil
 }
 
@@ -477,7 +521,7 @@ func (t toolset) discover(ctx context.Context, req *sweepRequest) (scopedPRs, er
 	if err != nil {
 		return scopedPRs{}, err
 	}
-	req.Opts.Policies = scope.Policies
+	req.Opts.useScope(scope)
 
 	login, err := gh.AuthenticatedLogin(ctx, client)
 	if err != nil {
@@ -682,6 +726,35 @@ func remedyRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 	}, nil
 }
 
+// rescueRequest is the sweep's rescue action on one PR, under the team's
+// policy. The team is required: a rescue is counted against a team's week.
+func rescueRequest(request mcp.CallToolRequest) (sweepRequest, error) {
+	team := request.GetString("team", "")
+	if team == "" {
+		return sweepRequest{}, errRescueNeedsTeam
+	}
+	req, err := remedyRequest(request)
+	if err != nil {
+		return sweepRequest{}, err
+	}
+	req.Rule = ""
+	req.Opts.Team = team
+	req.Opts.Actions = process.ActionSet{process.ActionClassify: true, process.ActionRemedy: true, process.ActionRescue: true, process.ActionMark: true}
+	return req, nil
+}
+
+func (t toolset) handleRescue(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	req, err := rescueRequest(request)
+	if err != nil {
+		return toolError(ctx, err), nil
+	}
+	sweepResult, err := t.run(ctx, req)
+	if err != nil {
+		return toolError(ctx, err), nil
+	}
+	return result(sweepResult)
+}
+
 func (t toolset) handleRemedy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	req, err := remedyRequest(request)
 	if err != nil {
@@ -695,18 +768,14 @@ func (t toolset) handleRemedy(ctx context.Context, request mcp.CallToolRequest) 
 }
 
 func (t toolset) handleMark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	prRef := request.GetString("pr_url", "")
-	outcome := request.GetString("outcome", "failed")
-	reason := request.GetString("reason", "")
-	tool := request.GetString("tool", "ai")
-	dryRun := request.GetBool("dry_run", false)
+	req := parseMarkRequest(request)
 
 	client, err := t.newClient(ctx)
 	if err != nil {
 		return toolError(ctx, err), nil
 	}
 
-	marker, owner, repo, number, err := markRescue(ctx, client, prRef, outcome, reason, tool, dryRun)
+	marker, owner, repo, number, err := markRescue(ctx, client, req)
 	if err != nil {
 		return toolError(ctx, err), nil
 	}
@@ -719,7 +788,7 @@ func (t toolset) handleMark(ctx context.Context, request mcp.CallToolRequest) (*
 		"tool":     marker.Tool,
 		"head_sha": marker.HeadSHA,
 		"at":       marker.At.Format(time.RFC3339),
-		"dry_run":  dryRun,
+		"dry_run":  req.DryRun,
 	}
 	if marker.PatchID != "" {
 		written["patch_id"] = marker.PatchID
@@ -727,5 +796,37 @@ func (t toolset) handleMark(ctx context.Context, request mcp.CallToolRequest) (*
 	if marker.ChangeID != "" {
 		written["change_id"] = marker.ChangeID
 	}
+	if marker.CostUSD != nil {
+		written["cost_usd"] = *marker.CostUSD
+	}
+	if marker.DurationS > 0 {
+		written["duration_s"] = marker.DurationS
+	}
+	if marker.DispatchedBy != "" {
+		written["dispatched_by"] = marker.DispatchedBy
+	}
+	if marker.RunID != "" {
+		written["run_id"] = marker.RunID
+	}
 	return result(written)
+}
+
+// parseMarkRequest reads the arguments markTool declares. A cost left out
+// is a cost not reported, which is not a cost of zero.
+func parseMarkRequest(request mcp.CallToolRequest) markRequest {
+	req := markRequest{
+		PRRef:        request.GetString("pr_url", ""),
+		Outcome:      request.GetString("outcome", pr.RescueOutcomeFailed),
+		Reason:       request.GetString("reason", ""),
+		Tool:         request.GetString("tool", "ai"),
+		DryRun:       request.GetBool("dry_run", false),
+		Duration:     time.Duration(request.GetInt("duration_s", 0)) * time.Second,
+		DispatchedBy: request.GetString("dispatched_by", ""),
+		RunID:        request.GetString("run_id", ""),
+	}
+	if _, ok := request.GetArguments()["cost_usd"]; ok {
+		cost := request.GetFloat("cost_usd", 0)
+		req.CostUSD = &cost
+	}
+	return req
 }

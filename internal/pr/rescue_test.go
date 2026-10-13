@@ -152,7 +152,7 @@ func TestCommentBody_roundTrips(t *testing.T) {
 
 	body := orig.CommentBody()
 
-	if !strings.Contains(body, "**AI rescue failed** (klaus): pytest-helm-charts requires pytest<9") {
+	if !strings.Contains(body, "**AI rescue failed** (klaus), cost not reported: pytest-helm-charts requires pytest<9") {
 		t.Errorf("human-readable part missing or wrong:\n%s", body)
 	}
 	if !strings.Contains(body, `"patch_id":"5ad45e13d66acc2b"`) || !strings.Contains(body, `"change_id":"pytest@v9"`) {
@@ -165,6 +165,40 @@ func TestCommentBody_roundTrips(t *testing.T) {
 	}
 	if parsed.Tool != orig.Tool || parsed.Outcome != orig.Outcome || parsed.Reason != orig.Reason || parsed.HeadSHA != orig.HeadSHA || !parsed.At.Equal(orig.At) || parsed.Fingerprint != orig.Fingerprint {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", parsed, orig)
+	}
+}
+
+func TestCommentBody_carriesTheAttempt(t *testing.T) {
+	cost := 3.2
+	orig := &RescueMarker{
+		Tool:         "rescue-agent",
+		Outcome:      RescueOutcomeFixed,
+		HeadSHA:      "d9f00bf2",
+		CostUSD:      &cost,
+		DurationS:    14*60 + 10,
+		DispatchedBy: "the schedule",
+		RunID:        "ctx-42",
+	}
+
+	body := orig.CommentBody()
+
+	if !strings.Contains(body, "**AI rescue fixed** (rescue-agent), estimated $3.20 in 14 min, dispatched by the schedule") {
+		t.Errorf("human-readable part missing or wrong:\n%s", body)
+	}
+	parsed := ParseRescueMarker(body)
+	if parsed == nil {
+		t.Fatal("CommentBody output did not parse back")
+	}
+	if parsed.CostUSD == nil || *parsed.CostUSD != cost || parsed.DurationS != orig.DurationS || parsed.DispatchedBy != orig.DispatchedBy || parsed.RunID != orig.RunID {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", parsed, orig)
+	}
+}
+
+func TestCommentBody_aZeroCostIsReported(t *testing.T) {
+	zero := 0.0
+	body := (&RescueMarker{Outcome: RescueOutcomeBlocked, CostUSD: &zero}).CommentBody()
+	if !strings.Contains(body, "estimated $0.00") || !strings.Contains(body, `"cost_usd":0`) {
+		t.Errorf("a reported cost of zero must not read as an unreported one:\n%s", body)
 	}
 }
 

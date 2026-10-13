@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,12 +123,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 	isStatusContext := func(name string) bool {
-		for _, c := range f.statusContexts {
-			if c == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(f.statusContexts, name)
 	}
 	checksFor := func(checks map[string]string, includeStatuses bool) (github.CombinedStatus, github.ListCheckRunsResults) {
 		cs := github.CombinedStatus{State: new("success")}
@@ -874,7 +870,7 @@ func TestParseActions(t *testing.T) {
 	all, err := ParseActions("")
 	require.NoError(t, err)
 	for _, a := range AllActions {
-		require.True(t, all.Has(a), string(a))
+		require.Equal(t, a != ActionRescue, all.Has(a), string(a))
 	}
 
 	some, err := ParseActions(" Merge ,approve")
@@ -882,10 +878,40 @@ func TestParseActions(t *testing.T) {
 	require.Equal(t, "classify,approve,merge", some.String())
 	require.False(t, some.Has(ActionRefresh))
 
-	_, err = ParseActions("rescue")
+	_, err = ParseActions("rescind")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "classify, changelog, approve, merge, refresh, retry, remedy, mark")
-	require.True(t, strings.Contains(err.Error(), fmt.Sprintf("%q", "rescue")))
+	require.Contains(t, err.Error(), "classify, changelog, approve, merge, refresh, retry, remedy, rescue, mark")
+	require.True(t, strings.Contains(err.Error(), fmt.Sprintf("%q", "rescind")))
+}
+
+// A rescue spends the team's weekly count, so it runs only when named: the
+// empty list leaves it out, and so does a nil set, which Has reads as every
+// action.
+func TestParseActions_rescueIsOptIn(t *testing.T) {
+	all, err := ParseActions("")
+	require.NoError(t, err)
+	require.False(t, all.Selected(ActionRescue))
+	require.NotContains(t, all.String(), "rescue")
+
+	var none ActionSet
+	require.True(t, none.Has(ActionRescue), "Has reads a nil set as every action")
+	require.False(t, none.Selected(ActionRescue))
+	require.NotContains(t, none.String(), "rescue")
+
+	named, err := ParseActions("remedy,rescue,mark")
+	require.NoError(t, err)
+	require.True(t, named.Selected(ActionRescue))
+	require.Equal(t, "classify,remedy,rescue,mark", named.String())
+}
+
+// Only the rule stage says no rule recognised a failure, so a rescue
+// without it would hand over PRs a rule fixes.
+func TestParseActions_rescueNeedsRemedy(t *testing.T) {
+	_, err := ParseActions("rescue")
+	require.ErrorContains(t, err, `action "rescue" needs "remedy"`)
+
+	_, err = ParseActions("rescue,mark")
+	require.ErrorContains(t, err, `action "rescue" needs "remedy"`)
 }
 
 // once-per-change reads the evidence marker, and only the mark action

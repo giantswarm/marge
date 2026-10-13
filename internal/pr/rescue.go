@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -35,7 +36,7 @@ type RescueMarker struct {
 	// set on a marker that records one. A refresh is one attempt per change
 	// and base head, so a base that moved on makes it fair game again.
 	BaseSHA string    `json:"base_sha,omitempty"`
-	At      time.Time `json:"at,omitempty"`
+	At      time.Time `json:"at,omitzero"`
 	Fingerprint
 
 	// Signature, Checks and Excerpt describe a failure no rule of the
@@ -46,6 +47,15 @@ type RescueMarker struct {
 	Signature string   `json:"signature,omitempty"`
 	Checks    []string `json:"checks,omitempty"`
 	Excerpt   string   `json:"excerpt,omitempty"`
+
+	// CostUSD, DurationS, DispatchedBy and RunID describe a rescue attempt:
+	// what it cost as the agent estimated it, how long it took, who started
+	// the run and which run it was. CostUSD is nil when no cost was
+	// reported, which is not a cost of zero.
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+	DurationS    int      `json:"duration_s,omitempty"`
+	DispatchedBy string   `json:"dispatched_by,omitempty"`
+	RunID        string   `json:"run_id,omitempty"`
 
 	// Stale and Rebased are computed by MarkStale, never serialized into
 	// the marker. Rebased is set when the head moved but the change did not.
@@ -77,6 +87,19 @@ const UnhandledPhrase = "unrecognised failure"
 // it, which the run's log holds only for the length of the run.
 const MarkerOutcomeHeld = "held"
 
+// The outcomes of a rescue attempt. Fixed is a fix pushed with CI running
+// again, which the next sweep merges; Merged is a PR the rescue saw merge.
+const (
+	RescueOutcomeMerged  = "merged"
+	RescueOutcomeFixed   = "fixed"
+	RescueOutcomeFailed  = "failed"
+	RescueOutcomeBlocked = "blocked"
+)
+
+// RescuePhrase is the literal every rescue marker's human line starts with,
+// so a search over PR comments finds every PR that holds one.
+const RescuePhrase = "AI rescue"
+
 // IsUnhandled reports whether the marker records a failure no rule
 // recognised, with the signature that groups it across PRs.
 func (m *RescueMarker) IsUnhandled() bool {
@@ -95,9 +118,9 @@ func (m *RescueMarker) IsEvidence() bool {
 // mangled comment can never break a sweep.
 func ParseRescueMarker(body string) *RescueMarker {
 	matches := rescueMarkerRE.FindAllStringSubmatch(body, -1)
-	for i := len(matches) - 1; i >= 0; i-- {
+	for _, match := range slices.Backward(matches) {
 		var m RescueMarker
-		if err := json.Unmarshal([]byte(matches[i][1]), &m); err != nil {
+		if err := json.Unmarshal([]byte(match[1]), &m); err != nil {
 			continue
 		}
 		if m.Outcome == "" {
@@ -159,7 +182,7 @@ func (m *RescueMarker) CommentBody() string {
 	if tool == "" {
 		tool = "ai"
 	}
-	human := fmt.Sprintf("**AI rescue %s** (%s)", m.Outcome, tool)
+	human := fmt.Sprintf("**%s %s** (%s), %s", RescuePhrase, m.Outcome, tool, m.attempt())
 	switch {
 	case m.IsUnhandled():
 		human = fmt.Sprintf("**Sweep: %s** (%s), signature %s", UnhandledPhrase, tool, m.Signature)
@@ -172,6 +195,22 @@ func (m *RescueMarker) CommentBody() string {
 
 	payload, _ := json.Marshal(m)
 	return fmt.Sprintf("%s\n\n<!-- ai-rescue: %s -->", human, payload)
+}
+
+// attempt renders what a rescue attempt cost and who started it, e.g.
+// "estimated $3.20 in 14 min, dispatched by the schedule".
+func (m *RescueMarker) attempt() string {
+	cost := "cost not reported"
+	if m.CostUSD != nil {
+		cost = fmt.Sprintf("estimated $%.2f", *m.CostUSD)
+	}
+	if m.DurationS > 0 {
+		cost += fmt.Sprintf(" in %d min", max(1, (m.DurationS+30)/60))
+	}
+	if m.DispatchedBy != "" {
+		cost += ", dispatched by " + m.DispatchedBy
+	}
+	return cost
 }
 
 // FormatRescue renders the marker as a short human-readable annotation

@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"github.com/giantswarm/marge/internal/circleci"
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/logs"
+	"github.com/giantswarm/marge/internal/patterns"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
@@ -64,7 +67,31 @@ type RunOptions struct {
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
+
+	// TeamRepos and Languages are the team scope's repository list and the
+	// language each entry declares, which the rescue handoff reads. Both
+	// are nil outside the team scope.
+	TeamRepos []string
+	Languages map[string]string
+	// TriggeredBy names who started the run, for the rescue handoff and
+	// the markers the agent writes. Empty names the authenticated login.
+	TriggeredBy string
+	// Toolchain is the language the rescue agent's image builds. Empty
+	// hands over PRs of every language.
+	Toolchain string
 }
+
+// useScope takes over what a resolved scope says about the run: the policy
+// of its PRs, and the team's repositories and their languages.
+func (o *RunOptions) useScope(scope policy.Scope) {
+	o.Policies = scope.Policies
+	o.TeamRepos = scope.Repos
+	o.Languages = scope.Languages
+}
+
+// errRescueNeedsTeam refuses the rescue action outside the team scope: a
+// rescue is counted against a team's week, and the query scope has none.
+var errRescueNeedsTeam = errors.New("the rescue action needs the team scope: a rescue is counted against a team's weekly number, and a query has no team")
 
 // resolveScope reads the policy files and returns what the run covers: the
 // repositories it is restricted to and the policy they are swept under. The
@@ -237,6 +264,9 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	// has rebased them.
 	progress.Revisiting(proc.Deferred())
 	proc.Revisit(ctx, status)
+	if opts.Actions.Selected(process.ActionRescue) {
+		status.SetHandoff(proc.Handoff(ctx, status, handoffOptions(client, login, opts)))
+	}
 	if exhausted, stopped := gh.AsRateLimit(ctx, nil); stopped {
 		status.SetRateLimited(exhausted.Reset)
 	}
@@ -263,6 +293,52 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	return status, nil
+}
+
+// rescueWeek is the window the weekly rescue count covers.
+const rescueWeek = 7 * 24 * time.Hour
+
+// handoffOptions are the run-level facts the rescue handoff reads.
+func handoffOptions(client *github.Client, login string, opts RunOptions) process.HandoffOptions {
+	triggeredBy := opts.TriggeredBy
+	if triggeredBy == "" {
+		triggeredBy = login
+	}
+	since := time.Now().Add(-rescueWeek)
+	return process.HandoffOptions{
+		Team:        opts.Team,
+		TriggeredBy: triggeredBy,
+		Toolchain:   opts.Toolchain,
+		Rescue:      opts.Policies.Base().Rescue,
+		Languages:   opts.Languages,
+		Used: func(ctx context.Context) (int, error) {
+			return weeklyRescues(ctx, client, opts.TeamRepos, since)
+		},
+	}
+}
+
+// weeklyRescues counts the rescue markers written since on the pull
+// requests of the team's repositories, one search per owner.
+func weeklyRescues(ctx context.Context, client *github.Client, repos []string, since time.Time) (int, error) {
+	if len(repos) == 0 {
+		return 0, errors.New("the team scope lists no repository to count rescues in")
+	}
+	var owners []string
+	for _, repo := range repos {
+		owner, _, _ := strings.Cut(repo, "/")
+		if !slices.Contains(owners, owner) {
+			owners = append(owners, owner)
+		}
+	}
+	total := 0
+	for _, owner := range owners {
+		n, err := patterns.Search{Client: client, Org: owner, Since: since}.Rescues(ctx, repos)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // leastRequests is the fewest REST requests a run over prs spends: every PR
