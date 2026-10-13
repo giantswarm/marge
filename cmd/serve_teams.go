@@ -268,9 +268,10 @@ func (t toolset) sweepTeams(ctx context.Context, teams []string, req sweepReques
 func (t toolset) sweepTeam(ctx context.Context, scoped teamsScoped, scope teamScope, req sweepRequest, prs []string, catalogue *rules.Catalogue, rulesReport *SweepRules) TeamQueue {
 	found := prsOfRepos(scoped.found.PRs, scope.scope.Repos)
 	failed := failuresOfRepos(scoped.found.Failed, scope.scope.Repos)
+	var gone []gonePR
 	if len(req.Opts.PRs) > 0 {
 		var err error
-		if found, err = filterByPRs(found, prs); err != nil {
+		if found, gone, err = selectPRs(ctx, scoped.client, found, prs, scope.scope.Repos); err != nil {
 			return TeamQueue{Team: scope.team, Error: err.Error()}
 		}
 	}
@@ -285,6 +286,7 @@ func (t toolset) sweepTeam(ctx context.Context, scoped teamsScoped, scope teamSc
 	if err != nil {
 		return TeamQueue{Team: scope.team, Error: err.Error()}
 	}
+	reportGone(status, gone)
 	return TeamQueue{Team: scope.team, Result: new(buildSweepResult(status, failed, rulesReport))}
 }
 

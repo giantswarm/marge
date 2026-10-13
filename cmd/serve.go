@@ -458,7 +458,10 @@ type scopedPRs struct {
 	client *github.Client
 	login  string
 	prs    []pr.PRInfo
-	found  discovery
+	// gone are the named PRs that merged or closed since the caller read
+	// the list it named them from.
+	gone  []gonePR
+	found discovery
 }
 
 // discover resolves the request's scope and finds the PRs it covers. It
@@ -490,12 +493,12 @@ func (t toolset) discover(ctx context.Context, req *sweepRequest) (scopedPRs, er
 	if err != nil {
 		return scopedPRs{}, fmt.Errorf("searching PRs: %w", err)
 	}
-	prs, err := filterByPRs(filterByOrg(found.PRs, req.Opts.Org), req.Opts.PRs)
+	prs, gone, err := selectPRs(ctx, client, filterByOrg(found.PRs, req.Opts.Org), req.Opts.PRs, repos)
 	if err != nil {
 		return scopedPRs{}, err
 	}
 
-	return scopedPRs{client: client, login: login, prs: prs, found: found}, nil
+	return scopedPRs{client: client, login: login, prs: prs, gone: gone, found: found}, nil
 }
 
 // run is the one engine call behind list, sweep and remedy. It resolves the
@@ -523,6 +526,7 @@ func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error)
 	if err != nil {
 		return SweepResult{}, fmt.Errorf("processing PRs: %w", err)
 	}
+	reportGone(status, scoped.gone)
 	return buildSweepResult(status, found.Failed, rulesReport), nil
 }
 
@@ -589,7 +593,9 @@ func (t toolset) listStored(ctx context.Context, req sweepRequest) (SweepResult,
 	if err != nil {
 		return SweepResult{}, err
 	}
-	return buildSweepResult(storedStatus(scoped.prs), scoped.found.Failed, nil), nil
+	status := storedStatus(scoped.prs)
+	reportGone(status, scoped.gone)
+	return buildSweepResult(status, scoped.found.Failed, nil), nil
 }
 
 // storedStatus reads each PR's stored classification out of its labels.

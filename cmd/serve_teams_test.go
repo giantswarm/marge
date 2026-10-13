@@ -19,7 +19,7 @@ import (
 // teamsServer serves the team files of the team-file repository, the login
 // and the open-PR listing, and counts the listings: reading several teams
 // must cost one.
-func teamsServer(t *testing.T, files map[string]string, byRepo map[string][]*github.PullRequest) (toolset, *int) {
+func teamsServer(t *testing.T, files map[string]string, byRepo map[string][]*github.PullRequest, routes ...func(*http.ServeMux)) (toolset, *int) {
 	t.Helper()
 
 	var (
@@ -47,6 +47,9 @@ func teamsServer(t *testing.T, files map[string]string, byRepo map[string][]*git
 		body := base64.StdEncoding.EncodeToString([]byte(content))
 		_ = json.NewEncoder(w).Encode(github.RepositoryContent{Type: new("file"), Encoding: new("base64"), Content: new(body)})
 	})
+	for _, route := range routes {
+		route(mux)
+	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
@@ -239,4 +242,39 @@ func TestListTeams_refreshClassifiesUnderEachTeamsPolicy(t *testing.T) {
 	defer mu.Unlock()
 	require.Contains(t, read, "/repos/giantswarm/marge/pulls/1", "a refresh reads every PR")
 	require.Contains(t, read, "/repos/giantswarm/atlas/pulls/2")
+}
+
+// TestSweepTeams_aNamedPRMergedSinceIsReportedNotRefused: the page sends the
+// PRs it listed, and a bot PR can merge between that list and the click. The
+// run reports it as merged and goes on, instead of refusing every other PR.
+func TestSweepTeams_aNamedPRMergedSinceIsReportedNotRefused(t *testing.T) {
+	tools, _ := teamsServer(t,
+		map[string]string{"repositories/team-bumblebee.yaml": "- name: marge\n"},
+		map[string][]*github.PullRequest{"giantswarm/marge": {}},
+		func(mux *http.ServeMux) {
+			mux.HandleFunc("GET /repos/giantswarm/marge/pulls/20", func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(&github.PullRequest{
+					State:   new("closed"),
+					Merged:  new(true),
+					HTMLURL: new("https://github.com/giantswarm/marge/pull/20"),
+					User:    &github.User{Login: new("giantswarm-align-files[bot]")},
+				})
+			})
+		})
+
+	got, err := tools.handleSweep(t.Context(), call(map[string]any{
+		"teams":   []any{"bumblebee"},
+		"prs":     []any{"giantswarm/marge#20"},
+		"actions": "classify",
+	}))
+	require.NoError(t, err)
+	require.False(t, got.IsError, textOf(t, got))
+
+	var result TeamQueues
+	require.NoError(t, json.Unmarshal([]byte(textOf(t, got)), &result))
+	require.Len(t, result.Teams, 1)
+	require.Empty(t, result.Teams[0].Error)
+	require.NotNil(t, result.Teams[0].Result)
+	require.Len(t, result.Teams[0].Result.Merged, 1)
+	require.Equal(t, 20, result.Teams[0].Result.Merged[0].Number)
 }

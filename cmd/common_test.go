@@ -279,7 +279,7 @@ func TestProcessOnceWithStatus_quietNoPRs(t *testing.T) {
 // TestFilterByPRs holds what a PR subset means: the named PRs in the order
 // the scope found them, and an error naming any reference the scope does not
 // hold, so a caller never believes a PR was acted on because it was absent.
-func TestFilterByPRs(t *testing.T) {
+func TestSplitByPRs(t *testing.T) {
 	found := []pr.PRInfo{
 		{Owner: "giantswarm", Repo: "marge", Number: 7},
 		{Owner: "giantswarm", Repo: "marge", Number: 8},
@@ -300,8 +300,9 @@ func TestFilterByPRs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := filterByPRs(found, tt.refs)
+			got, missing, err := splitByPRs(found, tt.refs)
 			require.NoError(t, err)
+			require.Empty(t, missing)
 			numbers := make([]int, 0, len(got))
 			for _, info := range got {
 				numbers = append(numbers, info.Number)
@@ -310,13 +311,15 @@ func TestFilterByPRs(t *testing.T) {
 		})
 	}
 
-	t.Run("a PR outside the scope is refused", func(t *testing.T) {
-		_, err := filterByPRs(found, []string{"giantswarm/marge#7", "other/repo#1"})
-		require.ErrorContains(t, err, "other/repo#1")
+	t.Run("a PR the scope did not find is returned as missing", func(t *testing.T) {
+		kept, missing, err := splitByPRs(found, []string{"giantswarm/marge#7", "other/repo#1"})
+		require.NoError(t, err)
+		require.Len(t, kept, 1)
+		require.Equal(t, []prRef{{owner: "other", repo: "repo", number: 1}}, missing)
 	})
 
 	t.Run("a reference that is not a PR is refused", func(t *testing.T) {
-		_, err := filterByPRs(found, []string{"giantswarm/marge"})
+		_, _, err := splitByPRs(found, []string{"giantswarm/marge"})
 		require.Error(t, err)
 	})
 }

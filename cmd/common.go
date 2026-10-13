@@ -404,42 +404,6 @@ func scopeRepos(scoped []string, refs []string) ([]string, error) {
 	return mergeRepos(repos), nil
 }
 
-// filterByPRs keeps the PRs the caller named, in the order the scope found
-// them. Each reference is a PR URL or owner/repo#number. An empty selection
-// keeps every PR; a reference that names no PR of the scope is an error, so
-// a caller never believes a PR was swept because it was silently absent.
-func filterByPRs(prs []pr.PRInfo, refs []string) ([]pr.PRInfo, error) {
-	if len(refs) == 0 {
-		return prs, nil
-	}
-	selected := make(map[string]bool, len(refs))
-	for _, ref := range refs {
-		owner, repo, number, err := pr.ParsePRRef(ref)
-		if err != nil {
-			return nil, err
-		}
-		selected[pr.Key(owner, repo, number)] = true
-	}
-
-	var kept []pr.PRInfo
-	for _, info := range prs {
-		key := pr.Key(info.Owner, info.Repo, info.Number)
-		if selected[key] {
-			kept = append(kept, info)
-			delete(selected, key)
-		}
-	}
-	if len(selected) > 0 {
-		missing := make([]string, 0, len(selected))
-		for key := range selected {
-			missing = append(missing, key)
-		}
-		sort.Strings(missing)
-		return nil, fmt.Errorf("not an open bot PR of this scope: %s", strings.Join(missing, ", "))
-	}
-	return kept, nil
-}
-
 // filterByOrg keeps the PRs whose owner is org, compared case-insensitively
 // like GitHub does. An empty org keeps every PR.
 func filterByOrg(prs []pr.PRInfo, org string) []pr.PRInfo {
