@@ -240,7 +240,7 @@ marge never closes a PR itself.`,
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
-			prs, err := filterByPRs(filterByOrg(found.PRs, opts.Org), opts.PRs)
+			prs, gone, err := selectPRs(ctx, client, filterByOrg(found.PRs, opts.Org), opts.PRs, repos)
 			if err != nil {
 				return err
 			}
@@ -248,6 +248,12 @@ marge never closes a PR itself.`,
 			status, err := processOnceWithStatus(ctx, client, login, prs, opts)
 			if err != nil {
 				return err
+			}
+			reportGone(status, gone)
+			if sweepFlags.output != "json" {
+				for _, g := range gone {
+					fmt.Fprintf(os.Stderr, "%s: %s since the list was read\n", g.info.URL, g.fate())
+				}
 			}
 			if sweepFlags.output == "json" {
 				return json.NewEncoder(os.Stdout).Encode(buildSweepResult(status, found.Failed, rulesReport))
