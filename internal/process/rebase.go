@@ -121,6 +121,13 @@ func (p *Processor) rebaseWait() time.Duration {
 	return defaultRebaseWait
 }
 
+// Deferred is the number of PRs the next Revisit waits on.
+func (p *Processor) Deferred() int {
+	p.rebaseMu.Lock()
+	defer p.rebaseMu.Unlock()
+	return len(p.deferred)
+}
+
 // Revisit is the second pass of a sweep. It takes the PRs the sweep's own
 // merges made dirty, waits for the bot to rebase them, and processes each
 // one again. Without it such a PR waits for the next sweep, which is a day
