@@ -24,6 +24,13 @@ type labelCache struct {
 // error degrades to a note on the entry: a label is display only and may
 // never change a sweep outcome.
 func (p *Processor) setLabel(ctx context.Context, run *prRun, class string) {
+	release, err := p.LabelWrites.acquire(ctx)
+	if err != nil {
+		run.note("label not set: " + err.Error())
+		return
+	}
+	defer release()
+
 	want := pr.LabelPrefix + class
 	present := false
 	for _, l := range run.pull.Labels {

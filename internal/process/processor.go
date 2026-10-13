@@ -92,6 +92,11 @@ type Processor struct {
 	// so it needs no lock. A nil map supersedes nothing.
 	SupersededBy pr.SupersededBy
 
+	// LabelWrites bounds the classification label writes in flight across
+	// the sweep. It matters when the sweep reads wider than the policy lets
+	// it write; nil leaves the label writes to the fan-out's own bound.
+	LabelWrites Slots
+
 	staleCache
 	accessCache
 	rebaseQueue
