@@ -57,12 +57,13 @@ type Concurrency struct {
 	PerRepo int
 }
 
-// ReadConcurrency bounds a run that writes nothing. The policy's own bounds
-// exist for the writes: PerRepo is 1 so that two merges never race for one
-// base branch, and the product is held small so a sweep cannot empty the
-// write budget in a minute. A classify-only dry run makes neither a merge
-// nor a comment, so it is bounded by how many reads GitHub answers at once
-// and not by the write policy.
+// ReadConcurrency bounds a run that classifies and does nothing else. The
+// policy's own bounds exist for the writes: PerRepo is 1 so that two merges
+// never race for one base branch, and the product is held small so a sweep
+// cannot empty the write budget in a minute. A classify-only run makes
+// neither a merge nor a comment, so it is bounded by how many reads GitHub
+// answers at once; the label writes it makes are held to the policy's
+// product on their own.
 var ReadConcurrency = Concurrency{PerTeam: 15, PerRepo: 4}
 
 // ChangelogPolicy is the changelog entry a team writes for a bot PR: which

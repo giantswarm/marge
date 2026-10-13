@@ -217,12 +217,8 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	// Group PRs by owner/repo, then fan out under the policy's concurrency,
-	// or under the read bound when the run writes nothing.
-	concurrency := opts.Policies.Base().Concurrency
-	if opts.DryRun && opts.Actions.ClassifyOnly() {
-		concurrency = pr.ReadConcurrency
-	}
+	concurrency, labelWrites := fanOut(opts)
+	proc.LabelWrites = labelWrites
 	forEachPR(pr.GroupByRepo(prs), concurrency, func(info pr.PRInfo) {
 		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
@@ -254,6 +250,24 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	return status, nil
+}
+
+// fanOut decides how wide a run reads and how many label writes it lets
+// through at once. A run that classifies and does nothing else moves no
+// branch and posts no comment, so it reads under pr.ReadConcurrency; its
+// label writes, when it is not a dry run, stay within the policy's own
+// bound. Every other run keeps the policy's bounds, which already hold its
+// writes.
+func fanOut(opts RunOptions) (pr.Concurrency, process.Slots) {
+	policyBound := opts.Policies.Base().Concurrency
+	switch {
+	case !opts.Actions.ClassifyOnly():
+		return policyBound, nil
+	case opts.DryRun:
+		return pr.ReadConcurrency, nil
+	default:
+		return pr.ReadConcurrency, process.NewSlots(policyBound.PerTeam * policyBound.PerRepo)
+	}
 }
 
 // forEachPR runs fn on every PR of every group, under the two bounds the
