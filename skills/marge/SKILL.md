@@ -55,6 +55,7 @@ the matching `marge/<class>` label:
 | `ci_no_verdict` | the checks established nothing about the code | the remedy in the detail |
 | `skipped` | untrusted author, a head branch in another repository, a reconciler team-file PR in giantswarm/github (left to its classification, no label), or the sweep switched off for the repository | a person |
 | `unclassified` | no sweep has labelled this PR yet | call `list` with `refresh: true` |
+| `not_reached` | the run stopped before it decided the PR; `rate_limit.reset_at` says when GitHub serves the token again | the next sweep, after the reset |
 | `repositories_failed` | the PRs of this repository could not be read | report it |
 
 Act on `action_required` only.
@@ -204,6 +205,9 @@ acts with the person's own credential, so the confirmation step stays.
 - **Never start an agent without confirmation.** Say what it will do and what
   it may cost, then wait.
 - **Never touch a PR a person authored.**
+- **Never call again before a rate limit resets.** A call refused with
+  `GitHub rate limit ...; it resets at <time>` is refused again until that
+  time, and so is every other GitHub tool of the person. Report the time.
 
 When no rule matched and you must fix the failure yourself, read
 [`references/hazards.md`](references/hazards.md) first.

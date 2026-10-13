@@ -148,6 +148,25 @@ func (s StatusState) String() string {
 type PRStatus struct {
 	mu      sync.Mutex
 	entries []StatusEntry
+	// rateLimitReset is when the token the run stopped on is served again.
+	// A zero time is a run no rate limit stopped.
+	rateLimitReset time.Time
+}
+
+// SetRateLimited records that the run stopped because GitHub refused its
+// token for rate until reset. The PRs it had not decided stay pending.
+func (s *PRStatus) SetRateLimited(reset time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rateLimitReset = reset
+}
+
+// RateLimited reports whether a rate limit stopped the run, and when the
+// token is served again.
+func (s *PRStatus) RateLimited() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rateLimitReset, !s.rateLimitReset.IsZero()
 }
 
 type StatusEntry struct {
@@ -540,6 +559,11 @@ func (s *PRStatus) WaitingEntries() []StatusEntry {
 	entries := s.entriesInStates(StatusWaitingChecks, StatusAwaitingRebase)
 	sortOldestFirst(entries)
 	return entries
+}
+
+// NotReachedEntries returns the entries a stopped run never decided.
+func (s *PRStatus) NotReachedEntries() []StatusEntry {
+	return s.entriesInStates(StatusPending)
 }
 
 // BlockedEntries returns entries whose CI could not run because a GitHub

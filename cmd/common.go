@@ -139,6 +139,12 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		return pr.NewPRStatus(), nil
 	}
 
+	if err := gh.CheckRateBudget(ctx, client, leastRequests(prs)); err != nil {
+		return nil, err
+	}
+	ctx, stop := gh.StopOnRateLimit(ctx)
+	defer stop()
+
 	if !opts.Quiet {
 		fmt.Fprintf(os.Stderr, "Processing %d PR(s)...\n\n", len(prs))
 	}
@@ -231,6 +237,9 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	// has rebased them.
 	progress.Revisiting(proc.Deferred())
 	proc.Revisit(ctx, status)
+	if exhausted, stopped := gh.AsRateLimit(ctx, nil); stopped {
+		status.SetRateLimited(exhausted.Reset)
+	}
 
 	close(stopRefresh)
 	<-refreshStopped
@@ -254,6 +263,19 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	return status, nil
+}
+
+// leastRequests is the fewest REST requests a run over prs spends: every PR
+// is read with its commit statuses and its check runs, and every
+// repository's branch rules once. A PR that fails, merges or is written to
+// spends more, so a budget above it is no promise the run finishes.
+func leastRequests(prs []pr.PRInfo) int {
+	const perPR, perRepo = 3, 1
+	repos := make(map[string]bool, len(prs))
+	for _, info := range prs {
+		repos[strings.ToLower(info.Owner+"/"+info.Repo)] = true
+	}
+	return perPR*len(prs) + perRepo*len(repos)
 }
 
 // fanOut decides how wide a run reads and how many label writes it lets
