@@ -530,6 +530,25 @@ func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error)
 	return buildSweepResult(status, found.Failed, rulesReport), nil
 }
 
+// toolError renders a call that failed.
+func toolError(ctx context.Context, err error) *mcp.CallToolResult {
+	return mcp.NewToolResultError(errorText(ctx, err))
+}
+
+// errorText is what a caller reads of a failure. A rate refusal reads the
+// same whichever request met it, GET /user or the hundredth check read, so
+// the caller can tell it from other failures by its words and read the
+// reset time off it.
+func errorText(ctx context.Context, err error) string {
+	if short, ok := errors.AsType[*gh.RateBudgetShort](err); ok {
+		return short.Error()
+	}
+	if exhausted, ok := gh.AsRateLimit(ctx, err); ok {
+		return exhausted.Error()
+	}
+	return err.Error()
+}
+
 // result renders a value as the tool's JSON payload.
 func result(value any) (*mcp.CallToolResult, error) {
 	jsonBytes, err := json.Marshal(value)
@@ -554,18 +573,18 @@ func (t toolset) handleList(ctx context.Context, request mcp.CallToolRequest) (*
 	refresh := request.GetBool("refresh", false)
 	if teams := request.GetStringSlice("teams", nil); len(teams) > 0 {
 		if err := validateTeamsScope(request); err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError(ctx, err), nil
 		}
 		queues, err := t.listTeams(ctx, teams, refresh)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError(ctx, err), nil
 		}
 		return result(queues)
 	}
 
 	req, err := listRequest(request)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 	run := t.listStored
 	if refresh {
@@ -573,7 +592,7 @@ func (t toolset) handleList(ctx context.Context, request mcp.CallToolRequest) (*
 	}
 	sweepResult, err := run(ctx, req)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 	return result(sweepResult)
 }
@@ -619,21 +638,21 @@ func storedStatus(prs []pr.PRInfo) *pr.PRStatus {
 func (t toolset) handleSweep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	req, err := parseSweepRequest(request)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 	if teams := request.GetStringSlice("teams", nil); len(teams) > 0 {
 		if err := validateTeamsScope(request); err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError(ctx, err), nil
 		}
 		sweeps, err := t.sweepTeams(ctx, teams, req)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError(ctx, err), nil
 		}
 		return result(sweeps)
 	}
 	sweepResult, err := t.run(ctx, req)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 	return result(sweepResult)
 }
@@ -666,11 +685,11 @@ func remedyRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 func (t toolset) handleRemedy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	req, err := remedyRequest(request)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 	sweepResult, err := t.run(ctx, req)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 	return result(sweepResult)
 }
@@ -684,12 +703,12 @@ func (t toolset) handleMark(ctx context.Context, request mcp.CallToolRequest) (*
 
 	client, err := t.newClient(ctx)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 
 	marker, owner, repo, number, err := markRescue(ctx, client, prRef, outcome, reason, tool, dryRun)
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError(ctx, err), nil
 	}
 
 	written := map[string]any{

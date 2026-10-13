@@ -74,7 +74,7 @@ func (t toolset) listTeams(ctx context.Context, teams []string, refresh bool) (T
 	slots := make(chan struct{}, teamsAtOnce)
 	for index, scoped := range scopes {
 		if scoped.err != nil {
-			queues[index] = TeamQueue{Team: scoped.team, Error: scoped.err.Error()}
+			queues[index] = TeamQueue{Team: scoped.team, Error: errorText(ctx, scoped.err)}
 			continue
 		}
 		wg.Go(func() {
@@ -160,7 +160,7 @@ func (t toolset) teamQueue(ctx context.Context, client *github.Client, login str
 	}
 	status, err := processOnceWithStatus(ctx, client, login, prs, opts)
 	if err != nil {
-		return TeamQueue{Team: scoped.team, Error: err.Error()}
+		return TeamQueue{Team: scoped.team, Error: errorText(ctx, err)}
 	}
 	return TeamQueue{Team: scoped.team, Result: new(buildSweepResult(status, failed, nil))}
 }
@@ -252,7 +252,7 @@ func (t toolset) sweepTeams(ctx context.Context, teams []string, req sweepReques
 	queues := make([]TeamQueue, len(scoped.scopes))
 	for index, scope := range scoped.scopes {
 		if scope.err != nil {
-			queues[index] = TeamQueue{Team: scope.team, Error: scope.err.Error()}
+			queues[index] = TeamQueue{Team: scope.team, Error: errorText(ctx, scope.err)}
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -272,7 +272,7 @@ func (t toolset) sweepTeam(ctx context.Context, scoped teamsScoped, scope teamSc
 	if len(req.Opts.PRs) > 0 {
 		var err error
 		if found, gone, err = selectPRs(ctx, scoped.client, found, prs, scope.scope.Repos); err != nil {
-			return TeamQueue{Team: scope.team, Error: err.Error()}
+			return TeamQueue{Team: scope.team, Error: errorText(ctx, err)}
 		}
 	}
 
@@ -284,7 +284,7 @@ func (t toolset) sweepTeam(ctx context.Context, scoped teamsScoped, scope teamSc
 
 	status, err := processOnceWithStatus(ctx, scoped.client, scoped.login, found, opts)
 	if err != nil {
-		return TeamQueue{Team: scope.team, Error: err.Error()}
+		return TeamQueue{Team: scope.team, Error: errorText(ctx, err)}
 	}
 	reportGone(status, gone)
 	return TeamQueue{Team: scope.team, Result: new(buildSweepResult(status, failed, rulesReport))}

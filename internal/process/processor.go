@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-github/v92/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
@@ -401,7 +402,7 @@ func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 // outcomes, writes the classification label and appends the notes. An
 // untouched PR gets none of it.
 func (p *Processor) finish(ctx context.Context, run *prRun) {
-	if run.untouched {
+	if run.untouched || cutShort(ctx, run) {
 		return
 	}
 	p.applyRule(ctx, run)
@@ -414,6 +415,24 @@ func (p *Processor) finish(ctx context.Context, run *prRun) {
 		entry := run.status.Snapshot()[run.idx]
 		run.set(entry.State, withNote(entry.Detail, strings.Join(run.notes, "; ")))
 	}
+}
+
+// cutShort reports whether the run stopped on a rate limit before it
+// decided the PR, and leaves such a PR pending. Every call after the
+// refusal fails, and a failed read is no evidence, so an outcome reached
+// past it may rest on a read that never happened. Only an outcome the
+// sweep wrote to GitHub stands; it carries no label, which the next sweep
+// writes.
+func cutShort(ctx context.Context, run *prRun) bool {
+	if _, stopped := gh.AsRateLimit(ctx, nil); !stopped {
+		return false
+	}
+	switch run.status.StateAt(run.idx) {
+	case pr.StatusMerged, pr.StatusAlreadyMerged, pr.StatusAutoMerge, pr.StatusRefreshed, pr.StatusRetried, pr.StatusRemedied:
+		return true
+	}
+	run.set(pr.StatusPending, "")
+	return true
 }
 
 // attachRescueMarker attaches the newest rescue-attempt marker to failure

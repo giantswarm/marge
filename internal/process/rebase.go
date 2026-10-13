@@ -156,6 +156,10 @@ func (p *Processor) revisitOne(ctx context.Context, d deferredPR, deadline time.
 	for {
 		pullReq, _, err := p.Client.PullRequests.Get(ctx, d.info.Owner, d.info.Repo, d.info.Number)
 		if err != nil {
+			// A stopped run keeps what the first pass reported.
+			if ctx.Err() != nil {
+				return
+			}
 			d.status.Update(d.idx, pr.StatusAwaitingRebase, ghErrorDetail("rebase check failed", err))
 			return
 		}

@@ -77,6 +77,12 @@ type SweepResult struct {
 	// merges past a required check; the next sweep decides.
 	Waiting []SweepPREntry `json:"waiting,omitempty"`
 	Skipped []SweepPREntry `json:"skipped,omitempty"`
+	// NotReached lists the PRs a stopped run never decided. They keep the
+	// label they had; the next run decides them.
+	NotReached []SweepPREntry `json:"not_reached,omitempty"`
+	// RateLimit says the run stopped because GitHub refused its token for
+	// rate, and when the token is served again.
+	RateLimit *SweepRateLimit `json:"rate_limit,omitempty"`
 	// RepositoriesFailed lists the repositories whose PRs could not be
 	// listed, so a partial sweep is visible as such.
 	RepositoriesFailed []SweepRepoFailure `json:"repositories_failed,omitempty"`
@@ -84,6 +90,12 @@ type SweepResult struct {
 	// setting on the most PRs first. The sweep acts on none of them: the
 	// fix belongs to the repository.
 	Findings []SweepFinding `json:"findings,omitempty"`
+}
+
+// SweepRateLimit is the rate limit a run stopped on.
+type SweepRateLimit struct {
+	// ResetAt is when GitHub serves the token again, in RFC 3339.
+	ResetAt string `json:"reset_at"`
 }
 
 // SweepFinding is one repository setting that holds PRs back, with the
@@ -196,6 +208,8 @@ type SweepSummary struct {
 	// Unclassified counts PRs no sweep has labelled. Only a read of the
 	// stored classification produces them.
 	Unclassified int `json:"unclassified"`
+	// NotReached counts the PRs a stopped run never decided.
+	NotReached int `json:"not_reached"`
 }
 
 // SweepPREntry represents a single PR in the sweep results.
@@ -469,6 +483,14 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 
 	for _, e := range status.SkippedEntries() {
 		result.Skipped = append(result.Skipped, toEntry(e))
+	}
+
+	for _, e := range status.NotReachedEntries() {
+		result.NotReached = append(result.NotReached, toEntry(e))
+	}
+	result.Summary.NotReached = len(result.NotReached)
+	if reset, stopped := status.RateLimited(); stopped {
+		result.RateLimit = &SweepRateLimit{ResetAt: reset.UTC().Format(time.RFC3339)}
 	}
 
 	return result

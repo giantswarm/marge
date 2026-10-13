@@ -241,3 +241,116 @@ func TestRateLimitedGivesUpAfterItsRetries(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	require.Equal(t, int32(rateRetries+1), calls.Load())
 }
+
+// A served process carries many people's tokens, and a refusal is about one
+// token's limit. Another person's requests go on while the gate of the token
+// GitHub refused is closed.
+func TestRateLimitedHoldsOnlyTheRefusedToken(t *testing.T) {
+	var refused atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer alice" && !refused.Swap(true) {
+			secondaryRefusal(w, 60)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	release := make(chan struct{})
+	var waiting atomic.Int32
+	transport := newRateLimited(http.DefaultTransport)
+	transport.sleep = func(ctx context.Context, _ time.Duration) error {
+		waiting.Add(1)
+		<-release
+		return ctx.Err()
+	}
+	clock := time.Now()
+	transport.now = func() time.Time { return clock }
+
+	send := func(token string) (*http.Response, error) {
+		req := request(t, t.Context(), server.URL)
+		req.Header.Set("Authorization", "Bearer "+token)
+		return transport.RoundTrip(req)
+	}
+
+	alice := make(chan error, 1)
+	go func() {
+		resp, err := send("alice")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		alice <- err
+	}()
+	awaitCount(t, &waiting, 1, "alice's refused request never waited")
+
+	resp, err := send("bob")
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int32(1), waiting.Load(), "bob's request did not wait behind alice's gate")
+
+	clock = clock.Add(time.Minute)
+	close(release)
+	require.NoError(t, <-alice)
+}
+
+// The App mints a token per repository scope and every one of them spends
+// the installation's limit, so the requests of one installation share a
+// gate whatever token they carry.
+func TestRateLimitedHoldsEveryTokenOfOneBucket(t *testing.T) {
+	first := withRateBucket(request(t, t.Context(), "https://api.github.com/repos/o/a"), "app-installation:1")
+	first.Header.Set("Authorization", "Bearer repo-a")
+	second := withRateBucket(request(t, t.Context(), "https://api.github.com/repos/o/b"), "app-installation:1")
+	second.Header.Set("Authorization", "Bearer repo-b")
+	person := request(t, t.Context(), "https://api.github.com/user")
+	person.Header.Set("Authorization", "Bearer repo-a")
+
+	require.Equal(t, rateBucketOf(first), rateBucketOf(second))
+	require.NotEqual(t, rateBucketOf(first), rateBucketOf(person))
+	require.NotContains(t, rateBucketOf(person), "repo-a", "the gate holds a digest, not the token")
+}
+
+// A limit that resets an hour away is not waited out, and every later call
+// on the token would be refused as well. A run started with StopOnRateLimit
+// is stopped, and its context says until when.
+func TestRateLimitedStopsTheRunOnALongLimit(t *testing.T) {
+	reset := time.Now().Add(time.Hour).Truncate(time.Second)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := StopOnRateLimit(t.Context())
+	defer cancel()
+
+	transport, waits := gated(t, server)
+	resp, err := transport.RoundTrip(request(t, ctx, server.URL))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Empty(t, *waits)
+	require.Error(t, ctx.Err())
+	exhausted, ok := AsRateLimit(ctx, nil)
+	require.True(t, ok)
+	require.WithinDuration(t, reset, exhausted.Reset, time.Second)
+	require.Contains(t, exhausted.Error(), rateLimitPhrase)
+}
+
+// A request outside a stoppable run meets the same refusal and reports it
+// to its caller, and nothing else is cancelled.
+func TestRateLimitedLongLimitOutsideARunStopsNothing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+
+	transport, _ := gated(t, server)
+	resp, err := transport.RoundTrip(request(t, t.Context(), server.URL))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.NoError(t, t.Context().Err())
+}

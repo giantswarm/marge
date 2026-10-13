@@ -2,6 +2,8 @@ package github
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strconv"
@@ -35,14 +37,17 @@ const (
 // The gate is why it is one transport and not a per-request retry. A sweep
 // puts a whole team's PRs on one token at once, so a refusal arrives at
 // many requests together. Without the gate the others keep sending while
-// one waits, which is what earned the refusal. While the gate is closed
-// every request of the process waits for it.
+// one waits, which is what earned the refusal. While a bucket's gate is
+// closed every request drawing on that bucket waits for it; a request on
+// another bucket, which is another person's token in a served process, does
+// not.
 type rateLimited struct {
 	base http.RoundTripper
 
 	mu sync.Mutex
-	// openAt is when the gate opens. A zero time is an open gate.
-	openAt time.Time
+	// gates holds when each bucket's gate opens. A bucket with no entry, or
+	// an entry in the past, has an open gate.
+	gates map[string]time.Time
 	// now is the clock, so a test does not wait in real time.
 	now func() time.Time
 	// sleep waits for d, or returns ctx's error when the caller gives up
@@ -51,7 +56,7 @@ type rateLimited struct {
 }
 
 func newRateLimited(base http.RoundTripper) *rateLimited {
-	return &rateLimited{base: base, now: time.Now, sleep: sleepUntil}
+	return &rateLimited{base: base, gates: make(map[string]time.Time), now: time.Now, sleep: sleepUntil}
 }
 
 // sleepUntil waits for d, or returns ctx's error when the caller gives up
@@ -68,41 +73,43 @@ func sleepUntil(ctx context.Context, d time.Duration) error {
 }
 
 func (r *rateLimited) RoundTrip(req *http.Request) (*http.Response, error) {
+	bucket := rateBucketOf(req)
 	for attempt := 0; ; attempt++ {
-		if err := r.waitForGate(req); err != nil {
+		if err := r.waitForGate(req, bucket); err != nil {
 			return nil, err
 		}
 
 		resp, err := r.base.RoundTrip(req)
-		if err != nil || attempt == rateRetries {
+		if err != nil {
 			return resp, err
 		}
 
-		wait, refused := r.rateRefusal(resp)
-		if !refused || !rewindable(req) {
+		wait, refused := rateRefusal(resp, r.now())
+		if !refused {
+			return resp, nil
+		}
+		if wait > maxRateWait {
+			reportExhausted(req.Context(), r.now().Add(wait))
+			return resp, nil
+		}
+		if attempt == rateRetries || !rewindable(req) {
 			return resp, nil
 		}
 
 		// The request was refused, not performed, so sending it again is
 		// safe whatever its method.
 		drain(resp)
-		r.closeGate(wait)
+		r.closeGate(bucket, wait)
 	}
 }
 
-// rateRefusal reports how long GitHub asked us to wait, and whether the
-// answer was a refusal for rate at all. A wait longer than maxRateWait is
-// not a refusal this transport handles.
-func (r *rateLimited) rateRefusal(resp *http.Response) (time.Duration, bool) {
+// rateRefusal reports whether the answer was a refusal for rate, and how
+// long GitHub asked us to wait.
+func rateRefusal(resp *http.Response, now time.Time) (time.Duration, bool) {
 	if resp == nil || (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests) {
 		return 0, false
 	}
-
-	wait, named := retryAfter(resp.Header, r.now())
-	if !named || wait > maxRateWait {
-		return 0, false
-	}
-	return wait, true
+	return retryAfter(resp.Header, now)
 }
 
 // retryAfter reads the wait GitHub named, from Retry-After for a secondary
@@ -127,21 +134,26 @@ func retryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 	return max(time.Unix(reset, 0).Sub(now), 0), true
 }
 
-// closeGate holds every request of the process until the wait has passed. A
+// closeGate holds every request of the bucket until the wait has passed. A
 // gate already closed for longer is left alone.
-func (r *rateLimited) closeGate(wait time.Duration) {
+func (r *rateLimited) closeGate(bucket string, wait time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if until := r.now().Add(wait); until.After(r.openAt) {
-		r.openAt = until
+	if until := r.now().Add(wait); until.After(r.gates[bucket]) {
+		r.gates[bucket] = until
 	}
 }
 
-// waitForGate blocks until the gate is open, or the request is cancelled.
-func (r *rateLimited) waitForGate(req *http.Request) error {
+// waitForGate blocks until the bucket's gate is open, or the request is
+// cancelled. An open gate's entry is dropped, so the map holds only the
+// buckets that are waiting.
+func (r *rateLimited) waitForGate(req *http.Request, bucket string) error {
 	for {
 		r.mu.Lock()
-		wait := r.openAt.Sub(r.now())
+		wait := r.gates[bucket].Sub(r.now())
+		if wait <= 0 {
+			delete(r.gates, bucket)
+		}
 		r.mu.Unlock()
 		if wait <= 0 {
 			return nil
@@ -150,6 +162,26 @@ func (r *rateLimited) waitForGate(req *http.Request) error {
 			return err
 		}
 	}
+}
+
+type rateBucketKey struct{}
+
+// withRateBucket names the rate bucket a request draws on, for a credential
+// that does not identify its bucket by itself: the App mints a token per
+// repository scope, and every one of them spends the installation's limit.
+func withRateBucket(req *http.Request, bucket string) *http.Request {
+	return req.WithContext(context.WithValue(req.Context(), rateBucketKey{}, bucket))
+}
+
+// rateBucketOf is the bucket the request spends: the one it was given, or
+// else its credential's. The credential is kept as a digest, so the gate
+// holds no token.
+func rateBucketOf(req *http.Request) string {
+	if bucket, ok := req.Context().Value(rateBucketKey{}).(string); ok {
+		return bucket
+	}
+	sum := sha256.Sum256([]byte(req.Header.Get("Authorization")))
+	return hex.EncodeToString(sum[:])
 }
 
 // rewindable reports whether the request can be sent again. A body the
