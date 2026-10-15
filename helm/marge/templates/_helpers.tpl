@@ -200,7 +200,14 @@ An entry of .Values.schedules takes the missing keys from
 {{- fail (printf "two entries of schedules are named %s: the name is what tells two runs of one team apart, and it names their resources." $entry.name) }}
 {{- end }}
 {{- $names = append $names $entry.name }}
-{{- $entries = append $entries (mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry) }}
+{{- $merged := mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry }}
+{{- /* mergeOverwrite skips empty values on some Helm versions: an explicit 0 is taken from the entry by key. */}}
+{{- range $key := list "successfulJobsHistoryLimit" "failedJobsHistoryLimit" }}
+{{- if hasKey $entry $key }}
+{{- $_ := set $merged $key (get $entry $key) }}
+{{- end }}
+{{- end }}
+{{- $entries = append $entries $merged }}
 {{- end }}
 {{- toYaml $entries }}
 {{- end }}
