@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/stretchr/testify/require"
 )
 
