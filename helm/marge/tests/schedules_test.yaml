@@ -1,0 +1,44 @@
+suite: schedule history limits
+templates:
+  - templates/cronjob.yaml
+tests:
+  - it: keeps an explicit history limit of 0 and the defaults elsewhere
+    set:
+      marge:
+        github:
+          app:
+            existingSecret: marge-app
+      schedules:
+        - name: zero
+          team: alpha
+          schedule: "0 6 * * 1-5"
+          successfulJobsHistoryLimit: 0
+          failedJobsHistoryLimit: 0
+        - name: defaults
+          team: beta
+          schedule: "0 7 * * 1-5"
+    asserts:
+      - equal:
+          path: spec.successfulJobsHistoryLimit
+          value: 0
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-marge-zero
+      - equal:
+          path: spec.failedJobsHistoryLimit
+          value: 0
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-marge-zero
+      - equal:
+          path: spec.successfulJobsHistoryLimit
+          value: 3
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-marge-defaults
+      - equal:
+          path: spec.failedJobsHistoryLimit
+          value: 3
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-marge-defaults
