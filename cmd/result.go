@@ -90,6 +90,133 @@ type SweepResult struct {
 	// setting on the most PRs first. The sweep acts on none of them: the
 	// fix belongs to the repository.
 	Findings []SweepFinding `json:"findings,omitempty"`
+	// RescueHandoff is what a run with the rescue action hands to the agent
+	// it executes inside. Absent from a run without that action.
+	RescueHandoff *SweepHandoff `json:"rescue_handoff,omitempty"`
+}
+
+// SweepHandoff is the JSON projection of a pr.Handoff: the PRs to rescue,
+// one repository at a time, and what is left of the team's weekly count.
+type SweepHandoff struct {
+	Team string `json:"team"`
+	// TriggeredBy is who started the run. The agent writes it on every
+	// marker as dispatched_by.
+	TriggeredBy  string               `json:"triggered_by,omitempty"`
+	Toolchain    string               `json:"toolchain,omitempty"`
+	Budget       SweepHandoffBudget   `json:"budget"`
+	Repositories []SweepHandoffRepo   `json:"repositories"`
+	Refused      []SweepHandoffRefuse `json:"refused,omitempty"`
+	// Error says why nothing was handed over.
+	Error string `json:"error,omitempty"`
+}
+
+// SweepHandoffBudget is the team's weekly rescue count and the bounds the
+// team declared for one rescue.
+type SweepHandoffBudget struct {
+	Weekly int `json:"weekly"`
+	// Used and Remaining are absent when the run had no candidate and so
+	// counted nothing.
+	Used      *int `json:"used,omitempty"`
+	Remaining *int `json:"remaining,omitempty"`
+	// Timeout and PerRescueUSD are declared; TimeoutEnforced and
+	// BudgetEnforced say whether this build applies them.
+	Timeout         string  `json:"timeout,omitempty"`
+	TimeoutEnforced bool    `json:"timeout_enforced"`
+	PerRescueUSD    float64 `json:"per_rescue_usd,omitempty"`
+	BudgetEnforced  bool    `json:"budget_enforced"`
+}
+
+// SweepHandoffRepo is one repository to work on.
+type SweepHandoffRepo struct {
+	Repo     string `json:"repo"`
+	Language string `json:"language,omitempty"`
+	// LanguageNote says where the language came from when the repository
+	// root contradicts the team file.
+	LanguageNote string           `json:"language_note,omitempty"`
+	PRs          []SweepHandoffPR `json:"prs"`
+}
+
+// SweepHandoffPR is one PR to rescue.
+type SweepHandoffPR struct {
+	URL        string `json:"url"`
+	Number     int    `json:"number"`
+	Title      string `json:"title"`
+	Kind       string `json:"kind"`
+	UpdateType string `json:"update_type,omitempty"`
+	// HeadSHA is the head the sweep classified; the marker the agent writes
+	// is tied to it.
+	HeadSHA string `json:"head_sha"`
+	// WriteTarget is "pr-branch" for a fix pushed to the PR's own branch,
+	// or "default-branch" for a fix proposed against the repository's
+	// default branch (or the generator), because the PR's branch is
+	// regenerated.
+	WriteTarget string              `json:"write_target"`
+	Checks      []SweepHandoffCheck `json:"failing_checks"`
+	Signature   string              `json:"signature,omitempty"`
+	Excerpt     string              `json:"excerpt,omitempty"`
+}
+
+// SweepHandoffCheck is one failing check and where its log lives.
+type SweepHandoffCheck struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+}
+
+// SweepHandoffRefuse is a candidate the run did not hand over.
+type SweepHandoffRefuse struct {
+	URL    string `json:"url"`
+	Reason string `json:"reason"`
+}
+
+// handoffInfo projects a handoff into its JSON shape.
+func handoffInfo(h *pr.Handoff) *SweepHandoff {
+	if h == nil {
+		return nil
+	}
+	out := &SweepHandoff{
+		Team:        h.Team,
+		TriggeredBy: h.TriggeredBy,
+		Toolchain:   h.Toolchain,
+		Error:       h.Error,
+		Budget: SweepHandoffBudget{
+			Weekly:          h.Budget.Weekly,
+			TimeoutEnforced: pr.TimeoutEnforced,
+			PerRescueUSD:    h.Budget.PerRescueUSD,
+			BudgetEnforced:  pr.BudgetEnforced,
+		},
+		Repositories: []SweepHandoffRepo{},
+	}
+	if h.Budget.Counted {
+		out.Budget.Used, out.Budget.Remaining = new(h.Budget.Used), new(h.Budget.Remaining)
+	}
+	if h.Budget.Timeout > 0 {
+		out.Budget.Timeout = h.Budget.Timeout.String()
+	}
+	for _, repo := range h.Repos {
+		r := SweepHandoffRepo{Repo: repo.Repo, Language: repo.Language, LanguageNote: repo.LanguageNote}
+		for _, p := range repo.PRs {
+			entry := SweepHandoffPR{
+				URL:         p.PR.URL,
+				Number:      p.PR.Number,
+				Title:       p.PR.Title,
+				Kind:        string(p.Kind),
+				UpdateType:  string(p.UpdateType),
+				HeadSHA:     p.HeadSHA,
+				WriteTarget: string(p.WriteTarget),
+				Signature:   p.Signature,
+				Excerpt:     p.Excerpt,
+			}
+			for _, check := range p.Checks {
+				entry.Checks = append(entry.Checks, SweepHandoffCheck{Name: check, URL: p.CheckURLs[check]})
+			}
+			r.PRs = append(r.PRs, entry)
+		}
+		out.Repositories = append(out.Repositories, r)
+	}
+	for _, refusal := range h.Refused {
+		out.Refused = append(out.Refused, SweepHandoffRefuse{URL: refusal.PR.URL, Reason: refusal.Reason})
+	}
+	return out
 }
 
 // SweepRateLimit is the rate limit a run stopped on.
@@ -378,6 +505,7 @@ func buildSweepResult(status *pr.PRStatus, failed []repoFailure, sweepRules *Swe
 	}
 	result.Unhandled = groupUnhandled(status.UnhandledEntries())
 	result.Findings = groupFindings(status.FindingEntries())
+	result.RescueHandoff = handoffInfo(status.Handoff())
 
 	now := time.Now()
 	toEntry := func(e pr.StatusEntry) SweepPREntry {

@@ -398,15 +398,17 @@ func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 	return strings.Join(steps, ", ")
 }
 
-// finish runs on every exit: it attaches a prior rescue marker to failure
-// outcomes, writes the classification label and appends the notes. An
-// untouched PR gets none of it.
+// finish runs on every exit: it applies the matching rule, attaches a prior
+// rescue marker to failure outcomes, records a rescue candidate, writes the
+// classification label and appends the notes. An untouched PR gets none of
+// it.
 func (p *Processor) finish(ctx context.Context, run *prRun) {
 	if run.untouched || cutShort(ctx, run) {
 		return
 	}
 	p.applyRule(ctx, run)
 	p.attachRescueMarker(ctx, run)
+	p.rescueCandidate(ctx, run)
 	state := run.status.StateAt(run.idx)
 	if class := pr.LabelClass(state); class != "" && !p.DryRun {
 		p.setLabel(ctx, run, class)

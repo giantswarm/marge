@@ -17,11 +17,16 @@ const summaryPRLimit = 10
 // "nothing happened" stops being read.
 //
 // Changed means marge wrote something that moves a PR on: a merge, a branch
-// refresh, a build retry or a rule's remedy. A label and an evidence comment
-// are written on every classification and are not, on their own, news.
+// refresh, a build retry, a rule's remedy or a rescue handoff, which spends
+// the team's weekly count. A rescue handoff that could not be made is news
+// too. A label and an evidence comment are written on every classification
+// and are not, on their own, news.
 func teamSummary(team string, result SweepResult) (string, bool) {
 	counts := result.Summary
-	changed := counts.Merged + counts.Refreshed + counts.Retried + counts.Remedied
+	changed := counts.Merged + counts.Refreshed + counts.Retried + counts.Remedied + handedOver(result.RescueHandoff)
+	if result.RescueHandoff != nil && result.RescueHandoff.Error != "" {
+		changed++
+	}
 	if changed == 0 {
 		return "", false
 	}
@@ -77,6 +82,7 @@ func summaryBody(b *strings.Builder, result SweepResult) {
 	section(b, "Blocked, security", result.SecurityFailures)
 	section(b, "Blocked", result.ActionRequired)
 
+	handoffSection(b, result.RescueHandoff)
 	unhandledSection(b, result.Unhandled)
 
 	if counts.Skipped > 0 {
@@ -142,6 +148,43 @@ func findingRepos(repos []SweepFindingRepo) string {
 		named = append(named, line)
 	}
 	return strings.Join(named, ", ")
+}
+
+// handoffSection says how many PRs the run handed over for rescue and how
+// much of the team's weekly count is left. The outcomes come later, on the
+// PRs, as the markers the agent writes.
+func handoffSection(b *strings.Builder, handoff *SweepHandoff) {
+	if handoff == nil {
+		return
+	}
+	if handoff.Error != "" {
+		fmt.Fprintf(b, "\nNo PR handed over for rescue: %s\n", handoff.Error)
+		return
+	}
+	handed := handedOver(handoff)
+	if handed == 0 && len(handoff.Refused) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\nHanded over for rescue: %s in %s", plural(handed, "PR"), plural(len(handoff.Repositories), "repository"))
+	if handoff.Budget.Remaining != nil {
+		fmt.Fprintf(b, ", %d of the weekly %d left", *handoff.Budget.Remaining-handed, handoff.Budget.Weekly)
+	}
+	b.WriteString(".\n")
+	if len(handoff.Refused) > 0 {
+		fmt.Fprintf(b, "%s not handed over; the run's output names why.\n", plural(len(handoff.Refused), "candidate"))
+	}
+}
+
+// handedOver counts the PRs a handoff carries.
+func handedOver(handoff *SweepHandoff) int {
+	if handoff == nil {
+		return 0
+	}
+	n := 0
+	for _, repo := range handoff.Repositories {
+		n += len(repo.PRs)
+	}
+	return n
 }
 
 // summarySignatureLimit bounds how many signatures the summary names. The
@@ -272,8 +315,8 @@ func plural(count int, noun string) string {
 	if count == 1 {
 		return "1 " + noun
 	}
-	if strings.HasSuffix(noun, "y") {
-		return fmt.Sprintf("%d %sies", count, strings.TrimSuffix(noun, "y"))
+	if stem, ok := strings.CutSuffix(noun, "y"); ok {
+		return fmt.Sprintf("%d %sies", count, stem)
 	}
 	return fmt.Sprintf("%d %ss", count, noun)
 }

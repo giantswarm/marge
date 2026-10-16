@@ -262,8 +262,12 @@ func TestParseSweepRequest_teamScope(t *testing.T) {
 		}
 	}
 
-	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "rescue"}}}); err == nil {
+	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "rescind"}}}); err == nil {
 		t.Error("unknown action: want an error")
+	}
+
+	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "remedy,rescue,mark", "query": "x"}}}); err == nil {
+		t.Error("rescue under the query scope: want an error")
 	}
 }
 

@@ -103,6 +103,10 @@ func (g GitHubSource) Read(ctx context.Context, path string) (string, bool, erro
 type Scope struct {
 	Repos    []string
 	Policies *Set
+	// Languages maps owner/name to the language the team file declares for
+	// the repository, for the entries that declare one. Nil outside the
+	// team scope.
+	Languages map[string]string
 }
 
 // TeamScope reads the team's repository list, the company defaults and the
@@ -141,7 +145,11 @@ func (l Loader) TeamScope(ctx context.Context, team string) (Scope, error) {
 	if err != nil {
 		return Scope{}, fmt.Errorf("%s: %w", path, err)
 	}
-	return Scope{Repos: repos, Policies: set}, nil
+	languages, err := ParseLanguages(content, l.Owner, path)
+	if err != nil {
+		return Scope{}, err
+	}
+	return Scope{Repos: repos, Policies: set, Languages: languages}, nil
 }
 
 // QueryScope reads the company defaults alone. The query scope has no team,
@@ -187,6 +195,30 @@ func (l Loader) document(ctx context.Context, path string) (*Document, error) {
 // them out of its scope, as the query scope leaves archived repositories
 // out of its search.
 var retired = map[string]bool{"archived": true, "deleted": true}
+
+// ParseLanguages returns the gen.language of every entry of a team's
+// repository list that declares one, keyed by owner/name. It is the one
+// generator key the sweep reads: a rescue needs the toolchain that builds
+// the repository.
+func ParseLanguages(content, owner, path string) (map[string]string, error) {
+	var entries []struct {
+		Name string `yaml:"name"`
+		Gen  struct {
+			Language string `yaml:"language"`
+		} `yaml:"gen"`
+	}
+	if err := yaml.Unmarshal([]byte(content), &entries); err != nil {
+		return nil, fmt.Errorf("parsing team file %s: %w", path, err)
+	}
+	languages := make(map[string]string)
+	for _, entry := range entries {
+		name, language := strings.TrimSpace(entry.Name), strings.TrimSpace(entry.Gen.Language)
+		if name != "" && language != "" {
+			languages[owner+"/"+name] = language
+		}
+	}
+	return languages, nil
+}
 
 // ParseRepositories returns the owner/name entries of a team's repository
 // list together with the botPRsSweep exception of every entry that carries
