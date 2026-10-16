@@ -1,0 +1,23 @@
+name: the orb's newer give-up line after ten lost pushes is the same race
+subject:
+  state: failed
+  kind: renovate
+  title: "test(deps): update gsoci.azurecr.io/charts/giantswarm/muster docker tag to v5.39.3"
+  failing: ["ci/circleci: push-chart"]
+  logs:
+    "circleci:ci/circleci: push-chart": |
+      ====> Attempt 10/10: Running: git push origin HEAD:master
+      To github.com:giantswarm/giantswarm-test-catalog.git
+       ! [rejected]          HEAD -> master (fetch first)
+      error: failed to push some refs to 'github.com:giantswarm/giantswarm-test-catalog.git'
+      hint: Updates were rejected because the remote contains work that you do
+      hint: not have locally. This is usually caused by another repository pushing
+      hint: to the same ref. You may want to first integrate the remote changes
+      hint: (e.g., 'git pull ...') before pushing again.
+      hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+      Giving up after 10 push attempts to giantswarm-test-catalog. Last error:  ! [rejected]          HEAD -> master (fetch first)
+      Another build pushed to the catalog between this build's fetch and its push every time; a rerun from failed retries.
+      Exited with code exit status 1
+expect:
+  rule: circleci-catalog-push-race
+  check: "ci/circleci: push-chart"
