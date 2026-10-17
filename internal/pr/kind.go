@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 )
 
 // Kind is the bot that authored a PR. The sweep touches PRs of these five
