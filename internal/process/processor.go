@@ -318,6 +318,15 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, heldMarkerReason(kind, updateType, resolved))
 		return
 	}
+	// A body that asks for a proof before merging holds the PR for whoever
+	// gives it, whichever caller runs the sweep and with or without
+	// --merge-auto: green CI is not that proof.
+	if item, open := pr.UnprovenBeforeMerge(pullReq.GetBody()); open {
+		reason := needsProofReason(item)
+		run.set(pr.StatusHeld, "held: "+reason)
+		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, reason)
+		return
+	}
 
 	p.recordMergeFinding(ctx, run)
 
