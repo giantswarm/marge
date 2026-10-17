@@ -26,12 +26,23 @@ const (
 	KindUpstreamSync Kind = "upstream-sync"
 )
 
-// The sync-from-upstream workflow opens its PR as taylorbot, a user account
-// that opens other PRs too, so the label tells a sync PR from the rest.
-const (
-	upstreamSyncLogin = "taylorbot"
-	UpstreamSyncLabel = "automated-update"
-)
+// The update-chart workflow opens the sync PR on the update branch and
+// sync-from-upstream fills it in. Both authors open other PRs too, so the
+// label tells a sync PR from the rest.
+const UpstreamSyncLabel = "automated-update"
+
+// upstreamSyncAuthors maps the login of each author of a sync PR to the
+// account id it is pinned to, 0 for a GitHub App. The workflows open it as
+// the giantswarm-release App; a repository whose workflows are not
+// regenerated yet still opens it as taylorbot (giantswarm/giantswarm#2280).
+// No person can register a [bot] login, so an App is matched on its login.
+// taylorbot is a plain user account, and its login is free for anyone to
+// take once the account is deleted: its PR counts only from the account id
+// it is pinned to.
+var upstreamSyncAuthors = map[string]int64{
+	"giantswarm-release[bot]": 0,
+	"taylorbot":               25685558,
+}
 
 // kindByLogin maps the GitHub login of each trusted bot to its kind.
 var kindByLogin = map[string]Kind{
@@ -47,10 +58,17 @@ func KindOf(login string, labels []string) Kind {
 	if kind, ok := kindByLogin[login]; ok {
 		return kind
 	}
-	if login == upstreamSyncLogin && slices.Contains(labels, UpstreamSyncLabel) {
+	if _, ok := upstreamSyncAuthors[login]; ok && slices.Contains(labels, UpstreamSyncLabel) {
 		return KindUpstreamSync
 	}
 	return ""
+}
+
+// pinnedAuthor reports whether the user is the account a sync PR author's
+// login is pinned to: any App of the list, a user account only by its id.
+func pinnedAuthor(user *github.User) bool {
+	id, ok := upstreamSyncAuthors[user.GetLogin()]
+	return ok && (id == 0 || user.GetID() == id)
 }
 
 // A self-hosted Renovate that runs under the account owning a personal
@@ -78,10 +96,15 @@ func SelfHostedRenovateCandidate(login, owner, headRef string) bool {
 
 // KindOfPull returns the kind of a pull request of a repository owned by
 // owner: the kind of its bot author, or KindRenovate for a self-hosted
-// Renovate PR, or "" for anyone else's.
+// Renovate PR, or "" for anyone else's. A sync PR whose author carries a
+// pinned login but another account id is anyone else's.
 func KindOfPull(owner string, pull *github.PullRequest) Kind {
 	login := pull.GetUser().GetLogin()
-	if kind := KindOf(login, LabelNames(pull.Labels)); kind != "" {
+	kind := KindOf(login, LabelNames(pull.Labels))
+	if kind == KindUpstreamSync && !pinnedAuthor(pull.GetUser()) {
+		kind = ""
+	}
+	if kind != "" {
 		return kind
 	}
 	if SelfHostedRenovateCandidate(login, owner, pull.GetHead().GetRef()) &&
@@ -92,8 +115,9 @@ func KindOfPull(owner string, pull *github.PullRequest) Kind {
 }
 
 // DiscoveredKind returns the kind a PR's discovery reads: the kind of its
-// bot author, or KindRenovate for a self-hosted Renovate candidate, which
-// KindOfPull confirms before anything is written.
+// bot author, or KindRenovate for a self-hosted Renovate candidate. The
+// discovery reads no account id, so KindOfPull confirms both a candidate and
+// a sync PR's pinned author before anything is written.
 func DiscoveredKind(info PRInfo) Kind {
 	if kind := KindOf(info.Author, info.Labels); kind != "" {
 		return kind
@@ -107,13 +131,24 @@ func DiscoveredKind(info PRInfo) Kind {
 // SearchQualifiers returns the GitHub search qualifiers that find the PRs
 // of each trusted kind, sorted.
 func SearchQualifiers() []string {
-	out := make([]string, 0, len(kindByLogin)+1)
+	out := make([]string, 0, len(kindByLogin)+len(upstreamSyncAuthors))
 	for login := range kindByLogin {
-		out = append(out, "author:app/"+strings.TrimSuffix(login, "[bot]"))
+		out = append(out, authorQualifier(login))
 	}
-	out = append(out, "author:"+upstreamSyncLogin+" label:"+UpstreamSyncLabel)
+	for login := range upstreamSyncAuthors {
+		out = append(out, authorQualifier(login)+" label:"+UpstreamSyncLabel)
+	}
 	sort.Strings(out)
 	return out
+}
+
+// authorQualifier is the search qualifier of a login: an App's is
+// author:app/<slug>, a user account's author:<login>.
+func authorQualifier(login string) string {
+	if slug, ok := strings.CutSuffix(login, "[bot]"); ok {
+		return "author:app/" + slug
+	}
+	return "author:" + login
 }
 
 // classifiedBranches maps a repository to the head-branch prefix of the
@@ -150,11 +185,13 @@ func TrustedLogins() []string {
 // TrustedAuthors describes the authors of the trusted kinds, sorted, for a
 // refusal to name.
 func TrustedAuthors() []string {
-	out := make([]string, 0, len(kindByLogin)+2)
+	out := make([]string, 0, len(kindByLogin)+len(upstreamSyncAuthors)+1)
 	for login := range kindByLogin {
 		out = append(out, login)
 	}
-	out = append(out, upstreamSyncLogin+" (label "+UpstreamSyncLabel+")")
+	for login := range upstreamSyncAuthors {
+		out = append(out, login+" (label "+UpstreamSyncLabel+")")
+	}
 	out = append(out, "the owner of a personal repository (self-hosted Renovate, branch "+RenovateBranchPrefix+")")
 	sort.Strings(out)
 	return out

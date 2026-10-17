@@ -18,9 +18,10 @@ the GitHub UI under the person's own name.**
 Four bot authors and nothing else: `renovate[bot]` (Renovate),
 `giantswarm-align-files[bot]` (Align files), `heraldbot[bot]` (Herald, the
 security remediation PRs of nancy-fixer) and `dependabot[bot]`. There is one
-more kind, the upstream chart sync: the `taylorbot` PR labelled
-`automated-update` that a vendored-chart repository's `sync-from-upstream`
-workflow opens. Its size comes from the version lines its diff changes in
+more kind, the upstream chart sync: the `giantswarm-release[bot]` PR
+labelled `automated-update` that a vendored-chart repository's
+`sync-from-upstream` workflow opens (`taylorbot`'s, matched on its account
+id, where the workflows are not regenerated yet). Its size comes from the version lines its diff changes in
 `Chart.yaml`, and it merges only where the team's policy opts in
 (`updateTypes.upstream-sync`). A self-hosted Renovate running under the
 account that owns a personal repository opens its PRs as that account: the

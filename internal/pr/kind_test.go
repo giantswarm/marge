@@ -18,8 +18,30 @@ func TestKindOf(t *testing.T) {
 	require.Equal(t, KindUpstreamSync, KindOf("taylorbot", []string{"dependencies", "automated-update"}))
 	require.Equal(t, Kind(""), KindOf("taylorbot", []string{"dependencies"}), "taylorbot's other PRs carry no sync label")
 	require.Equal(t, Kind(""), KindOf("quentin", []string{"automated-update"}), "the label alone is not a sync PR")
+	require.Equal(t, KindUpstreamSync, KindOf("giantswarm-release[bot]", []string{"automated-update"}))
+	require.Equal(t, Kind(""), KindOf("giantswarm-release[bot]", []string{"release"}), "the App's release PRs carry no sync label")
 	require.Equal(t, []string{"dependabot[bot]", "giantswarm-align-files[bot]", "heraldbot[bot]", "renovate[bot]"}, TrustedLogins())
-	require.Equal(t, []string{"author:app/dependabot", "author:app/giantswarm-align-files", "author:app/heraldbot", "author:app/renovate", "author:taylorbot label:automated-update"}, SearchQualifiers())
+	require.Equal(t, []string{"author:app/dependabot", "author:app/giantswarm-align-files", "author:app/giantswarm-release label:automated-update", "author:app/heraldbot", "author:app/renovate", "author:taylorbot label:automated-update"}, SearchQualifiers())
+}
+
+// TestKindOfPull_upstreamSync: a sync PR counts from the giantswarm-release
+// App on its login and from taylorbot only on the account id its login is
+// pinned to, so a new account that takes the freed login is anyone else.
+func TestKindOfPull_upstreamSync(t *testing.T) {
+	pull := func(login string, id int64, labels ...string) *github.PullRequest {
+		p := &github.PullRequest{User: &github.User{Login: new(login), ID: new(id)}, Head: &github.PullRequestBranch{Ref: new("main#update-chart")}}
+		for _, l := range labels {
+			p.Labels = append(p.Labels, &github.Label{Name: l})
+		}
+		return p
+	}
+	require.Equal(t, KindUpstreamSync, KindOfPull("giantswarm", pull("giantswarm-release[bot]", 342014845, "automated-update")))
+	require.Equal(t, KindUpstreamSync, KindOfPull("giantswarm", pull("taylorbot", 25685558, "automated-update")))
+	require.Equal(t, Kind(""), KindOfPull("giantswarm", pull("taylorbot", 999, "automated-update")), "the login on another account")
+	require.Equal(t, Kind(""), KindOfPull("giantswarm", pull("taylorbot", 25685558)), "no sync label")
+	require.Equal(t, Kind(""), KindOfPull("giantswarm", pull("giantswarm-release[bot]", 342014845)), "no sync label")
+	require.Contains(t, TrustedAuthors(), "giantswarm-release[bot] (label automated-update)")
+	require.Contains(t, TrustedAuthors(), "taylorbot (label automated-update)")
 }
 
 func TestLeftToClassification(t *testing.T) {
