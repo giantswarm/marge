@@ -13,6 +13,7 @@ func TestAPITransport(t *testing.T) {
 	transport := APITransport()
 
 	require.Equal(t, idleConnsPerHost, transport.MaxIdleConnsPerHost)
+	require.Equal(t, responseHeaderTimeout, transport.ResponseHeaderTimeout)
 	require.GreaterOrEqual(t, transport.MaxIdleConns, idleConnsPerHost)
 	require.Same(t, transport, APITransport())
 	require.NotSame(t, http.DefaultTransport, transport)
@@ -31,13 +32,16 @@ func TestNewAppClientUsesTheSharedTransport(t *testing.T) {
 	require.Same(t, SharedTransport(), transport.base)
 }
 
-// TestSharedTransportWrapsThePool keeps both properties in one place: every
-// client shares one gate, and the pool is still underneath it.
+// TestSharedTransportWrapsThePool keeps the layers in one place: every
+// client shares one gate, a stuck read is sent again under it, and the pool
+// is underneath both.
 func TestSharedTransportWrapsThePool(t *testing.T) {
 	shared := SharedTransport()
 	require.Same(t, shared, SharedTransport())
 
 	gated, ok := shared.(*rateLimited)
 	require.True(t, ok)
-	require.Same(t, APITransport(), gated.base)
+	stuck, ok := gated.base.(retryStuck)
+	require.True(t, ok)
+	require.Same(t, APITransport(), stuck.base)
 }
