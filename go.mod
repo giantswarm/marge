@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/giantswarm/go-selfupdate v1.6.3
+	github.com/giantswarm/go-selfupdate v1.6.4
 	github.com/giantswarm/selfupdate-cosign v0.3.4
 	github.com/google/go-github/v92 v92.0.0
 	github.com/manifoldco/promptui v0.9.0
