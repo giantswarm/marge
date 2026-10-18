@@ -36,8 +36,11 @@ type rebaseFixture struct {
 	// #2's first read, #2's checks wait for #1's merge, and #2 is dirty once
 	// #1 merged.
 	readBeforeMerge bool
-	read2           chan struct{}
-	merge1Done      chan struct{}
+	// headMoves makes #2's merge of #1 push a new head onto #2 instead of
+	// conflicting it.
+	headMoves  bool
+	read2      chan struct{}
+	merge1Done chan struct{}
 
 	reads2  atomic.Int32
 	merged1 atomic.Int32
@@ -70,13 +73,16 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/pulls/2", func(w http.ResponseWriter, r *http.Request) {
 		state := "clean"
 		reads := f.reads2.Add(1)
+		head := "bbb"
 		switch {
+		case f.headMoves && f.merged1.Load() > 0:
+			head = "ccc"
 		case f.readBeforeMerge && f.merged1.Load() > 0:
 			state = "dirty"
 		case reads <= f.dirtyReads:
 			state = "dirty"
 		}
-		writeJSON(w, pull(2, "bbb", state))
+		writeJSON(w, pull(2, head, state))
 		if reads == 1 {
 			close(f.read2)
 		}
@@ -249,6 +255,31 @@ func TestRebase_ASiblingMergedSinceTheReadIsReadAgain(t *testing.T) {
 	}
 	if got := f.reads2.Load(); got != 2 {
 		t.Errorf("#2 read %d times, want 2: once with its siblings, once in its merge lane", got)
+	}
+}
+
+// TestRebase_AHeadMovedSinceTheReadWaits holds the merge lane to the head
+// the checks were read on: #2's head moved while it waited behind #1, so the
+// checks that made it eligible say nothing about what would merge.
+func TestRebase_AHeadMovedSinceTheReadWaits(t *testing.T) {
+	f := &rebaseFixture{readBeforeMerge: true, headMoves: true}
+	proc := NewProcessor(newTestClient(t, f.server(t)), false, false, "marge[bot]")
+
+	status := pr.NewPRStatus()
+	var wg sync.WaitGroup
+	idx := make([]int, 2)
+	for i, n := range []int{1, 2} {
+		info := pr.PRInfo{Owner: "org", Repo: "repo", Number: n, Title: rbTitle, Author: "renovate[bot]"}
+		idx[i] = status.Add(info)
+		wg.Go(func() { proc.ProcessPR(t.Context(), info, status, idx[i]) })
+	}
+	wg.Wait()
+
+	if got := status.Snapshot()[idx[1]]; got.State != pr.StatusWaitingChecks || got.Detail != headMovedDetail {
+		t.Fatalf("#2 = %v (%s), want StatusWaitingChecks (%s)", got.State, got.Detail, headMovedDetail)
+	}
+	if got := f.merged2.Load(); got != 0 {
+		t.Errorf("#2 merged %d times, want 0: its new head was never checked", got)
 	}
 }
 

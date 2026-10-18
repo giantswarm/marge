@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -359,5 +360,39 @@ func TestMerge_CancelledDuringRetry(t *testing.T) {
 	snap := status.Snapshot()
 	if snap[idx].State != pr.StatusSkipped {
 		t.Errorf("state = %v, want StatusSkipped", snap[idx].State)
+	}
+}
+
+// TestMerge_NamesTheCheckedHead holds the merge to the head its checks were
+// read on: GitHub refuses a head that moved since, and the PR waits for the
+// next sweep instead of reading as a conflict.
+func TestMerge_NamesTheCheckedHead(t *testing.T) {
+	var gotSHA atomic.Value
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /repos/org/repo/pulls/1/merge", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SHA string `json:"sha"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotSHA.Store(body.SHA)
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Head branch was modified. Review and try the merge again."})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	proc := NewProcessor(newTestClient(t, server), false, false, "testuser")
+	status := pr.NewPRStatus()
+	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1}
+	idx := status.Add(info)
+	pull := &github.PullRequest{Head: &github.PullRequestBranch{SHA: new("checked")}}
+
+	proc.merge(context.Background(), &prRun{info: info, pull: pull, status: status, idx: idx})
+
+	if got := gotSHA.Load(); got != "checked" {
+		t.Errorf("merge named head %v, want %q", got, "checked")
+	}
+	if snap := status.Snapshot()[idx]; snap.State != pr.StatusWaitingChecks || snap.Detail != headMovedDetail {
+		t.Errorf("state = %v (%s), want StatusWaitingChecks (%s)", snap.State, snap.Detail, headMovedDetail)
 	}
 }
