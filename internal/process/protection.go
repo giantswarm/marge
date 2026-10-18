@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/go-github/v92/github"
 
@@ -39,6 +40,54 @@ type protectionCache struct {
 	protections memo[protection]
 	reviews     memo[reviewRule]
 	rules       memo[*github.BranchRules]
+	classic     classicAccess
+}
+
+// classicAccess is whether the sweep's token may read classic branch
+// protection at all. A token without the administration permission is
+// refused on every repository alike ("Resource not accessible by
+// integration"), so the sweep's first read answers for every later one, and
+// the later ones are not sent. A refusal for want of the admin role is the
+// repository's own and answers for nothing else.
+type classicAccess struct {
+	mu     sync.Mutex
+	known  bool
+	denied bool
+}
+
+// readClassic sends read, a read of a base branch's classic protection,
+// unless the token may not read classic protection, and reports whether it
+// was sent. Until one answer settles the question the reads go one at a
+// time, so the repositories a sweep starts together do not each spend a
+// read on the refusal the first one meets.
+func (p *Processor) readClassic(read func() (*github.Response, error)) (bool, *github.Response, error) {
+	c := &p.classic
+	c.mu.Lock()
+	if c.known {
+		denied := c.denied
+		c.mu.Unlock()
+		if denied {
+			return false, nil, nil
+		}
+		resp, err := read()
+		return true, resp, err
+	}
+	defer c.mu.Unlock()
+	resp, err := read()
+	switch {
+	case err == nil, isStatus(err, resp, http.StatusNotFound):
+		c.known = true
+	case isStatus(err, resp, http.StatusForbidden) && !isRateLimit(err):
+		c.known, c.denied = true, isTokenRefusal(err)
+	}
+	return true, resp, err
+}
+
+// isTokenRefusal reports whether GitHub refused the call for what the
+// token may do, not for what its holder may do on this repository.
+func isTokenRefusal(err error) bool {
+	var ghErr *github.ErrorResponse
+	return errors.As(err, &ghErr) && strings.HasPrefix(ghErr.Message, "Resource not accessible by")
 }
 
 // branchRules reads the rulesets that apply to the base branch. A branch can
@@ -70,7 +119,8 @@ func (p *Processor) branchRules(ctx context.Context, info pr.PRInfo, base string
 // its classic protection and from its rulesets together: a repository set
 // up by devctl carries only the ruleset. A 404
 // means the branch has no protection or no required checks: nothing is
-// required. A 403 means the caller is not an admin: only an admin may merge
+// required. A 403 means the caller may not read it (see readClassic for a
+// token that may not read it anywhere): only an admin may merge
 // past the protection when enforce_admins is off, so GitHub enforces the
 // checks for that caller and the merge refusal is classified as a wait. Any
 // other error is returned so a transient failure never softens into
@@ -79,8 +129,15 @@ func (p *Processor) requiredProtection(ctx context.Context, info pr.PRInfo, base
 	key := info.Owner + "/" + info.Repo + "@" + base
 	return p.protections.get(key, func() (protection, error) {
 		var result protection
-		checks, resp, err := p.Client.Repositories.GetRequiredStatusChecks(ctx, info.Owner, info.Repo, base)
+		var checks *github.RequiredStatusChecks
+		sent, resp, err := p.readClassic(func() (*github.Response, error) {
+			var resp *github.Response
+			var err error
+			checks, resp, err = p.Client.Repositories.GetRequiredStatusChecks(ctx, info.Owner, info.Repo, base)
+			return resp, err
+		})
 		switch {
+		case !sent:
 		case err == nil:
 			result.Strict = checks.GetStrict()
 			for _, c := range checks.GetChecks() {
@@ -122,8 +179,15 @@ func (p *Processor) requiredReview(ctx context.Context, info pr.PRInfo, base str
 	key := info.Owner + "/" + info.Repo + "@" + base
 	return p.reviews.get(key, func() (reviewRule, error) {
 		var result reviewRule
-		enforcement, resp, err := p.Client.Repositories.GetPullRequestReviewEnforcement(ctx, info.Owner, info.Repo, base)
+		var enforcement *github.PullRequestReviewsEnforcement
+		sent, resp, err := p.readClassic(func() (*github.Response, error) {
+			var resp *github.Response
+			var err error
+			enforcement, resp, err = p.Client.Repositories.GetPullRequestReviewEnforcement(ctx, info.Owner, info.Repo, base)
+			return resp, err
+		})
 		switch {
+		case !sent:
 		case err == nil:
 			result.CodeOwnerReviews = enforcement.GetRequireCodeOwnerReviews()
 		case isRateLimit(err):
