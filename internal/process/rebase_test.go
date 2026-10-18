@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,13 @@ type rebaseFixture struct {
 	// headAuthor is the login of the last commit on #2's branch; empty is
 	// Renovate's own.
 	headAuthor string
+
+	// readBeforeMerge makes #2 a PR read beside #1: #1's merge waits for
+	// #2's first read, #2's checks wait for #1's merge, and #2 is dirty once
+	// #1 merged.
+	readBeforeMerge bool
+	read2           chan struct{}
+	merge1Done      chan struct{}
 
 	reads2  atomic.Int32
 	merged1 atomic.Int32
@@ -58,16 +66,28 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /repos/org/repo/pulls/1", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, pull(1, "aaa", "clean"))
 	})
+	f.read2, f.merge1Done = make(chan struct{}), make(chan struct{})
 	mux.HandleFunc("GET /repos/org/repo/pulls/2", func(w http.ResponseWriter, r *http.Request) {
 		state := "clean"
-		if f.reads2.Add(1) <= f.dirtyReads {
+		reads := f.reads2.Add(1)
+		switch {
+		case f.readBeforeMerge && f.merged1.Load() > 0:
+			state = "dirty"
+		case reads <= f.dirtyReads:
 			state = "dirty"
 		}
 		writeJSON(w, pull(2, "bbb", state))
+		if reads == 1 {
+			close(f.read2)
+		}
 	})
 	mux.HandleFunc("PUT /repos/org/repo/pulls/1/merge", func(w http.ResponseWriter, r *http.Request) {
+		if f.readBeforeMerge {
+			<-f.read2
+		}
 		f.merged1.Add(1)
 		writeJSON(w, github.PullRequestMergeResult{Merged: new(true)})
+		close(f.merge1Done)
 	})
 	mux.HandleFunc("PUT /repos/org/repo/pulls/2/merge", func(w http.ResponseWriter, r *http.Request) {
 		f.merged2.Add(1)
@@ -81,6 +101,9 @@ func (f *rebaseFixture) server(t *testing.T) *httptest.Server {
 	}
 	for _, n := range []int{1, 2} {
 		mux.HandleFunc(fmt.Sprintf("GET /repos/org/repo/commits/refs/pull/%d/head/status", n), func(w http.ResponseWriter, r *http.Request) {
+			if f.readBeforeMerge && n == 2 {
+				<-f.merge1Done
+			}
 			writeJSON(w, github.CombinedStatus{State: new("success")})
 		})
 		mux.HandleFunc(fmt.Sprintf("GET /repos/org/repo/commits/refs/pull/%d/head/check-runs", n), func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +217,38 @@ func TestRebase_SelfInflictedConflictMergesInTheSameRun(t *testing.T) {
 	}
 	if got := f.merged2.Load(); got != 1 {
 		t.Errorf("#2 merged %d times, want 1", got)
+	}
+}
+
+// TestRebase_ASiblingMergedSinceTheReadIsReadAgain holds the merge lane: the
+// PRs of a repository are read together, and #2, read before #1 merged and
+// conflicted it, is read again before its merge and decided as it would
+// have been, processed after #1.
+func TestRebase_ASiblingMergedSinceTheReadIsReadAgain(t *testing.T) {
+	f := &rebaseFixture{readBeforeMerge: true}
+	proc := NewProcessor(newTestClient(t, f.server(t)), false, false, "marge[bot]")
+
+	status := pr.NewPRStatus()
+	var wg sync.WaitGroup
+	idx := make([]int, 2)
+	for i, n := range []int{1, 2} {
+		info := pr.PRInfo{Owner: "org", Repo: "repo", Number: n, Title: rbTitle, Author: "renovate[bot]"}
+		idx[i] = status.Add(info)
+		wg.Go(func() { proc.ProcessPR(t.Context(), info, status, idx[i]) })
+	}
+	wg.Wait()
+
+	if got := status.Snapshot()[idx[0]]; got.State != pr.StatusMerged {
+		t.Fatalf("#1 = %v (%s), want StatusMerged", got.State, got.Detail)
+	}
+	if got := status.Snapshot()[idx[1]]; got.State != pr.StatusAwaitingRebase {
+		t.Fatalf("#2 = %v (%s), want StatusAwaitingRebase", got.State, got.Detail)
+	}
+	if got := f.merged2.Load(); got != 0 {
+		t.Errorf("#2 merged %d times, want 0: #1's merge conflicted it", got)
+	}
+	if got := f.reads2.Load(); got != 2 {
+		t.Errorf("#2 read %d times, want 2: once with its siblings, once in its merge lane", got)
 	}
 }
 
