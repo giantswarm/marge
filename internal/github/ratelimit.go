@@ -73,6 +73,12 @@ func sleepUntil(ctx context.Context, d time.Duration) error {
 }
 
 func (r *rateLimited) RoundTrip(req *http.Request) (*http.Response, error) {
+	release, err := acquireWrite(req)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	bucket := rateBucketOf(req)
 	for attempt := 0; ; attempt++ {
 		if err := r.waitForGate(req, bucket); err != nil {

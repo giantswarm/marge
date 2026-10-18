@@ -91,6 +91,41 @@ func (p *Processor) mergeWait() time.Duration {
 	return mergeRetryBaseWait
 }
 
+// mergeInLane merges the PR inside its repository's lane, MergeLane merges
+// wide. The PRs of a repository are read together, so a sibling that merged
+// after this PR was read left its mergeable state stale: the PR is read
+// again before the merge decides on it, and decides as it would have,
+// processed after that sibling.
+func (p *Processor) mergeInLane(ctx context.Context, run *prRun) {
+	lane, _ := p.mergeLanes.get(run.info.Owner+"/"+run.info.Repo, func() (Slots, error) {
+		return NewSlots(p.MergeLane), nil
+	})
+	release, err := lane.acquire(ctx)
+	if err != nil {
+		run.set(pr.StatusSkipped, "cancelled")
+		return
+	}
+	defer release()
+
+	if p.mergesIn(run.info) != run.mergesSeen {
+		fresh, _, err := p.Client.PullRequests.Get(ctx, run.info.Owner, run.info.Repo, run.info.Number)
+		if err != nil {
+			run.set(pr.StatusFailed, ghErrorDetail("fetch error", err))
+			return
+		}
+		run.pull = fresh
+		switch {
+		case fresh.GetMerged():
+			run.set(pr.StatusAlreadyMerged, "")
+			return
+		case fresh.GetMergeableState() == "dirty":
+			p.setConflict(ctx, run, "merge conflict")
+			return
+		}
+	}
+	p.merge(ctx, run)
+}
+
 // merge lands the PR with a squash. A PR behind its base is brought up to
 // date instead and merges on a later sweep once its checks ran on the new
 // head: that is the strict-protection chain, one round per sweep.

@@ -225,9 +225,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	concurrency, labelWrites := fanOut(opts)
-	proc.LabelWrites = labelWrites
-	forEachPR(pr.GroupByRepo(prs), concurrency, func(info pr.PRInfo) {
+	reads, writes := fanOut(opts)
+	ctx = gh.WithWriteBound(ctx, writes.PerTeam*writes.PerRepo)
+	proc.MergeLane = writes.PerRepo
+	forEachPR(pr.GroupByRepo(prs), reads, func(info pr.PRInfo) {
 		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
 		progress.Finished()
@@ -278,30 +279,25 @@ func leastRequests(prs []pr.PRInfo) int {
 	return perPR*len(prs) + perRepo*len(repos)
 }
 
-// fanOut decides how wide a run reads and how many label writes it lets
-// through at once. A run that classifies and does nothing else moves no
-// branch and posts no comment, so it reads under pr.ReadConcurrency; its
-// label writes, when it is not a dry run, stay within the policy's own
-// bound. Every other run keeps the policy's bounds, which already hold its
-// writes.
-func fanOut(opts RunOptions) (pr.Concurrency, process.Slots) {
-	policyBound := opts.Policies.Base().Concurrency
-	switch {
-	case !opts.Actions.ClassifyOnly():
-		return policyBound, nil
-	case opts.DryRun:
-		return pr.ReadConcurrency, nil
-	default:
-		return pr.ReadConcurrency, process.NewSlots(policyBound.PerTeam * policyBound.PerRepo)
+// fanOut decides how wide a run reads and how wide it writes. Every run
+// reads under pr.ReadConcurrency, or the policy's bounds where they are
+// wider: a read moves no branch and posts no comment, so it is bounded by
+// how many reads GitHub answers at once. The writes keep the policy's
+// bounds: no more than its product in flight across the run, and no more
+// than perRepo merges at once in one repository.
+func fanOut(opts RunOptions) (reads, writes pr.Concurrency) {
+	writes = opts.Policies.Base().Concurrency
+	reads = pr.Concurrency{
+		PerTeam: max(pr.ReadConcurrency.PerTeam, writes.PerTeam),
+		PerRepo: max(pr.ReadConcurrency.PerRepo, writes.PerRepo),
 	}
+	return reads, writes
 }
 
-// forEachPR runs fn on every PR of every group, under the two bounds the
-// policy declares: perTeam repositories run at once, and within one
-// repository perRepo PRs. A repository holds its slot for as long as it has
-// work, so perTeam bounds repositories and not the PRs they hold together.
-// The default perRepo of 1 keeps the PRs of a repository sequential, which
-// is what avoids "base branch was modified" failures.
+// forEachPR runs fn on every PR of every group, under two bounds: perTeam
+// repositories run at once, and within one repository perRepo PRs. A
+// repository holds its slot for as long as it has work, so perTeam bounds
+// repositories and not the PRs they hold together.
 func forEachPR(groups []pr.PRGroup, concurrency pr.Concurrency, fn func(pr.PRInfo)) {
 	var wg sync.WaitGroup
 	repoSlots := make(chan struct{}, max(concurrency.PerTeam, 1))
