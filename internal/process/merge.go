@@ -108,22 +108,38 @@ func (p *Processor) mergeInLane(ctx context.Context, run *prRun) {
 	defer release()
 
 	if p.mergesIn(run.info) != run.mergesSeen {
+		checked := run.pull.GetHead().GetSHA()
 		fresh, _, err := p.Client.PullRequests.Get(ctx, run.info.Owner, run.info.Repo, run.info.Number)
 		if err != nil {
 			run.set(pr.StatusFailed, ghErrorDetail("fetch error", err))
 			return
 		}
-		run.pull = fresh
 		switch {
 		case fresh.GetMerged():
 			run.set(pr.StatusAlreadyMerged, "")
 			return
-		case fresh.GetMergeableState() == "dirty":
+		case fresh.GetHead().GetSHA() != checked:
+			run.set(pr.StatusWaitingChecks, headMovedDetail)
+			return
+		}
+		run.pull = fresh
+		if fresh.GetMergeableState() == "dirty" {
 			p.setConflict(ctx, run, "merge conflict")
 			return
 		}
 	}
 	p.merge(ctx, run)
+}
+
+// headMovedDetail is a PR whose head moved after its checks were read: the
+// checks that made it eligible say nothing about the new head, so the next
+// sweep decides on it.
+const headMovedDetail = "head moved since its checks were read; the next sweep decides"
+
+// isHeadModified reports whether GitHub refused the merge because the head
+// is no longer the commit the merge named.
+func isHeadModified(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "head branch was modified")
 }
 
 // merge lands the PR with a squash. A PR behind its base is brought up to
@@ -143,8 +159,11 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			run.set(pr.StatusRetrying, fmt.Sprintf("attempt %d/%d", attempt, maxRetries))
 		}
 
+		// The merge names the head its checks were read on, so a commit
+		// pushed since is refused by GitHub instead of merged unchecked.
 		_, _, err := p.Client.PullRequests.Merge(ctx, run.info.Owner, run.info.Repo, run.info.Number, "", &github.PullRequestOptions{
 			MergeMethod: "squash",
+			SHA:         run.pull.GetHead().GetSHA(),
 		})
 		if err == nil {
 			run.set(pr.StatusMerged, mergedDetail(run))
@@ -161,6 +180,8 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			case isReviewRefusal(err):
 				run.set(pr.StatusAwaitingApproval, ghErrorDetail("merge refused", err))
 				p.postOnce(ctx, run, pr.MarkerKindEvidence, "awaiting-approval", "the sweep's approval did not satisfy the review rule")
+			case isHeadModified(err):
+				run.set(pr.StatusWaitingChecks, headMovedDetail)
 			case isChecksRefusal(err):
 				run.set(pr.StatusWaitingChecks, ghErrorDetail("merge refused", err))
 			case strings.Contains(errMsg, "409") || strings.Contains(errMsg, "conflict"):
