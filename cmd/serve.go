@@ -133,7 +133,7 @@ func newMCPServer(newClient clientFactory, options ...server.ServerOption) *serv
 // which is outside this server.
 func listTool() mcp.Tool {
 	return mcp.NewTool("list",
-		tooldesc.Describe("List the open bot PRs of a team or query scope with each PR's class, label, bot kind and age.",
+		tooldesc.Describe("List the open bot PRs of a team or query scope with each PR's classification, label, bot kind and age.",
 			"By default it reads back the class the last sweep stored in each PR's marge/<class> label: what the last sweep decided, not what a sweep would decide now. "+
 				"refresh: true runs the sweep's classify step on a dry run instead. "+
 				"unclassified means no sweep has labelled that PR, not that it needs nothing: call again with refresh: true. "+
@@ -156,7 +156,7 @@ func listTool() mcp.Tool {
 func remedyTool() mcp.Tool {
 	return mcp.NewTool("remedy",
 		tooldesc.Describe("Remedy one bot PR: classify it and apply the catalogue rule that matches, through that rule's action and its guards.",
-			"The sweep's classify, remedy and mark steps on one PR, with its guards, refusals and evidence comment. "+
+			"The sweep's classify, remedy and mark steps on one PR, with its guards, refusals and evidence comment; a rule's action may close the PR or rewrite required checks. "+
 				"Naming a rule only removes the others from the contest: it still has to match. "+
 				"When nothing matches, nothing is written and the failure is reported under unhandled."),
 		mcp.WithString("pr_url",
@@ -310,11 +310,10 @@ func scopeArguments() mcp.ToolOption {
 // reads exactly these arguments; the serve tests keep the two in step.
 func sweepTool() mcp.Tool {
 	return mcp.NewTool("sweep",
-		tooldesc.Describe("Sweep a team's or query's bot PRs (Renovate, Align files, Herald, Dependabot): approve and squash-merge green ones.",
-			"Labels each PR marge/<class>. "+
+		tooldesc.Describe("Sweep a team's or query's bot PRs (Renovate, Align files, Herald, Dependabot): approve and merge eligible green ones.",
+			"Commits changelog entries, labels each PR marge/<class>, comments evidence and applies the matching catalogue rule (may close a PR or rewrite required checks). "+
 				"Majors and unreadable updates wait for a person; a pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. "+
-				"Not action_required: stale (fixed on base; refresh updates it), cancelled (CircleCI auto-cancelled; retry reruns it), ci_no_verdict (detail names the remedy), obsolete (superseded or no_op: close it). "+
-				"Rescue tooling acts on action_required only, skipping entries whose rescue is not stale."),
+				"stale, cancelled, ci_no_verdict and obsolete are not action_required; rescue tooling acts on action_required only, skipping entries whose rescue is not stale."),
 		scopeArguments(),
 		mcp.WithArray("teams",
 			mcp.Description("Several teams in one call, swept one after another under their own team file and policy; answers {\"teams\": [{team, result or error}]} in order."),
@@ -327,7 +326,7 @@ func sweepTool() mcp.Tool {
 			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
 		),
 		mcp.WithString("actions",
-			mcp.Description("Comma-separated steps, in fixed order: classify, changelog, approve, merge, refresh, retry, mark (default all). changelog commits before approve."),
+			mcp.Description("Comma-separated steps, in fixed order: classify, changelog, approve, merge, refresh, retry, remedy, mark (default all); remedy needs mark."),
 		),
 		mcp.WithString("security_patterns",
 			mcp.Description("Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related"),
