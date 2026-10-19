@@ -149,6 +149,7 @@ func TestScopeRepos(t *testing.T) {
 
 // TestTools_annotations holds what a client is told before it calls: only
 // list is read-only, and the two tools that change a PR are destructive.
+// Every registered tool is in the table.
 // mcp-go fills an unset hint with the specification's default, so every
 // hint is spelled out and every one of them is checked.
 func TestTools_annotations(t *testing.T) {
@@ -161,6 +162,15 @@ func TestTools_annotations(t *testing.T) {
 		{tool: sweepTool(), readOnly: false, destructive: true},
 		{tool: remedyTool(), readOnly: false, destructive: true},
 		{tool: markTool(), readOnly: false, destructive: false},
+		{tool: changelogTool(), readOnly: false, destructive: false},
+	}
+
+	declared := map[string]bool{}
+	for _, tt := range tests {
+		declared[tt.tool.Name] = true
+	}
+	for name := range docsServer().ListTools() {
+		require.True(t, declared[name], "%s is registered but its annotations are not checked here", name)
 	}
 
 	for _, tt := range tests {
