@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/stretchr/testify/require"
@@ -30,7 +34,7 @@ func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
 	require.NoError(t, err)
 
-	found, err := searchPRs(t.Context(), client, "", "me", []string{"org/ok", "org/broken"})
+	found, err := searchPRs(t.Context(), client, "", "me", []string{"org/ok", "org/broken"}, 0)
 	require.NoError(t, err)
 	require.Len(t, found.PRs, 2)
 	for _, p := range found.PRs {
@@ -42,7 +46,7 @@ func TestListRepoPRs_reportsUnlistableRepositories(t *testing.T) {
 	require.Equal(t, "org/broken", found.Failed[0].Repo)
 	require.Contains(t, found.Failed[0].Err, "boom")
 
-	filtered, err := searchPRs(t.Context(), client, "ORG/OK", "me", []string{"org/ok", "org/broken"})
+	filtered, err := searchPRs(t.Context(), client, "ORG/OK", "me", []string{"org/ok", "org/broken"}, 0)
 	require.NoError(t, err)
 	require.Len(t, filtered.PRs, 2, "the query filters repositories by name, case-insensitively")
 	require.Empty(t, filtered.Failed)
@@ -97,7 +101,7 @@ func TestSearchPRs_carriesTheLabels(t *testing.T) {
 	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
 	require.NoError(t, err)
 
-	found, err := searchPRs(t.Context(), client, "", "me", nil)
+	found, err := searchPRs(t.Context(), client, "", "me", nil, 0)
 	require.NoError(t, err)
 	require.Len(t, found.PRs, 1, "the same PR is returned by every query and kept once")
 	require.Equal(t, []string{"marge/stale"}, found.PRs[0].Labels)
@@ -121,7 +125,7 @@ func TestListRepoPRs_selfHostedRenovate(t *testing.T) {
 	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
 	require.NoError(t, err)
 
-	found, err := searchPRs(t.Context(), client, "", "me", []string{"jane/app"})
+	found, err := searchPRs(t.Context(), client, "", "me", []string{"jane/app"}, 0)
 	require.NoError(t, err)
 	require.Len(t, found.PRs, 1)
 	require.Equal(t, 1, found.PRs[0].Number)
@@ -132,9 +136,14 @@ func TestListRepoPRs_selfHostedRenovate(t *testing.T) {
 // for the caller's own PRs from Renovate branches in the caller's own
 // repositories, where a self-hosted Renovate running as the caller opens them.
 func TestSearchPRs_searchesTheCallersSelfHostedRenovate(t *testing.T) {
-	var queries []string
+	var (
+		mu      sync.Mutex
+		queries []string
+	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /search/issues", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		queries = append(queries, r.URL.Query().Get("q"))
 		_ = json.NewEncoder(w).Encode(&github.IssuesSearchResult{})
 	})
@@ -144,8 +153,65 @@ func TestSearchPRs_searchesTheCallersSelfHostedRenovate(t *testing.T) {
 	client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
 	require.NoError(t, err)
 
-	_, err = searchPRs(t.Context(), client, "", "jane", nil)
+	_, err = searchPRs(t.Context(), client, "", "jane", nil, 0)
 	require.NoError(t, err)
 	require.Contains(t, queries, "is:pr is:open archived:false user:jane author:jane head:renovate/")
 	require.Contains(t, queries, "is:pr is:open archived:false user:jane author:app/renovate")
+}
+
+// TestSearchPRs_keepsTheOrderOfTheSearches: the searches run at once, and
+// the PRs still come back in the order of the searches, each PR once, so the
+// same scope lists the same way however the answers raced. The search that
+// is asked first answers last.
+func TestSearchPRs_keepsTheOrderOfTheSearches(t *testing.T) {
+	for _, parallel := range []int{1, 0} {
+		t.Run(fmt.Sprintf("parallel %d", parallel), func(t *testing.T) {
+			var (
+				mu       sync.Mutex
+				inFlight int
+				widest   int
+			)
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /search/issues", func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				inFlight++
+				widest = max(widest, inFlight)
+				mu.Unlock()
+				defer func() {
+					mu.Lock()
+					inFlight--
+					mu.Unlock()
+				}()
+
+				q := r.URL.Query().Get("q")
+				number := 2
+				if strings.Contains(q, "review-requested:@me") {
+					// Every search of the first scope finds PR 1, and
+					// answers after the others.
+					number = 1
+					time.Sleep(20 * time.Millisecond)
+				}
+				url := fmt.Sprintf("https://github.com/org/ok/pull/%d", number)
+				_ = json.NewEncoder(w).Encode(&github.IssuesSearchResult{
+					Issues: []*github.Issue{{Number: new(number), HTMLURL: new(url), User: &github.User{Login: new("renovate[bot]")}}},
+				})
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			baseURL := server.URL + "/"
+			client, err := github.NewClient(github.WithHTTPClient(server.Client()), github.WithURLs(&baseURL, &baseURL))
+			require.NoError(t, err)
+
+			found, err := searchPRs(t.Context(), client, "", "me", nil, parallel)
+			require.NoError(t, err)
+			require.Len(t, found.PRs, 2, "each PR is kept once")
+			require.Equal(t, 1, found.PRs[0].Number, "the first search's PR comes first")
+			require.Equal(t, 2, found.PRs[1].Number)
+			if parallel == 1 {
+				require.Equal(t, 1, widest, "--parallel 1 searches one after another")
+			} else {
+				require.Greater(t, widest, 1, "the searches run at once by default")
+			}
+		})
+	}
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-github/v92/github"
@@ -61,13 +63,18 @@ type teamsRun struct {
 	// the teams whose policy switches the schedule off.
 	Teams   []string
 	Notices poster
+	// Stdout carries each team's plain results; nil is the process's own.
+	Stdout io.Writer
 	// Out carries the per-team progress lines. The summaries themselves go
 	// to the team channels.
 	Out io.Writer
 }
 
-// Run sweeps the teams of the run, in name order, and posts one summary per
-// team that changed something.
+// Run sweeps the teams of the run and posts one summary per team that
+// changed something. Teams run Opts.Parallel at once, except teams that own
+// a common repository, which run one after another (forEachTeam). The
+// outcomes, and what each team prints, come in the order the teams were
+// named, whatever order they finished in.
 //
 // A team whose files do not parse fails that team alone: one team's broken
 // policy must not stop the sweep for every other team.
@@ -78,34 +85,38 @@ func (r teamsRun) Run(ctx context.Context) ([]teamOutcome, error) {
 	}
 	teams := r.Teams
 
-	catalogue, rulesReport := loadRules(ctx, r.Client, r.Rules)
+	catalogue, rulesReport := loadRules(ctx, r.Client, r.Rules, r.Opts.Parallel)
 	reportRules(r.Out, rulesReport)
 
-	outcomes := make([]teamOutcome, 0, len(teams))
-	for i, team := range teams {
+	// Which repositories each team owns decides which teams may run at
+	// once, so every scope is resolved before the first sweep starts.
+	scopes := resolveTeamScopes(ctx, loader, teams, r.Opts.Parallel)
+
+	outcomes := make([]teamOutcome, len(teams))
+	printed := newOrderedOutput(len(teams), r.stdout(), r.Out)
+	forEachTeam(scopes, r.Opts.Parallel, func(index int) {
+		out := printed.team(index)
+		team := r
+		team.Opts.Stdout, team.Opts.Stderr, team.Out = &out.stdout, &out.stderr, &out.stderr
 		if ctx.Err() != nil {
-			// The teams left have no outcome of their own, and an
-			// outcome nobody records reads as a team the run covered.
-			for _, left := range teams[i:] {
-				outcome := teamOutcome{Team: left, Stopped: true, Skipped: "the run was stopped before this team had its turn"}
-				r.report(outcome)
-				outcomes = append(outcomes, outcome)
-			}
-			return outcomes, nil
+			// A team the run never reached has no outcome of its own, and
+			// an outcome nobody records reads as a team the run covered.
+			outcomes[index] = teamOutcome{Team: teams[index], Stopped: true, Skipped: "the run was stopped before this team had its turn"}
+		} else {
+			outcomes[index] = team.sweepTeam(ctx, loader, scopes[index], catalogue, rulesReport)
 		}
-		outcome := r.sweepTeam(ctx, loader, team, catalogue, rulesReport)
-		r.report(outcome)
-		outcomes = append(outcomes, outcome)
-	}
+		team.report(outcomes[index])
+		printed.done(index)
+	})
 	return outcomes, nil
 }
 
-// sweepTeam resolves one team's scope and sweeps it, then posts the summary
+// sweepTeam sweeps one team under its resolved scope, then posts the summary
 // when the run changed something.
-func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team string, catalogue *rules.Catalogue, rulesReport *SweepRules) teamOutcome {
-	scope, err := loader.TeamScope(ctx, team)
-	if err != nil {
-		return teamOutcome{Team: team, Stopped: ctx.Err() != nil, Err: err}
+func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, scoped teamScope, catalogue *rules.Catalogue, rulesReport *SweepRules) teamOutcome {
+	team, scope := scoped.team, scoped.scope
+	if scoped.err != nil {
+		return teamOutcome{Team: team, Stopped: ctx.Err() != nil, Err: scoped.err}
 	}
 	// The channel is read before the sweep, under the context a stop has
 	// not cancelled yet. A channel file the policy needs and the team does
@@ -117,7 +128,7 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 	opts.Policies = scope.Policies
 	opts.Rules = catalogue
 
-	found, err := searchPRs(ctx, r.Client, "", r.Login, scope.Repos)
+	found, err := searchPRs(ctx, r.Client, "", r.Login, scope.Repos, r.Opts.Parallel)
 	if err != nil && ctx.Err() == nil {
 		return teamOutcome{Team: team, Err: fmt.Errorf("searching PRs of team %s: %w", team, err)}
 	}
@@ -136,6 +147,84 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, team stri
 		return outcome
 	}
 	return r.postOutcome(ctx, outcome, channel)
+}
+
+func (r teamsRun) stdout() io.Writer {
+	if r.Stdout == nil {
+		return os.Stdout
+	}
+	return r.Stdout
+}
+
+// orderedOutput passes on what each team of a run prints in the order the
+// teams were named. The first team not yet done writes straight through, so
+// a run of one team, or of one team at a time, prints as it goes; a team
+// behind it is held until every team before it is done.
+type orderedOutput struct {
+	stdout, stderr io.Writer
+
+	mu    sync.Mutex
+	teams []*teamOutput
+	next  int
+}
+
+// teamOutput is what one team prints: its results on stdout, its progress
+// and report lines on stderr, and what is held of them until its turn.
+type teamOutput struct {
+	stdout, stderr teamWriter
+	finished       bool
+}
+
+func newOrderedOutput(n int, stdout, stderr io.Writer) *orderedOutput {
+	o := &orderedOutput{stdout: stdout, stderr: stderr, teams: make([]*teamOutput, n)}
+	for i := range o.teams {
+		o.teams[i] = &teamOutput{
+			stdout: teamWriter{o: o, index: i, dest: stdout},
+			stderr: teamWriter{o: o, index: i, dest: stderr},
+		}
+	}
+	return o
+}
+
+// team returns the writers of the team at index.
+func (o *orderedOutput) team(index int) *teamOutput { return o.teams[index] }
+
+// done records that the team at index has printed everything, and passes on
+// what the teams after it hold, up to the first that is not done yet, which
+// writes straight through from then on.
+func (o *orderedOutput) done(index int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.teams[index].finished = true
+	for o.next < len(o.teams) && o.teams[o.next].finished {
+		o.next++
+		if o.next < len(o.teams) {
+			o.teams[o.next].stdout.flush()
+			o.teams[o.next].stderr.flush()
+		}
+	}
+}
+
+// teamWriter is one stream of one team.
+type teamWriter struct {
+	o     *orderedOutput
+	index int
+	dest  io.Writer
+	held  bytes.Buffer
+}
+
+func (w *teamWriter) Write(p []byte) (int, error) {
+	w.o.mu.Lock()
+	defer w.o.mu.Unlock()
+	if w.o.next == w.index {
+		return w.dest.Write(p)
+	}
+	return w.held.Write(p)
+}
+
+// flush passes on what the stream held. The caller holds the lock.
+func (w *teamWriter) flush() {
+	_, _ = w.held.WriteTo(w.dest)
 }
 
 // postOutcome posts the summary of a swept team and records how that went.

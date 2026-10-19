@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/marge/internal/fanout"
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/process"
 	"github.com/giantswarm/marge/internal/rules"
@@ -53,6 +54,7 @@ func init() {
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name (default "+rules.DefaultOwner+"/"+rules.DefaultRepo+")")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from (default "+rules.DefaultRef+")")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")
+	sweepCmd.Flags().IntVar(&sweepOpts.Parallel, "parallel", fanout.Default, "How many teams, searches and rule documents the sweep reads at once; 1 runs them one after another. Teams that own a common repository are always swept one after another")
 	sweepCmd.Flags().StringVar(&sweepOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(sweepCmd)
@@ -79,6 +81,9 @@ func resolveSweepOptions(opts *RunOptions) ([]string, error) {
 	}
 	if len(teams) == 1 {
 		opts.Team = teams[0]
+	}
+	if opts.Parallel < 0 {
+		return nil, fmt.Errorf("--parallel %d: want 1 or more", opts.Parallel)
 	}
 	actions, err := process.ParseActions(sweepFlags.actions)
 	if err != nil {
@@ -225,7 +230,7 @@ marge never closes a PR itself.`,
 			opts := sweepOpts
 			opts.Policies = scope.Policies
 
-			catalogue, rulesReport := loadRules(ctx, client, source)
+			catalogue, rulesReport := loadRules(ctx, client, source, opts.Parallel)
 			opts.Rules = catalogue
 			if sweepFlags.output != "json" {
 				reportRules(os.Stderr, rulesReport)
@@ -236,7 +241,7 @@ marge never closes a PR itself.`,
 				return err
 			}
 
-			found, err := searchPRs(ctx, client, opts.Query, login, repos)
+			found, err := searchPRs(ctx, client, opts.Query, login, repos, opts.Parallel)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}

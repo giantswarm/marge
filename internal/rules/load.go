@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/google/go-github/v92/github"
 
+	"github.com/giantswarm/marge/internal/fanout"
 	"github.com/giantswarm/marge/internal/remedy"
 )
 
@@ -40,6 +42,10 @@ type Loader struct {
 
 	// LocalPath reads the catalogue from this directory instead of GitHub.
 	LocalPath string
+
+	// Parallel is how many documents are read from GitHub at once; zero
+	// means fanout.Default, and 1 reads them one after another.
+	Parallel int
 }
 
 // Catalogue is the loaded rule set of one sweep.
@@ -187,23 +193,37 @@ func (l Loader) repoFiles(ctx context.Context) ([]file, string, error) {
 		return nil, source, fmt.Errorf("listing %s: %w", source, err)
 	}
 
-	var files []file
+	var wanted []*github.RepositoryContent
 	for _, e := range entries {
-		if e.GetType() != "file" || !isRuleFile(e.GetName()) {
-			continue
+		if e.GetType() == "file" && isRuleFile(e.GetName()) {
+			wanted = append(wanted, e)
 		}
-		blob, _, err := l.Client.Git.GetBlob(ctx, owner, repo, e.GetSHA())
-		if err != nil {
-			return nil, source, fmt.Errorf("reading %s: %w", e.GetPath(), err)
-		}
-		content, err := decodeBlob(blob)
-		if err != nil {
-			return nil, source, fmt.Errorf("decoding %s: %w", e.GetPath(), err)
-		}
-		files = append(files, file{path: e.GetName(), sha: e.GetSHA(), content: content})
+	}
+	// One request per document, and none depends on another, so they are
+	// read together: the catalogue is read at the start of every sweep.
+	files := make([]file, len(wanted))
+	errs := make([]error, len(wanted))
+	fanout.Each(len(wanted), l.Parallel, func(i int) {
+		files[i], errs[i] = l.readBlob(ctx, owner, repo, wanted[i])
+	})
+	if err := errors.Join(errs...); err != nil {
+		return nil, source, err
 	}
 	sortFiles(files)
 	return files, source, nil
+}
+
+// readBlob reads one document of the catalogue.
+func (l Loader) readBlob(ctx context.Context, owner, repo string, e *github.RepositoryContent) (file, error) {
+	blob, _, err := l.Client.Git.GetBlob(ctx, owner, repo, e.GetSHA())
+	if err != nil {
+		return file{}, fmt.Errorf("reading %s: %w", e.GetPath(), err)
+	}
+	content, err := decodeBlob(blob)
+	if err != nil {
+		return file{}, fmt.Errorf("decoding %s: %w", e.GetPath(), err)
+	}
+	return file{path: e.GetName(), sha: e.GetSHA(), content: content}, nil
 }
 
 // decodeBlob returns a blob's bytes. The Git API answers base64 for every
