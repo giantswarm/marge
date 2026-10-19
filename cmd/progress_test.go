@@ -136,10 +136,22 @@ func TestReportProgress_reachesAStreamableHTTPCaller(t *testing.T) {
 	_, err = caller.CallTool(t.Context(), request)
 	require.NoError(t, err)
 
+	// The server queues a notification and writes the result itself, so
+	// the last notification can reach the caller after the result.
+	done := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, notification := range received {
+			if notification.Params.AdditionalFields["message"] == "1 of 1 PRs done" {
+				return true
+			}
+		}
+		return false
+	}
+	require.Eventually(t, done, 5*time.Second, 10*time.Millisecond, "the caller hears that the PR is done")
+
 	mu.Lock()
 	defer mu.Unlock()
-	require.NotEmpty(t, received)
-	var messages []string
 	last := 0.0
 	for _, notification := range received {
 		fields := notification.Params.AdditionalFields
@@ -148,7 +160,5 @@ func TestReportProgress_reachesAStreamableHTTPCaller(t *testing.T) {
 		require.True(t, ok)
 		require.Greater(t, value, last, "progress only increases")
 		last = value
-		messages = append(messages, fields["message"].(string))
 	}
-	require.Contains(t, messages, "1 of 1 PRs done")
 }
