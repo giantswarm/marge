@@ -354,3 +354,37 @@ func TestRateLimitedLongLimitOutsideARunStopsNothing(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	require.NoError(t, t.Context().Err())
 }
+
+// TestRateLimited_boundsTheRequestsInFlight: one bucket never has more than
+// requestsAtOnce requests in flight, however wide the sweep fans out, and a
+// request waiting for a slot is sent once one frees.
+func TestRateLimited_boundsTheRequestsInFlight(t *testing.T) {
+	var arrived atomic.Int32
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		arrived.Add(1)
+		<-release
+	}))
+	defer server.Close()
+
+	transport := newRateLimited(http.DefaultTransport)
+	const sent = requestsAtOnce + 16
+	var wg sync.WaitGroup
+	for range sent {
+		wg.Go(func() {
+			resp, err := transport.RoundTrip(request(t, t.Context(), server.URL))
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+		})
+	}
+
+	awaitCount(t, &arrived, requestsAtOnce, "the first requests")
+	// The rest wait for a slot; give them the chance to overtake the bound.
+	time.Sleep(50 * time.Millisecond)
+	require.EqualValues(t, requestsAtOnce, arrived.Load(), "no more than requestsAtOnce in flight")
+
+	close(release)
+	wg.Wait()
+	require.EqualValues(t, sent, arrived.Load(), "every waiting request is sent once a slot frees")
+}

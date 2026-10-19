@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/giantswarm/marge/internal/fanout"
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
@@ -70,20 +70,14 @@ func (t toolset) listTeams(ctx context.Context, teams []string, refresh bool) (T
 	client, login, scopes, found := scoped.client, scoped.login, scoped.scopes, scoped.found
 
 	queues := make([]TeamQueue, len(scopes))
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, teamsAtOnce)
-	for index, scoped := range scopes {
+	fanout.Each(len(scopes), teamsAtOnce, func(index int) {
+		scoped := scopes[index]
 		if scoped.err != nil {
 			queues[index] = TeamQueue{Team: scoped.team, Error: errorText(ctx, scoped.err)}
-			continue
+			return
 		}
-		wg.Go(func() {
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			queues[index] = t.teamQueue(ctx, client, login, scoped, found, refresh)
-		})
-	}
-	wg.Wait()
+		queues[index] = t.teamQueue(ctx, client, login, scoped, found, refresh)
+	})
 	return TeamQueues{Teams: queues}, nil
 }
 
@@ -114,7 +108,7 @@ func (t toolset) discoverTeams(ctx context.Context, teams []string) (teamsScoped
 		return teamsScoped{}, err
 	}
 
-	scopes := resolveTeamScopes(ctx, loader, teams)
+	scopes := resolveTeamScopes(ctx, loader, teams, 0)
 
 	repoLists := make([][]string, 0, len(scopes))
 	for _, scoped := range scopes {
@@ -127,7 +121,7 @@ func (t toolset) discoverTeams(ctx context.Context, teams []string) (teamsScoped
 	// search, and answer with PRs that belong to no team asked for.
 	var found discovery
 	if repos := mergeRepos(repoLists...); len(repos) > 0 {
-		found, err = searchPRs(ctx, client, "", login, repos)
+		found, err = searchPRs(ctx, client, "", login, repos, 0)
 		if err != nil {
 			return teamsScoped{}, fmt.Errorf("searching PRs: %w", err)
 		}
@@ -136,9 +130,9 @@ func (t toolset) discoverTeams(ctx context.Context, teams []string) (teamsScoped
 	return teamsScoped{client: client, login: login, scopes: scopes, found: found}, nil
 }
 
-// teamsAtOnce is how many teams of one call are classified together. It
-// bounds the widest read, which is a refresh of every team: each team fans
-// out over its own PRs as well.
+// teamsAtOnce is how many teams of one call are classified or swept
+// together. It bounds the widest read, which is a refresh of every team:
+// each team fans out over its own PRs as well.
 const teamsAtOnce = 4
 
 // teamQueue builds one team's queue from the shared discovery.
@@ -168,24 +162,14 @@ func (t toolset) teamQueue(ctx context.Context, client *github.Client, login str
 // resolveTeamScopes reads every team's files. The reads are independent, so
 // they run together: one team's files are three requests, and a caller that
 // asks for every team would otherwise wait for all of them in turn.
-func resolveTeamScopes(ctx context.Context, loader policy.Loader, teams []string) []teamScope {
+func resolveTeamScopes(ctx context.Context, loader policy.Loader, teams []string, parallel int) []teamScope {
 	scopes := make([]teamScope, len(teams))
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, scopesAtOnce)
-	for index, team := range teams {
-		wg.Go(func() {
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			scope, err := loader.TeamScope(ctx, team)
-			scopes[index] = teamScope{team: team, scope: scope, err: err}
-		})
-	}
-	wg.Wait()
+	fanout.Each(len(teams), parallel, func(index int) {
+		scope, err := loader.TeamScope(ctx, teams[index])
+		scopes[index] = teamScope{team: teams[index], scope: scope, err: err}
+	})
 	return scopes
 }
-
-// scopesAtOnce is how many team files are read together.
-const scopesAtOnce = 8
 
 // prsOfRepos keeps the PRs that live in one of the repositories. GitHub
 // treats owner and repository names case-insensitively, so the comparison
@@ -226,8 +210,8 @@ func repoSet(repos []string) map[string]bool {
 // sweepTeams sweeps several teams in one call, each under its own policy.
 //
 // The teams share the discovery, as a several-team list does. The sweeps
-// themselves run one after another: a sweep writes, and two teams can own
-// the same repository, so running them together would let two runs act on
+// themselves run together, except for teams that own a common repository:
+// a sweep writes, so those run one after another and two runs never act on
 // one PR at the same time.
 func (t toolset) sweepTeams(ctx context.Context, teams []string, req sweepRequest) (TeamQueues, error) {
 	scoped, err := t.discoverTeams(ctx, teams)
@@ -240,7 +224,7 @@ func (t toolset) sweepTeams(ctx context.Context, teams []string, req sweepReques
 		return TeamQueues{}, err
 	}
 
-	catalogue, rulesReport := loadRules(ctx, scoped.client, RulesSource{})
+	catalogue, rulesReport := loadRules(ctx, scoped.client, RulesSource{}, req.Opts.Parallel)
 	if req.Rule != "" {
 		catalogue, err = catalogue.Only(req.Rule)
 		if err != nil {
@@ -250,15 +234,19 @@ func (t toolset) sweepTeams(ctx context.Context, teams []string, req sweepReques
 	}
 
 	queues := make([]TeamQueue, len(scoped.scopes))
-	for index, scope := range scoped.scopes {
-		if scope.err != nil {
+	forEachTeam(scoped.scopes, teamsAtOnce, func(index int) {
+		scope := scoped.scopes[index]
+		switch {
+		case scope.err != nil:
 			queues[index] = TeamQueue{Team: scope.team, Error: errorText(ctx, scope.err)}
-			continue
+		case ctx.Err() != nil:
+			queues[index] = TeamQueue{Team: scope.team, Error: errorText(ctx, ctx.Err())}
+		default:
+			queues[index] = t.sweepTeam(ctx, scoped, scope, req, selected[scope.team], catalogue, rulesReport)
 		}
-		if err := ctx.Err(); err != nil {
-			return TeamQueues{}, err
-		}
-		queues[index] = t.sweepTeam(ctx, scoped, scope, req, selected[scope.team], catalogue, rulesReport)
+	})
+	if err := ctx.Err(); err != nil {
+		return TeamQueues{}, err
 	}
 	return TeamQueues{Teams: queues}, nil
 }

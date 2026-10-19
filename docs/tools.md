@@ -238,7 +238,7 @@ Commits changelog entries, labels each PR marge/<class>, comments evidence and a
       "type": "string"
     },
     "teams": {
-      "description": "Several teams in one call, swept one after another under their own team file and policy; answers {\"teams\": [{team, result or error}]} in order.",
+      "description": "Several teams, each under its own team file and policy, swept together unless they share a repository; answers {\"teams\": [...]} in order.",
       "items": {
         "type": "string"
       },

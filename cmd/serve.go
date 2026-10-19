@@ -316,7 +316,7 @@ func sweepTool() mcp.Tool {
 				"stale, cancelled, ci_no_verdict and obsolete are not action_required; rescue tooling acts on action_required only, skipping entries whose rescue is not stale."),
 		scopeArguments(),
 		mcp.WithArray("teams",
-			mcp.Description("Several teams in one call, swept one after another under their own team file and policy; answers {\"teams\": [{team, result or error}]} in order."),
+			mcp.Description("Several teams, each under its own team file and policy, swept together unless they share a repository; answers {\"teams\": [...]} in order."),
 			mcp.WithStringItems(),
 		),
 		mcp.WithBoolean("merge_auto",
@@ -467,7 +467,7 @@ func (t toolset) discover(ctx context.Context, req *sweepRequest) (scopedPRs, er
 		return scopedPRs{}, err
 	}
 
-	found, err := searchPRs(ctx, client, req.Opts.Query, login, repos)
+	found, err := searchPRs(ctx, client, req.Opts.Query, login, repos, req.Opts.Parallel)
 	if err != nil {
 		return scopedPRs{}, fmt.Errorf("searching PRs: %w", err)
 	}
@@ -490,7 +490,7 @@ func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error)
 	}
 	client, login, prs, found := scoped.client, scoped.login, scoped.prs, scoped.found
 
-	catalogue, rulesReport := loadRules(ctx, client, RulesSource{})
+	catalogue, rulesReport := loadRules(ctx, client, RulesSource{}, req.Opts.Parallel)
 	if req.Rule != "" {
 		catalogue, err = catalogue.Only(req.Rule)
 		if err != nil {
