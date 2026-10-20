@@ -4,7 +4,7 @@ import "sync"
 
 // memo holds one answer per key for the lifetime of a sweep, and runs one
 // lookup per key however many PRs ask for it at once. The PRs of a sweep run
-// together on one Processor, up to the policy's own bound, so a cache that
+// together on one Processor, up to the read bound, so a cache that
 // only collapses repeated reads in sequence would still send one request per
 // PR for the answer they share.
 //

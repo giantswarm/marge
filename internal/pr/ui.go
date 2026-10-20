@@ -2,6 +2,7 @@ package pr
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -187,7 +188,7 @@ func ColorizeStatus(state StatusState, detail string) string {
 	}
 }
 
-func PrintPlainResults(w *os.File, status *PRStatus) {
+func PrintPlainResults(w io.Writer, status *PRStatus) {
 	merged := status.MergedEntries()
 	autoMerge := status.AutoMergeEntries()
 	securityFailed, otherFailed := SplitActionRequired(status.ActionRequired())
@@ -246,7 +247,7 @@ const (
 
 // printFailureGroup writes a header and one entry per failure including its
 // PR URL on a continuation line. It is a no-op when entries is empty.
-func printFailureGroup(w *os.File, header string, entries []StatusEntry) {
+func printFailureGroup(w io.Writer, header string, entries []StatusEntry) {
 	if len(entries) == 0 {
 		return
 	}
@@ -258,7 +259,7 @@ func printFailureGroup(w *os.File, header string, entries []StatusEntry) {
 	_, _ = fmt.Fprintln(w)
 }
 
-func printPlainEntry(w *os.File, e StatusEntry) {
+func printPlainEntry(w io.Writer, e StatusEntry) {
 	detail := e.State.String()
 	if e.Detail != "" {
 		detail = fmt.Sprintf("%s (%s)", detail, e.Detail)

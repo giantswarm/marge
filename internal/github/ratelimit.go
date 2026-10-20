@@ -20,6 +20,11 @@ const (
 	// and a sweep must not sleep through it: a wait longer than this is
 	// returned to the caller as the refusal it is.
 	maxRateWait = time.Minute
+	// requestsAtOnce bounds the requests one bucket has in flight. GitHub
+	// refuses a token more than 100 concurrent requests as a secondary
+	// limit, and a sweep of several teams at once fans out over every
+	// team's PRs together.
+	requestsAtOnce = 64
 )
 
 // headerRetryAfter and the rate headers are what GitHub answers a refusal
@@ -48,6 +53,9 @@ type rateLimited struct {
 	// gates holds when each bucket's gate opens. A bucket with no entry, or
 	// an entry in the past, has an open gate.
 	gates map[string]time.Time
+	// inFlight holds a slot per request each bucket has in flight, at
+	// most requestsAtOnce.
+	inFlight map[string]chan struct{}
 	// now is the clock, so a test does not wait in real time.
 	now func() time.Time
 	// sleep waits for d, or returns ctx's error when the caller gives up
@@ -56,7 +64,13 @@ type rateLimited struct {
 }
 
 func newRateLimited(base http.RoundTripper) *rateLimited {
-	return &rateLimited{base: base, gates: make(map[string]time.Time), now: time.Now, sleep: sleepUntil}
+	return &rateLimited{
+		base:     base,
+		gates:    make(map[string]time.Time),
+		inFlight: make(map[string]chan struct{}),
+		now:      time.Now,
+		sleep:    sleepUntil,
+	}
 }
 
 // sleepUntil waits for d, or returns ctx's error when the caller gives up
@@ -73,7 +87,19 @@ func sleepUntil(ctx context.Context, d time.Duration) error {
 }
 
 func (r *rateLimited) RoundTrip(req *http.Request) (*http.Response, error) {
+	release, err := acquireWrite(req)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	bucket := rateBucketOf(req)
+	done, err := r.acquire(req, bucket)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	for attempt := 0; ; attempt++ {
 		if err := r.waitForGate(req, bucket); err != nil {
 			return nil, err
@@ -100,6 +126,24 @@ func (r *rateLimited) RoundTrip(req *http.Request) (*http.Response, error) {
 		// safe whatever its method.
 		drain(resp)
 		r.closeGate(bucket, wait)
+	}
+}
+
+// acquire takes one of the bucket's slots for req, or returns the request's
+// error when the caller gives up first. done gives the slot back.
+func (r *rateLimited) acquire(req *http.Request, bucket string) (done func(), err error) {
+	r.mu.Lock()
+	slots, ok := r.inFlight[bucket]
+	if !ok {
+		slots = make(chan struct{}, requestsAtOnce)
+		r.inFlight[bucket] = slots
+	}
+	r.mu.Unlock()
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
 	}
 }
 

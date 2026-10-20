@@ -93,10 +93,12 @@ type Processor struct {
 	// so it needs no lock. A nil map supersedes nothing.
 	SupersededBy pr.SupersededBy
 
-	// LabelWrites bounds the classification label writes in flight across
-	// the sweep. It matters when the sweep reads wider than the policy lets
-	// it write; nil leaves the label writes to the fan-out's own bound.
-	LabelWrites Slots
+	// MergeLane is how many PRs of one repository merge at once: the
+	// policy's perRepo. The PRs of a repository are read together, and two
+	// merges race for one base branch, so the merges keep the policy's bound
+	// while the reads go wide. Zero holds every repository to one merge at a
+	// time.
+	MergeLane int
 
 	staleCache
 	accessCache
@@ -131,6 +133,9 @@ type prRun struct {
 	// preexisting names the red non-required checks the PR merged past
 	// because they are red on the base head too.
 	preexisting []string
+	// mergesSeen is how many PRs of the repository the sweep had merged
+	// before this PR was read.
+	mergesSeen int
 	// untouched holds a PR of a repository whose policy switched the sweep
 	// off, or one its repository's own classification decides. Such a PR
 	// receives no write at all, the classification label included.
@@ -254,6 +259,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	if ctx.Err() != nil {
 		return
 	}
+	mergesSeen := p.mergesIn(info)
 	pullReq, _, err := p.Client.PullRequests.Get(ctx, info.Owner, info.Repo, info.Number)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -262,7 +268,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		status.Update(idx, pr.StatusFailed, ghErrorDetail("fetch error", err))
 		return
 	}
-	run := &prRun{info: info, pull: pullReq, status: status, idx: idx}
+	run := &prRun{info: info, pull: pullReq, status: status, idx: idx, mergesSeen: mergesSeen}
 	defer p.finish(ctx, run)
 
 	resolved := p.Policies.For(info.Owner, info.Repo)
@@ -318,6 +324,15 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, heldMarkerReason(kind, updateType, resolved))
 		return
 	}
+	// A body that asks for a proof before merging holds the PR for whoever
+	// gives it, whichever caller runs the sweep and with or without
+	// --merge-auto: green CI is not that proof.
+	if item, open := pr.UnprovenBeforeMerge(pullReq.GetBody()); open {
+		reason := needsProofReason(item)
+		run.set(pr.StatusHeld, "held: "+reason)
+		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, reason)
+		return
+	}
 
 	p.recordMergeFinding(ctx, run)
 
@@ -354,7 +369,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		p.handOffToAutoMerge(ctx, run)
 		return
 	}
-	p.merge(ctx, run)
+	p.mergeInLane(ctx, run)
 }
 
 // handsOffToAutoMerge reports whether GitHub, not marge, performs the merge.

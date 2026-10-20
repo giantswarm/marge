@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/google/go-github/v92/github"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -132,22 +133,18 @@ func newMCPServer(newClient clientFactory, options ...server.ServerOption) *serv
 // which is outside this server.
 func listTool() mcp.Tool {
 	return mcp.NewTool("list",
-		mcp.WithDescription("Read-only. List the open bot PRs of a team or query scope with the classification, label, bot kind and age of each. "+
-			"By default it reads back the classification the last sweep stored in the PR's marge/<class> label, so it reports what the last sweep decided, not what a sweep would decide now. "+
-			"refresh: true decides every PR now instead: it is the sweep engine's classify step alone, on a dry run. "+
-			"Neither reading approves, merges, refreshes, retries, remedies or labels anything, and neither writes a comment. "+
-			"unclassified means no sweep has labelled that PR, not that the PR needs nothing: call again with refresh: true to classify it. "+
-			"The entries are grouped the way the sweep reports them -- merged, security_failures, action_required, stale, cancelled, waiting, obsolete, ci_unavailable, ci_no_verdict, skipped -- so \"what is waiting for us\" and \"what would a sweep do\" are the same question. "+
-			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale."),
+		tooldesc.Describe("List the open bot PRs of a team or query scope with each PR's classification, label, bot kind and age.",
+			"By default it reads back the class the last sweep stored in each PR's marge/<class> label: what the last sweep decided, not what a sweep would decide now. "+
+				"refresh: true runs the sweep's classify step on a dry run instead. "+
+				"unclassified means no sweep has labelled that PR, not that it needs nothing: call again with refresh: true. "+
+				"Entries are grouped as the sweep reports them; rescue tooling acts on action_required only and skips an entry whose rescue is not stale."),
 		scopeArguments(),
 		mcp.WithArray("teams",
-			mcp.Description("Cover several teams in one call, each read under its own team file and policy. The answer is then {\"teams\": [{\"team\": ..., \"result\": ...}]}, one entry per team in the order given, and a team whose files are missing or unreadable carries an error instead of a result. "+
-				"The teams share one discovery, so reading every team costs one listing rather than one per team. Mutually exclusive with team, query, org, repos and repos_file."),
+			mcp.Description("Several teams in one call, each under its own team file and policy, with one shared discovery; answers {\"teams\": [{team, result or error}]} in order."),
 			mcp.WithStringItems(),
 		),
 		mcp.WithBoolean("refresh",
-			mcp.Description("Classify every PR again instead of reading the classification the last sweep stored in its marge/<class> label (default: false). "+
-				"The stored read costs the discovery of the scope and nothing more -- one search for a query scope, or one listing per twenty-five repositories for a team scope -- and reports a PR no sweep has labelled under unclassified; a refresh costs a PR read and a check read per PR, and reports the evidence, the update type, the policy and the prior-rescue state, which the stored read leaves out."),
+			mcp.Description("Classify every PR now instead of reading its stored marge/<class> label (default false); costs a PR and a check read per PR, adds evidence and policy."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -158,10 +155,10 @@ func listTool() mcp.Tool {
 
 func remedyTool() mcp.Tool {
 	return mcp.NewTool("remedy",
-		mcp.WithDescription("WRITES (destructive): classify one PR and apply the catalogue rule that matches it, through the action that rule names and that action's own guards. "+
-			"This is the sweep engine's classify, remedy and mark steps on a single PR, so the guards, the refusals and the evidence comment are the sweep's. "+
-			"A rule can never do what its action forbids, and a named rule still has to match: naming one removes the other rules from the contest, it does not force an action onto a PR. "+
-			"Nothing matches means nothing is written, and the failure is reported under unhandled so it can earn a rule."),
+		tooldesc.Describe("Remedy one bot PR: classify it and apply the catalogue rule that matches, through that rule's action and its guards.",
+			"The sweep's classify, remedy and mark steps on one PR, with its guards, refusals and evidence comment; a rule's action may close the PR or rewrite required checks. "+
+				"Naming a rule only removes the others from the contest: it still has to match. "+
+				"When nothing matches, nothing is written and the failure is reported under unhandled."),
 		mcp.WithString("pr_url",
 			mcp.Required(),
 			mcp.Description("The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER"),
@@ -170,7 +167,7 @@ func remedyTool() mcp.Tool {
 			mcp.Description("Apply this rule of the catalogue instead of letting every rule compete. The rule must still match the PR."),
 		),
 		mcp.WithString("team",
-			mcp.Description("Decide the PR under this team's policy, read from bot-prs-sweep/team-<name>.yaml in the team-file repository. Without it the company default policy applies."),
+			mcp.Description("Decide the PR under this team's policy, from bot-prs-sweep/team-<name>.yaml in the team-file repository; without it, the company default policy."),
 		),
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Report the rule that would apply and write nothing (default: false)"),
@@ -184,7 +181,8 @@ func remedyTool() mcp.Tool {
 
 func markTool() mcp.Tool {
 	return mcp.NewTool("mark",
-		mcp.WithDescription("WRITES: record a failed AI rescue attempt on a PR by posting a machine-readable ai-rescue marker comment. Subsequent sweeps surface the marker so the operator knows a rescue was already attempted. The marker records the head SHA and a fingerprint of the PR diff: it goes stale when the PR content changes (new version, pushed fix) but survives a Renovate rebase that leaves the diff unchanged."),
+		tooldesc.Describe("Record a failed AI rescue attempt on a PR as an ai-rescue marker comment, which later sweeps report.",
+			"The marker records the head SHA and a fingerprint of the diff: it goes stale when the PR content changes (new version, pushed fix), but survives a rebase that leaves the diff unchanged."),
 		mcp.WithString("pr_url",
 			mcp.Required(),
 			mcp.Description("The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER"),
@@ -281,28 +279,23 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, addr string, lo
 func scopeArguments() mcp.ToolOption {
 	options := []mcp.ToolOption{
 		mcp.WithString("team",
-			mcp.Description("Cover the repositories of this team, read from repositories/team-<name>.yaml in the team-file repository (giantswarm/github, or $MARGE_TEAM_FILE_REPO), under that team's policy. Mutually exclusive with query, org, repos and repos_file."),
+			mcp.Description("Cover this team's repositories (repositories/team-<name>.yaml in the team-file repository) under the team's policy."),
 		),
 		mcp.WithString("query",
-			mcp.Description("Narrow the scope the way `marge [query]` does. Without repos/repos_file the text becomes part of the GitHub search, "+
-				"so it can be free text matched against the PR (a dependency name such as \"typescript\") or search qualifiers (\"repo:my-org/my-repo\"). "+
-				"With repos or repos_file it keeps only the listed repositories whose org/repo contains the text (case-insensitive)."),
+			mcp.Description("Narrow the scope like `marge [query]`: GitHub search text (\"typescript\", \"repo:org/repo\"), or with repos/repos_file a filter on their org/repo."),
 		),
 		mcp.WithString("org",
 			mcp.Description("GitHub organization or user to limit the scope to"),
 		),
 		mcp.WithString("repos_file",
-			mcp.Description("Path to a file listing org/repo entries (one per line; blank lines and # comments are ignored) to scan for bot PRs instead of searching GitHub. "+
-				"When repos is given too, both lists are merged and duplicates dropped."),
+			mcp.Description("Path to a file of org/repo lines (blank lines and # comments ignored) to scan instead of searching GitHub; merged with repos, duplicates dropped."),
 		),
 		mcp.WithArray("repos",
-			mcp.Description("Explicit list of repos (org/repo format) to scan for bot PRs instead of searching GitHub. "+
-				"When repos_file is given too, both lists are merged and duplicates dropped."),
+			mcp.Description("org/repo entries to scan instead of searching GitHub; merged with repos_file, duplicates dropped."),
 			mcp.WithStringItems(),
 		),
 		mcp.WithArray("prs",
-			mcp.Description("Cover only these pull requests of the scope, each a PR URL or OWNER/REPO#NUMBER. "+
-				"The scope still decides which repositories are read and under which policy, so a PR outside it is refused rather than acted on."),
+			mcp.Description("Only these PRs of the scope, each a URL or OWNER/REPO#NUMBER. The scope still picks repositories and policy, so a PR outside it is refused."),
 			mcp.WithStringItems(),
 		),
 	}
@@ -317,28 +310,13 @@ func scopeArguments() mcp.ToolOption {
 // reads exactly these arguments; the serve tests keep the two in step.
 func sweepTool() mcp.Tool {
 	return mcp.NewTool("sweep",
-		mcp.WithDescription("Sweep bot PRs (Renovate, Align files, Herald, Dependabot): classify every open bot PR of a team or query scope, approve and squash-merge the eligible green ones, "+
-			"label each with marge/<class>, and hold majors and unreadable updates for a person. A pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. "+
-			"Returns structured JSON: summary counts plus merged, security_failures, action_required, stale, refreshed, cancelled, retried, waiting, obsolete, ci_unavailable, ci_no_verdict and skipped lists, and repositories_failed for repositories that could not be listed. "+
-			"A failing PR whose head is behind its base branch and whose every failing check is green on the base branch head is classified as stale "+
-			"(the failure was fixed on the base branch after the PR's last build) and listed under stale, not action_required; "+
-			"the refresh action updates such branches from their base so CI re-runs (they are then listed under refreshed). "+
-			"A failing PR whose every failing check is a CircleCI build that CircleCI itself auto-cancelled (a newer pipeline on the branch, a redundant workflow) "+
-			"is classified as cancelled and listed under cancelled, not action_required: there is no verdict on the code yet; "+
-			"the retry action reruns their workflow from its failed jobs on the same commit (they are then listed under retried). "+
-			"A failing check that established nothing about the code is excluded from action_required too and listed under ci_no_verdict, with the remedy in its detail: "+
-			"a cancelled job (rerun it), or a CircleCI pipeline refused because setup workflows are disabled for the repository (a human must change the project setting). "+
-			"A security check in that shape is not a finding and is never listed under security_failures. "+
-			"A failing or conflicted bot PR that a sibling with a higher version of the same dependency replaces, or whose diff changes nothing that executes "+
-			"(a pinned GitHub Actions SHA whose trailing version comment is all that moved), is listed under obsolete with a reason of superseded or no_op: "+
-			"it wants closing, not fixing, so it is not in action_required. A green PR still merges. "+
-			"Rescue tooling should act on action_required only, and skip entries whose rescue object is not stale: "+
-			"a prior automated rescue already failed on exactly this change (rebased: true means the branch was merely rebased since, the attempt still stands)."),
+		tooldesc.Describe("Sweep a team's or query's bot PRs (Renovate, Align files, Herald, Dependabot): approve and merge eligible green ones.",
+			"Commits changelog entries, labels each PR marge/<class>, comments evidence and applies the matching catalogue rule (may close a PR or rewrite required checks). "+
+				"Majors and unreadable updates wait for a person; a pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. "+
+				"stale, cancelled, ci_no_verdict and obsolete are not action_required; rescue tooling acts on action_required only, skipping entries whose rescue is not stale."),
 		scopeArguments(),
 		mcp.WithArray("teams",
-			mcp.Description("Sweep several teams in one call, each under its own team file and policy. The answer is then {\"teams\": [{\"team\": ..., \"result\": ...}]}, one entry per team in the order given, and a team whose files are missing or unreadable carries an error instead of a result. "+
-				"The teams share one discovery, and the sweeps themselves run one team after another, so two teams that own the same repository never write to it at the same time. "+
-				"With prs, each named PR is swept under the team that owns its repository, and a PR no team owns is refused. Mutually exclusive with team, query, org, repos and repos_file."),
+			mcp.Description("Several teams, each under its own team file and policy, swept together unless they share a repository; answers {\"teams\": [...]} in order."),
 			mcp.WithStringItems(),
 		),
 		mcp.WithBoolean("merge_auto",
@@ -348,7 +326,7 @@ func sweepTool() mcp.Tool {
 			mcp.Description("Show what would be done without making changes (default: false). Stale PRs are still classified, but not refreshed."),
 		),
 		mcp.WithString("actions",
-			mcp.Description("Comma-separated sweep steps to run, in fixed order: classify, changelog, approve, merge, refresh, retry, mark (default: all). changelog commits the team's changelog entry before anything is approved, unless the team's policy switches it off; the PR then waits for the CI that commit started. refresh updates stale branches from their base; retry reruns the CircleCI workflow of auto-cancelled builds on the same head from its failed jobs, falling back to a single-build retry (needs CIRCLECI_CLI_TOKEN or ~/.circleci/cli.yml); mark writes markers and evidence comments."),
+			mcp.Description("Comma-separated steps, in fixed order: classify, changelog, approve, merge, refresh, retry, remedy, mark (default all); remedy needs mark."),
 		),
 		mcp.WithString("security_patterns",
 			mcp.Description("Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related"),
@@ -489,7 +467,7 @@ func (t toolset) discover(ctx context.Context, req *sweepRequest) (scopedPRs, er
 		return scopedPRs{}, err
 	}
 
-	found, err := searchPRs(ctx, client, req.Opts.Query, login, repos)
+	found, err := searchPRs(ctx, client, req.Opts.Query, login, repos, req.Opts.Parallel)
 	if err != nil {
 		return scopedPRs{}, fmt.Errorf("searching PRs: %w", err)
 	}
@@ -512,7 +490,7 @@ func (t toolset) run(ctx context.Context, req sweepRequest) (SweepResult, error)
 	}
 	client, login, prs, found := scoped.client, scoped.login, scoped.prs, scoped.found
 
-	catalogue, rulesReport := loadRules(ctx, client, RulesSource{})
+	catalogue, rulesReport := loadRules(ctx, client, RulesSource{}, req.Opts.Parallel)
 	if req.Rule != "" {
 		catalogue, err = catalogue.Only(req.Rule)
 		if err != nil {

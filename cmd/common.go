@@ -60,10 +60,34 @@ type RunOptions struct {
 	// or owner/repo#number. Empty sweeps every PR the scope found. The
 	// scope still decides which repositories are read and under which
 	// policy, so a PR outside it is refused rather than swept.
-	PRs              []string
+	PRs []string
+	// Parallel is how many independent pieces of the run go at once: the
+	// teams of a several-team run, the searches of the query scope and the
+	// documents of the rule catalogue. Zero means fanout.Default; 1 runs
+	// them one after another. The PRs of one team fan out under
+	// pr.ReadConcurrency and the policy's bounds whatever it says.
+	Parallel         int
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
+	// Stdout and Stderr receive what the sweep prints; nil is the
+	// process's own. A several-team run gives each team its own, so teams
+	// swept at once print one after another.
+	Stdout, Stderr io.Writer
+}
+
+func (o RunOptions) stdout() io.Writer {
+	if o.Stdout == nil {
+		return os.Stdout
+	}
+	return o.Stdout
+}
+
+func (o RunOptions) stderr() io.Writer {
+	if o.Stderr == nil {
+		return os.Stderr
+	}
+	return o.Stderr
 }
 
 // resolveScope reads the policy files and returns what the run covers: the
@@ -130,11 +154,12 @@ func teamFileRepo() (owner, name string, err error) {
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
+	stdout, stderr := opts.stdout(), opts.stderr()
 	progress := progressFrom(ctx)
 	progress.Planned(len(prs))
 	if len(prs) == 0 {
 		if !opts.Quiet {
-			fmt.Fprintln(os.Stderr, "No matching PRs found.")
+			_, _ = fmt.Fprintln(stderr, "No matching PRs found.")
 		}
 		return pr.NewPRStatus(), nil
 	}
@@ -146,7 +171,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	defer stop()
 
 	if !opts.Quiet {
-		fmt.Fprintf(os.Stderr, "Processing %d PR(s)...\n\n", len(prs))
+		_, _ = fmt.Fprintf(stderr, "Processing %d PR(s)...\n\n", len(prs))
 	}
 
 	sort.Slice(prs, func(i, j int) bool {
@@ -170,6 +195,8 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 	pr.AdjustColumnWidths(cols, prs)
 
+	// The live table redraws the terminal, so it is drawn on the process's
+	// own stdout and never on a team's buffer.
 	tui := !opts.NoTUI && !opts.Quiet
 
 	if tui {
@@ -225,9 +252,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	concurrency, labelWrites := fanOut(opts)
-	proc.LabelWrites = labelWrites
-	forEachPR(pr.GroupByRepo(prs), concurrency, func(info pr.PRInfo) {
+	reads, writes := fanOut(opts)
+	ctx = gh.WithWriteBound(ctx, writes.PerTeam*writes.PerRepo)
+	proc.MergeLane = writes.PerRepo
+	forEachPR(pr.GroupByRepo(prs), reads, func(info pr.PRInfo) {
 		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
 		progress.Finished()
@@ -248,7 +276,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	case opts.Quiet:
 		// Nothing is printed; the caller consumes the returned status.
 	case opts.NoTUI:
-		pr.PrintPlainResults(os.Stdout, status)
+		pr.PrintPlainResults(stdout, status)
 	default:
 		pr.UpdateTable(os.Stdout, status.Snapshot(), cols)
 		// Restore wrapping before any post-table prose so long lines
@@ -258,8 +286,8 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	if !opts.Quiet {
-		fmt.Fprintf(os.Stderr, "\n%s\n", status.FormatSummary())
-		reportUnenforced(os.Stderr, opts.Policies.Base())
+		_, _ = fmt.Fprintf(stderr, "\n%s\n", status.FormatSummary())
+		reportUnenforced(stderr, opts.Policies.Base())
 	}
 
 	return status, nil
@@ -278,30 +306,25 @@ func leastRequests(prs []pr.PRInfo) int {
 	return perPR*len(prs) + perRepo*len(repos)
 }
 
-// fanOut decides how wide a run reads and how many label writes it lets
-// through at once. A run that classifies and does nothing else moves no
-// branch and posts no comment, so it reads under pr.ReadConcurrency; its
-// label writes, when it is not a dry run, stay within the policy's own
-// bound. Every other run keeps the policy's bounds, which already hold its
-// writes.
-func fanOut(opts RunOptions) (pr.Concurrency, process.Slots) {
-	policyBound := opts.Policies.Base().Concurrency
-	switch {
-	case !opts.Actions.ClassifyOnly():
-		return policyBound, nil
-	case opts.DryRun:
-		return pr.ReadConcurrency, nil
-	default:
-		return pr.ReadConcurrency, process.NewSlots(policyBound.PerTeam * policyBound.PerRepo)
+// fanOut decides how wide a run reads and how wide it writes. Every run
+// reads under pr.ReadConcurrency, or the policy's bounds where they are
+// wider: a read moves no branch and posts no comment, so it is bounded by
+// how many reads GitHub answers at once. The writes keep the policy's
+// bounds: no more than its product in flight across the run, and no more
+// than perRepo merges at once in one repository.
+func fanOut(opts RunOptions) (reads, writes pr.Concurrency) {
+	writes = opts.Policies.Base().Concurrency
+	reads = pr.Concurrency{
+		PerTeam: max(pr.ReadConcurrency.PerTeam, writes.PerTeam),
+		PerRepo: max(pr.ReadConcurrency.PerRepo, writes.PerRepo),
 	}
+	return reads, writes
 }
 
-// forEachPR runs fn on every PR of every group, under the two bounds the
-// policy declares: perTeam repositories run at once, and within one
-// repository perRepo PRs. A repository holds its slot for as long as it has
-// work, so perTeam bounds repositories and not the PRs they hold together.
-// The default perRepo of 1 keeps the PRs of a repository sequential, which
-// is what avoids "base branch was modified" failures.
+// forEachPR runs fn on every PR of every group, under two bounds: perTeam
+// repositories run at once, and within one repository perRepo PRs. A
+// repository holds its slot for as long as it has work, so perTeam bounds
+// repositories and not the PRs they hold together.
 func forEachPR(groups []pr.PRGroup, concurrency pr.Concurrency, fn func(pr.PRInfo)) {
 	var wg sync.WaitGroup
 	repoSlots := make(chan struct{}, max(concurrency.PerTeam, 1))
@@ -452,11 +475,12 @@ type RulesSource struct {
 	Path string
 }
 
-// loadRules reads the rule catalogue of one sweep. It never fails the sweep:
+// loadRules reads the rule catalogue of one sweep, parallel documents at
+// once. It never fails the sweep:
 // a catalogue that cannot be read leaves classification, approval and merging
 // as they are, and refuses every remedy. The report says which happened.
-func loadRules(ctx context.Context, client *github.Client, src RulesSource) (*rules.Catalogue, *SweepRules) {
-	loader := rules.Loader{Client: client, Ref: src.Ref, LocalPath: src.Path}
+func loadRules(ctx context.Context, client *github.Client, src RulesSource, parallel int) (*rules.Catalogue, *SweepRules) {
+	loader := rules.Loader{Client: client, Ref: src.Ref, LocalPath: src.Path, Parallel: parallel}
 	if src.Repo != "" {
 		owner, name, found := strings.Cut(src.Repo, "/")
 		if !found {

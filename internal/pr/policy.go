@@ -49,21 +49,22 @@ type RescuePolicy struct {
 }
 
 // Concurrency bounds how much of a sweep runs at once: PerTeam is the
-// number of repositories swept in parallel, PerRepo the number of PRs of
-// one repository. Two PRs of one repository race for the same base branch,
-// so PerRepo defaults to 1.
+// number of repositories, PerRepo the number of PRs of one repository. A
+// policy's Concurrency bounds the writes: the product is the writes in
+// flight across the sweep, and PerRepo the merges of one repository. Two
+// merges of one repository race for the same base branch, so PerRepo
+// defaults to 1.
 type Concurrency struct {
 	PerTeam int
 	PerRepo int
 }
 
-// ReadConcurrency bounds a run that classifies and does nothing else. The
-// policy's own bounds exist for the writes: PerRepo is 1 so that two merges
-// never race for one base branch, and the product is held small so a sweep
-// cannot empty the write budget in a minute. A classify-only run makes
-// neither a merge nor a comment, so it is bounded by how many reads GitHub
-// answers at once; the label writes it makes are held to the policy's
-// product on their own.
+// ReadConcurrency bounds the reads of every run. The policy's own bounds
+// exist for the writes: PerRepo is 1 so that two merges never race for one
+// base branch, and the product is held small so a sweep cannot empty the
+// write budget in a minute. A read makes neither a merge nor a comment, so
+// the reads are bounded by how many GitHub answers at once, and the writes
+// among them keep the policy's bounds on their own.
 var ReadConcurrency = Concurrency{PerTeam: 15, PerRepo: 4}
 
 // ChangelogPolicy is the changelog entry a team writes for a bot PR: which

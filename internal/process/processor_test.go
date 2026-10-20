@@ -639,6 +639,59 @@ func TestGuard_autoMergeFailingCheckIsClassifiedOnTheCheck(t *testing.T) {
 	require.Equal(t, []string{"marge/action-required"}, f.labelSet())
 }
 
+const proofBody = "Bumps the chart.\n\n## Before merging\n\n- [x] CI green\n- [ ] Proven in the lab\n"
+
+// TestGuard_openProofIsHeldUnderMergeAuto: a body that asks for a proof
+// before merging holds a green PR, even when the caller asked the sweep to
+// merge auto-merge PRs itself. Green CI is not the proof the body asks for.
+func TestGuard_openProofIsHeldUnderMergeAuto(t *testing.T) {
+	f := greenFixture()
+	f.autoMerge = true
+	f.body = proofBody
+	got := f.run(t, func(p *Processor) { p.MergeAutoMerge = true })
+
+	require.Equal(t, pr.StatusHeld, got.State, got.Detail)
+	require.Contains(t, got.Detail, "needs proof")
+	require.Contains(t, got.Detail, "Proven in the lab")
+	require.Zero(t, f.mergeCalls.Load())
+	require.Zero(t, f.approveCalls.Load(), "an approval would let auto-merge fire unproven")
+	require.Equal(t, int32(1), f.commentPosts.Load())
+	marker := pr.ParseRescueMarker(f.comments[0])
+	require.NotNil(t, marker)
+	require.Equal(t, pr.MarkerOutcomeHeld, marker.Outcome)
+	require.Contains(t, marker.Reason, "needs proof")
+}
+
+// TestGuard_openProofIsReportedByADryRun: the dry run reports the hold
+// instead of a merge it would not perform.
+func TestGuard_openProofIsReportedByADryRun(t *testing.T) {
+	f := greenFixture()
+	f.body = proofBody
+	got := f.run(t, func(p *Processor) { p.DryRun = true })
+
+	require.Equal(t, pr.StatusHeld, got.State, got.Detail)
+	require.Contains(t, got.Detail, "needs proof")
+}
+
+// TestGuard_givenProofMergesUnderMergeAuto: once every item of the checklist
+// is ticked, and on a PR without one, the sweep merges as before.
+func TestGuard_givenProofMergesUnderMergeAuto(t *testing.T) {
+	for name, body := range map[string]string{
+		"ticked checklist": "## Before merging\n\n- [x] CI green\n- [x] Proven in the lab\n",
+		"no checklist":     "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := greenFixture()
+			f.autoMerge = true
+			f.body = body
+			got := f.run(t, func(p *Processor) { p.MergeAutoMerge = true })
+
+			require.Equal(t, pr.StatusMerged, got.State, got.Detail)
+			require.Equal(t, int32(1), f.mergeCalls.Load())
+		})
+	}
+}
+
 // TestGuard_autoMergeMajorIsStillHeld keeps the policy above the hand-off: a
 // major update waits for a person whether or not auto-merge is set.
 func TestGuard_autoMergeMajorIsStillHeld(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/google/go-github/v92/github"
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -18,20 +19,17 @@ import (
 // repository whose release notes are generated from its commits.
 func changelogTool() mcp.Tool {
 	return mcp.NewTool("changelog",
-		mcp.WithDescription("WRITES: add one changelog entry to a bot PR, in the team's own format, and commit it to the PR's own branch. "+
-			"The entry is the changelog section of the team's bot-prs-sweep/team-<name>.yaml: the file, the heading and section it goes under, and the line, "+
-			"which is a template over the dependency, the version it moves from, the version it moves to, the PR, the repository, the bot and the update type. "+
-			"A team that writes no changelog section gets the company default. "+
-			"Nothing else is written: this neither approves, merges, refreshes, retries, remedies nor labels, and it writes no comment. "+
-			"A PR that already carries the line is left untouched, so asking twice writes once. "+
-			"A PR whose branch lives in a fork, whose author is not a trusted bot, whose repository has no such file, or whose repository generates its release notes from its commits (it carries a cliff.toml), is refused with the reason."),
+		tooldesc.Describe("Add one changelog entry, in the team's own format, to bot PRs and commit it to each PR's own branch.",
+			"The format is the changelog section of the team's bot-prs-sweep/team-<name>.yaml (file, heading, section and a line template over dependency, versions, PR, repository, bot and update type), else the company default. "+
+				"Nothing else is written: no approval, merge, label or comment. A PR already carrying the line is left as is. "+
+				"A PR on a fork branch, by an untrusted author, or in a repository without the file or with a cliff.toml (notes from commits) is refused with the reason."),
 		mcp.WithArray("prs",
 			mcp.Required(),
 			mcp.Description("The pull requests to write an entry on, each a PR URL or OWNER/REPO#NUMBER."),
 			mcp.WithStringItems(),
 		),
 		mcp.WithString("team",
-			mcp.Description("Write the entry in this team's format, read from bot-prs-sweep/team-<name>.yaml in the team-file repository. Without it the company default format applies."),
+			mcp.Description("Use this team's format, from bot-prs-sweep/team-<name>.yaml in the team-file repository; without it, the company default format."),
 		),
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Return the line each PR would receive and write nothing (default: false)"),
