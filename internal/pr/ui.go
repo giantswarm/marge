@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -288,9 +291,9 @@ func printPlainEntry(w io.Writer, e StatusEntry) {
 // AdjustColumnWidths widens each column so every value fits without truncation.
 func AdjustColumnWidths(cols []TableColumn, prs []PRInfo) {
 	for i, c := range cols {
-		w := len(c.Label)
+		w := utf8.RuneCountInString(c.Label)
 		for _, p := range prs {
-			if v := len(c.Fn(p)); v > w {
+			if v := utf8.RuneCountInString(c.Fn(p)); v > w {
 				w = v
 			}
 		}
@@ -298,12 +301,48 @@ func AdjustColumnWidths(cols []TableColumn, prs []PRInfo) {
 	}
 }
 
+// FitColumnWidths narrows the widest columns until the table fits in width
+// terminal columns, so one long value (a PR title that names no dependency)
+// is truncated instead of pushing the columns after it, and the status,
+// past the right edge. No column narrows below its label. A width of zero,
+// a terminal of unknown size, leaves the columns as they are.
+func FitColumnWidths(cols []TableColumn, width int) {
+	if width <= 0 {
+		return
+	}
+	for tableWidth(cols) > width {
+		widest := -1
+		for i, c := range cols {
+			if c.Width > utf8.RuneCountInString(c.Label) && (widest < 0 || c.Width > cols[widest].Width) {
+				widest = i
+			}
+		}
+		if widest < 0 {
+			return
+		}
+		cols[widest].Width--
+	}
+}
+
+// TerminalWidth returns the width of the terminal f writes to, or zero when
+// f is no terminal.
+func TerminalWidth(f *os.File) int {
+	width, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return width
+}
+
+// truncate shortens s to maxLen runes, never splitting one, with "..." as
+// the last three when it cuts.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return string(runes[:maxLen])
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }

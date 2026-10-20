@@ -194,6 +194,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		cols = pr.FullColumns()
 	}
 	pr.AdjustColumnWidths(cols, prs)
+	pr.FitColumnWidths(cols, pr.TerminalWidth(os.Stdout))
 
 	// The live table redraws the terminal, so it is drawn on the process's
 	// own stdout and never on a team's buffer.

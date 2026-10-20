@@ -576,7 +576,7 @@ marge sweep --team bumblebee --output json
    - Approves the PR if not already approved, then squash-merges it; a PR behind its base is brought up to date instead.
    - On a failure, looks behind failing CircleCI statuses (auto-cancelled builds are `Cancelled` and retried by the `retry` action) and compares the failing checks with the base head (fixed there already is `Stale` and refreshed by the `refresh` action).
    - Writes the classification label and, where it acted, an evidence comment.
-4. Displays a live-updating table with columns for repository, dependency, version, age, author, and status. Failing entries are annotated with any prior AI rescue attempt found on the PR. Use `--no-tui` for plain-text output or `--output json` for the structured result.
+4. Displays a live-updating table with columns for repository, dependency, version, age, author, and status, fitted to the terminal's width: the widest column narrows first, and a value too long for it (a PR title that names no dependency) ends in `...`. Failing entries are annotated with any prior AI rescue attempt found on the PR. Use `--no-tui` for plain-text output or `--output json` for the structured result.
 
 ## Development
 
