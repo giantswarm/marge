@@ -2,6 +2,8 @@ module github.com/giantswarm/marge
 
 go 1.26.0
 
+toolchain go1.27.3
+
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/go-selfupdate v1.6.6
