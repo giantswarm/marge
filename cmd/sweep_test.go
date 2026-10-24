@@ -201,13 +201,21 @@ func TestResolveSweepOptions(t *testing.T) {
 		{name: "several teams refuse named PRs", teams: []string{"one", "two"}, opts: RunOptions{PRs: []string{"giantswarm/marge#1"}}, wantErr: "give a single --team"},
 		{name: "one scope is required", opts: RunOptions{}, wantErr: "one of --team or --query is required"},
 		{name: "a blank team names no team", teams: []string{" "}, wantErr: "--team names no team"},
-		{name: "unknown action", teams: []string{"t"}, setup: func() { sweepFlags.actions = "rescue" }, wantErr: "unknown action"},
+		{name: "unknown action", teams: []string{"t"}, setup: func() { sweepFlags.actions = "rescind" }, wantErr: "unknown action"},
+		{name: "rescue needs a team", opts: RunOptions{Query: "q"}, setup: func() { sweepFlags.actions = "remedy,rescue,mark" }, wantErr: "the rescue action needs the team scope"},
+		{name: "a team runs the rescue when named", teams: []string{"t"}, setup: func() { sweepFlags.actions = "remedy,rescue,mark" }, check: func(t *testing.T, _ []string, opts RunOptions) {
+			require.True(t, opts.Actions.Selected(process.ActionRescue))
+		}},
+		{name: "several teams may rescue, each against its own count", teams: []string{"one", "two"}, setup: func() { sweepFlags.actions = "remedy,rescue,mark" }, check: func(t *testing.T, _ []string, opts RunOptions) {
+			require.True(t, opts.Actions.Selected(process.ActionRescue))
+		}},
 		{name: "unknown output", teams: []string{"t"}, setup: func() { sweepFlags.output = "yaml" }, wantErr: "unknown output"},
 		{name: "team runs every action without a wait", teams: []string{"t"}, check: func(t *testing.T, teams []string, opts RunOptions) {
 			require.Equal(t, []string{"t"}, teams)
 			require.Equal(t, "t", opts.Team, "one team is the single-team scope")
 			require.Zero(t, opts.CheckTimeout)
 			require.True(t, opts.Actions.Has(process.ActionMerge))
+			require.False(t, opts.Actions.Selected(process.ActionRescue), "no default rescues")
 			require.False(t, opts.Quiet)
 		}},
 		{name: "several teams are kept in order and deduplicated", teams: []string{"two", "one", "two", ""}, check: func(t *testing.T, teams []string, opts RunOptions) {

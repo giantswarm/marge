@@ -159,3 +159,30 @@ func TestKnownNamesEveryGroup(t *testing.T) {
 	line := Known([]Group{{Signature: "aaaaaaaaaaaa", Count: 2, Checks: []string{"go-build"}}})
 	require.True(t, strings.HasPrefix(line, "aaaaaaaaaaaa (2 PRs, go-build)"))
 }
+
+// rescueComment renders one rescue marker as a PR comment.
+func rescueComment(outcome string, at time.Time) *github.IssueComment {
+	marker := &pr.RescueMarker{Tool: "rescue-agent", Outcome: outcome, HeadSHA: "headsha", At: at}
+	return &github.IssueComment{Body: new(marker.CommentBody())}
+}
+
+// Every rescue marker of the week on the team's repositories counts,
+// whatever its outcome and however many one PR carries. Evidence, older
+// markers and other teams' repositories do not.
+func TestRescuesCountsTheWeek(t *testing.T) {
+	now := time.Now().UTC()
+	since := now.Add(-7 * 24 * time.Hour)
+	var queries []string
+	client := searchServer(t, map[int][]*github.IssueComment{
+		1: {rescueComment(pr.RescueOutcomeFailed, now.Add(-time.Hour)), rescueComment(pr.RescueOutcomeFixed, now)},
+		2: {rescueComment(pr.RescueOutcomeBlocked, since.Add(-time.Hour)), markerComment("aaaaaaaaaaaa", now)},
+		3: {rescueComment(pr.RescueOutcomeMerged, now)},
+	}, &queries)
+
+	got, err := Search{Client: client, Org: "giantswarm", Since: since}.Rescues(t.Context(), []string{"giantswarm/repo1", "giantswarm/Repo2"})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, got, "two on repo1; repo2's marker is older than the week and its evidence does not count; repo3 is another team's")
+	require.Len(t, queries, 1)
+	require.Contains(t, queries[0], `org:giantswarm is:pr in:comments "AI rescue" updated:>=`)
+}

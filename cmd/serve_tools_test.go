@@ -104,6 +104,20 @@ func TestTools_areTheEquivalentEngineCall(t *testing.T) {
 			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, Team: "bumblebee"},
 			actions:   "classify,remedy,mark",
 		},
+		{
+			name:      "rescue is classify, remedy, rescue and mark on one PR of a team",
+			arguments: map[string]any{"pr_url": "https://github.com/giantswarm/marge/pull/7", "team": "bumblebee"},
+			build:     rescueRequest,
+			cli:       RunOptions{PRs: []string{"https://github.com/giantswarm/marge/pull/7"}, Team: "bumblebee"},
+			actions:   "classify,remedy,rescue,mark",
+		},
+		{
+			name:      "rescue carries the dry run",
+			arguments: map[string]any{"pr_url": "giantswarm/marge#7", "team": "bumblebee", "dry_run": true},
+			build:     rescueRequest,
+			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, Team: "bumblebee", DryRun: true},
+			actions:   "classify,remedy,rescue,mark",
+		},
 	}
 
 	for _, tt := range tests {
@@ -161,6 +175,7 @@ func TestTools_annotations(t *testing.T) {
 		{tool: listTool(), readOnly: true, destructive: false},
 		{tool: sweepTool(), readOnly: false, destructive: true},
 		{tool: remedyTool(), readOnly: false, destructive: true},
+		{tool: rescueTool(), readOnly: false, destructive: true},
 		{tool: markTool(), readOnly: false, destructive: false},
 		{tool: changelogTool(), readOnly: false, destructive: false},
 	}
@@ -190,7 +205,7 @@ func TestTools_annotations(t *testing.T) {
 // TestWritingTools_takeADryRun holds the rule that every tool which can
 // change a PR offers a preview of what it would change.
 func TestWritingTools_takeADryRun(t *testing.T) {
-	for _, tool := range []mcp.Tool{sweepTool(), remedyTool(), markTool()} {
+	for _, tool := range []mcp.Tool{sweepTool(), remedyTool(), rescueTool(), markTool()} {
 		t.Run(tool.Name, func(t *testing.T) {
 			require.Contains(t, tool.InputSchema.Properties, "dry_run")
 		})
@@ -208,6 +223,7 @@ func TestTools_withoutAGrantAskForASignIn(t *testing.T) {
 		"list":   tools.handleList,
 		"sweep":  tools.handleSweep,
 		"remedy": tools.handleRemedy,
+		"rescue": tools.handleRescue,
 		"mark":   tools.handleMark,
 	}
 
@@ -248,6 +264,16 @@ func TestRemedyRequest_rejectsAReferenceThatIsNotAPR(t *testing.T) {
 		_, err := remedyRequest(call(map[string]any{"pr_url": ref}))
 		require.Error(t, err, "reference %q must be refused", ref)
 	}
+}
+
+// TestRescueRequest_needsATeam holds that a rescue is always counted
+// against a team: without one there is no week to count it in.
+func TestRescueRequest_needsATeam(t *testing.T) {
+	_, err := rescueRequest(call(map[string]any{"pr_url": "giantswarm/marge#7"}))
+	require.ErrorIs(t, err, errRescueNeedsTeam)
+
+	_, err = rescueRequest(call(map[string]any{"pr_url": "giantswarm/marge", "team": "bumblebee"}))
+	require.Error(t, err, "a reference that is not a PR must be refused")
 }
 
 // TestListRequest_isAlwaysReadOnly holds that no argument turns the

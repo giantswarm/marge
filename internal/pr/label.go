@@ -51,6 +51,11 @@ func LabelClass(s StatusState) string {
 	}
 }
 
+// RescuedClass is the label class of a PR the run handed over for rescue. No
+// state ends a sweep with it: the handoff writes it in place of
+// action-required, and the next sweep replaces it.
+const RescuedClass = "rescued"
+
 // StoredClass returns the classification label the last sweep left on a PR
 // and the class it carries: its marge/ label, or its legacy label when the
 // PR has not been swept since the rename. Both are "" for a PR no sweep has
@@ -77,7 +82,7 @@ func ClassState(class string) (StatusState, bool) {
 		return StatusMerged, true
 	case "auto-merge":
 		return StatusAutoMerge, true
-	case "action-required":
+	case "action-required", RescuedClass:
 		return StatusFailed, true
 	case "held":
 		return StatusHeld, true

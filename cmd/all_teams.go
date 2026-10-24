@@ -125,7 +125,7 @@ func (r teamsRun) sweepTeam(ctx context.Context, loader policy.Loader, scoped te
 
 	opts := r.Opts
 	opts.Team = team
-	opts.Policies = scope.Policies
+	opts.useScope(scope)
 	opts.Rules = catalogue
 
 	found, err := searchPRs(ctx, r.Client, "", r.Login, scope.Repos, r.Opts.Parallel)

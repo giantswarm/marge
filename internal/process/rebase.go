@@ -177,7 +177,7 @@ func (p *Processor) revisitOne(ctx context.Context, d deferredPR, deadline time.
 			d.status.Update(d.idx, pr.StatusAwaitingRebase, ghErrorDetail("rebase check failed", err))
 			return
 		}
-		if state := pullReq.GetMergeableState(); state != "dirty" && state != "unknown" {
+		if state := pullReq.GetMergeableState(); state != mergeableDirty && state != "unknown" {
 			p.ProcessPR(ctx, d.info, d.status, d.idx)
 			return
 		}

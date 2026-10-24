@@ -1,6 +1,6 @@
 ---
 name: marge
-description: Drain a team's bot PR queue with the marge sweep engine, from Claude Code. Load it before listing, sweeping, remedying or marking bot PRs, and before fixing a bot PR failure by hand.
+description: Drain a team's bot PR queue with the marge sweep engine, from Claude Code. Load it before listing, sweeping, remedying, rescuing or marking bot PRs, and before fixing a bot PR failure by hand.
 ---
 
 # Sweeping bot PRs with marge
@@ -45,7 +45,7 @@ the matching `marge/<class>` label:
 | `merged` | marge approved and squash-merged it | nobody |
 | `eligible` | the policy allows the merge; a dry run stops here | the next sweep |
 | `security_failures` | a failing check whose name matches the security list | a person |
-| `action_required` | a real failure on the code, or a PR the policy holds for a person (label `marge/held`) | a rescue, or a decision |
+| `action_required` | a real failure on the code, or a PR the policy holds for a person (label `marge/held`); a PR a run handed over for rescue carries `marge/rescued` until the next sweep | a rescue, or a decision |
 | `stale` | every failing check is green on the base head | the `refresh` action |
 | `refreshed` | marge updated the branch from its base | the next sweep |
 | `cancelled` | CircleCI cancelled the build itself | the `retry` action |
@@ -69,10 +69,10 @@ owns the repository.
 
 ## The tools
 
-muster serves marge's five tools as `x_marge_list`, `x_marge_sweep`,
-`x_marge_remedy`, `x_marge_mark` and `x_marge_changelog`. Each one is an
-adapter over the engine call the CLI makes, with the same guards, and each one
-that writes takes `dry_run`.
+muster serves marge's six tools as `x_marge_list`, `x_marge_sweep`,
+`x_marge_remedy`, `x_marge_rescue`, `x_marge_mark` and `x_marge_changelog`.
+Each one is an adapter over the engine call the CLI makes, with the same
+guards, and each one that writes takes `dry_run`.
 
 Every tool takes the same scope arguments, and the scope decides the policy:
 `team` (the repositories and the policy of that team), or `query`, `org`,
@@ -84,7 +84,8 @@ the company defaults. `prs` narrows a call to single PRs of that scope.
 | `x_marge_list` | no | `refresh`, `teams` |
 | `x_marge_sweep` | yes | `dry_run`, `actions`, `merge_auto`, `security_patterns` |
 | `x_marge_remedy` | yes | `pr_url` (required), `rule`, `team`, `dry_run` |
-| `x_marge_mark` | yes | `pr_url` (required), `outcome` (`failed` or `blocked`), `reason`, `tool`, `dry_run` |
+| `x_marge_rescue` | yes | `pr_url` (required), `team` (required), `dry_run` |
+| `x_marge_mark` | yes | `pr_url` (required), `outcome` (`fixed`, `merged`, `failed` or `blocked`), `reason`, `tool`, `cost_usd`, `duration_s`, `dispatched_by`, `run_id`, `dry_run` |
 | `x_marge_changelog` | yes | `prs` (required), `team`, `dry_run` |
 
 `x_marge_list` with `refresh: false` reads back the label of the last sweep
@@ -104,6 +105,19 @@ read once.
 `x_marge_sweep` runs the steps `classify`, `changelog`, `approve`, `merge`,
 `refresh`, `retry`, `remedy` and `mark`, in that order. `actions` selects a
 subset. `remedy` needs `mark` and is refused without it.
+
+`rescue` is a step too, between `remedy` and `mark`, and it runs only when
+`actions` names it: it needs `remedy`, and only the team scope may run it,
+because a rescue is counted against the team's week. It hands the PRs no rule
+recognised to whoever runs the rescue, under these conditions: the team's
+policy allows rescues, no security check failed, every required check
+reported, no rescue marker stands for the change, the team's weekly count is
+not spent, the PR is still open without a conflict, and no teammate PR is open
+on the same module. The answer's `rescue_handoff` lists the PRs one
+repository at a time, with the failing checks and their logs, the language,
+the `write_target` (`pr-branch`, or `default-branch` for an Align files PR
+whose branch is regenerated) and the weekly count left. `refused` says why a
+candidate was not handed over. `x_marge_rescue` is that step on one PR.
 
 ## The changelog entry
 
@@ -153,6 +167,9 @@ exactly as it would have been. A changelog is a courtesy, never a guard.
 
 A failing PR carries the most recent ai-rescue marker of its comments in its
 `rescue` object: `tool`, `outcome`, `reason`, `at`, `stale` and `rebased`.
+The outcome is `fixed` (a fix is pushed and CI runs again), `merged`,
+`failed` or `blocked`. Every marker counts against the team's weekly rescue
+number, whatever its outcome.
 
 - `stale: false` means the attempt still describes this change. Automation
   already lost on it. Escalate it to a person and do not try again.
@@ -173,6 +190,26 @@ A failing PR carries the most recent ai-rescue marker of its comments in its
 Steps 3 and 4 are not optional. A sweep approves and merges under the
 person's own grant, and the dry run is what they confirm.
 
+## Sequence C: a rescue
+
+A person asks for a rescue of one PR, or of the team's queue.
+
+1. `x_marge_rescue` with the PR and the `team`, and `dry_run: true`. For the
+   queue, `x_marge_sweep` with the `team`, `actions: "remedy,rescue,mark"`
+   and `dry_run: true`.
+2. Present the handoff: the PRs, the weekly count left, and why each refused
+   candidate was refused.
+3. Ask the person to confirm.
+4. The same call without `dry_run`. It labels the PRs it hands over.
+5. Rescue them one repository at a time, following
+   `references/hazards.md`.
+6. Write one marker per PR with `x_marge_mark`: the outcome, the reason, the
+   estimated cost in `cost_usd`, `duration_s`, and the handoff's
+   `triggered_by` as `dispatched_by`.
+
+The rescue runs under the person's own credential and their own budget. A PR
+left without a marker counts nothing and is handed over again next week.
+
 ## Sequence B: the CLI fallback
 
 When the muster MCP server is absent, the same six steps are the marge CLI:
@@ -181,6 +218,14 @@ When the muster MCP server is absent, the same six steps are the marge CLI:
 marge sweep --team <name> --dry-run --no-tui
 marge sweep --team <name> --no-tui
 marge mark <pr-url> --outcome blocked --reason "<why>" --tool claude
+```
+
+A rescue from the CLI:
+
+```bash
+marge sweep --team <name> --actions remedy,rescue,mark --dry-run --output json
+marge sweep --team <name> --actions remedy,rescue,mark --output json
+marge mark <pr-url> --outcome fixed --reason "<what>" --tool claude --cost-usd 2.40 --duration 12m --dispatched-by <triggered_by>
 ```
 
 `marge sweep --output json` prints the structure the tools return. The CLI
@@ -193,8 +238,8 @@ acts with the person's own credential, so the confirmation step stays.
   schedule one wake-up and ask once. A hand-rolled poll loop cost $11.55 in
   798 messages.
 - **Never run a `gh` command the engine covers.** Listing, classifying,
-  approving, merging, updating a branch, retrying a build and marking are
-  tool calls. A shell loop over `gh pr list` is a second implementation with
+  approving, merging, updating a branch, retrying a build, handing over a
+  rescue and marking are tool calls. A shell loop over `gh pr list` is a second implementation with
   none of the guards.
 - **Never merge past a guard.** No `--admin`, no change to `enforce_admins`,
   no approval of your own PR, no merge past a pending or unreported required
