@@ -8,6 +8,7 @@ Generated from the registered tools (`make tools-doc`); through muster every too
 | `list` | read-only |
 | `mark` | write |
 | `remedy` | write, destructive |
+| `rescue` | write, destructive |
 | `sweep` | write, destructive |
 
 ## `changelog`
@@ -105,21 +106,37 @@ By default it reads back the class the last sweep stored in each PR's marge/<cla
 ## `mark`
 
 ```text
-Record a failed AI rescue attempt on a PR as an ai-rescue marker comment, which later sweeps report.
+Record the outcome of an AI rescue attempt on a PR as an ai-rescue marker comment, which later sweeps report.
 
-The marker records the head SHA and a fingerprint of the diff: it goes stale when the PR content changes (new version, pushed fix), but survives a rebase that leaves the diff unchanged.
+The marker records the outcome, what the attempt cost and who started its run; every marker counts against the team's weekly rescue number. It pins the head SHA and a fingerprint of the diff: it goes stale when the PR content changes (new version, pushed fix), but survives a rebase that leaves the diff unchanged.
 ```
 
 ```json
 {
   "properties": {
+    "cost_usd": {
+      "description": "Estimated cost of the attempt in US dollars, as the agent reported it. Left out, the marker says the cost was not reported.",
+      "minimum": 0,
+      "type": "number"
+    },
+    "dispatched_by": {
+      "description": "Who started the run: the rescue handoff's triggered_by",
+      "type": "string"
+    },
     "dry_run": {
       "description": "Return the marker that would be written, head SHA and fingerprint included, and post nothing (default: false)",
       "type": "boolean"
     },
+    "duration_s": {
+      "description": "How long the attempt took, in seconds",
+      "minimum": 0,
+      "type": "number"
+    },
     "outcome": {
-      "description": "Rescue outcome (default: \"failed\")",
+      "description": "Rescue outcome (default: \"failed\"): fixed (fix pushed, CI runs again), merged, failed (could not fix it), blocked (waits outside the repo)",
       "enum": [
+        "fixed",
+        "merged",
         "failed",
         "blocked"
       ],
@@ -130,7 +147,11 @@ The marker records the head SHA and a fingerprint of the diff: it goes stale whe
       "type": "string"
     },
     "reason": {
-      "description": "Short explanation of why the rescue did not succeed",
+      "description": "Short explanation of the outcome",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "The run the attempt belongs to",
       "type": "string"
     },
     "tool": {
@@ -180,12 +201,44 @@ The sweep's classify, remedy and mark steps on one PR, with its guards, refusals
 }
 ```
 
+## `rescue`
+
+```text
+Rescue handoff for one bot PR: apply the matching catalogue rule, else decide whether the PR may be rescued.
+
+The sweep's classify, remedy, rescue and mark steps on one PR under the team's policy: a rule that matches still wins. A PR handed over is labelled marge/rescued; the rescue is the caller's to run, and the caller records the outcome with mark, dispatched_by included. rescue_handoff carries the PR, its failing checks with their logs, the language, where the fix is written and the weekly count left; refused names why a PR was not handed over.
+```
+
+```json
+{
+  "properties": {
+    "dry_run": {
+      "description": "Return the handoff that would be made and write nothing: no label, no evidence comment, no rule action (default: false)",
+      "type": "boolean"
+    },
+    "pr_url": {
+      "description": "The pull request, as an URL (https://github.com/OWNER/REPO/pull/NUMBER) or as OWNER/REPO#NUMBER",
+      "type": "string"
+    },
+    "team": {
+      "description": "The team the rescue is counted against. Its policy decides whether rescues are on, and its weekly count bounds them.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pr_url",
+    "team"
+  ],
+  "type": "object"
+}
+```
+
 ## `sweep`
 
 ```text
 Sweep a team's or query's bot PRs (Renovate, Align files, Herald, Dependabot): approve and merge eligible green ones.
 
-Commits changelog entries, labels each PR marge/<class>, comments evidence and applies the matching catalogue rule (may close a PR or rewrite required checks). Majors and unreadable updates wait for a person; a pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. stale, cancelled, ci_no_verdict and obsolete are not action_required; rescue tooling acts on action_required only, skipping entries whose rescue is not stale.
+Commits changelog entries, labels each PR marge/<class>, comments evidence and applies the matching catalogue rule (may close a PR or rewrite required checks). Majors and unreadable updates wait for a person; a pending or unreported required check is a wait, never a bypass; a failing security check is never merged past. stale, cancelled, ci_no_verdict and obsolete are not action_required; rescue tooling takes its PRs from rescue_handoff, returned when actions names rescue.
 ```
 
 ```json

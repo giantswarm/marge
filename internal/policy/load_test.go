@@ -131,3 +131,15 @@ func TestTeamScope_refusesATeamThatIsNotAName(t *testing.T) {
 		})
 	}
 }
+
+// TestTeamScope_languages reads the language each repository entry declares,
+// the one generator key the rescue handoff needs.
+func TestTeamScope_languages(t *testing.T) {
+	l := loader(t, map[string]string{
+		RepositoriesFile("bumblebee"): "- name: marge\n  gen:\n    language: go\n- name: agent\n  gen:\n    flavours: [app]\n    language: generic\n- name: docs\n",
+	})
+
+	scope, err := l.TeamScope(t.Context(), "bumblebee")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"giantswarm/marge": "go", "giantswarm/agent": "generic"}, scope.Languages)
+}

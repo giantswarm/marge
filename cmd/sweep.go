@@ -54,6 +54,8 @@ func init() {
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name (default "+rules.DefaultOwner+"/"+rules.DefaultRepo+")")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from (default "+rules.DefaultRef+")")
 	sweepCmd.Flags().StringVar(&sweepFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")
+	sweepCmd.Flags().StringVar(&sweepOpts.TriggeredBy, "triggered-by", "", "Who started the run, as the rescue handoff and the agent's markers name it (default: the authenticated login)")
+	sweepCmd.Flags().StringVar(&sweepOpts.Toolchain, "toolchain", "", "Hand over for rescue only the PRs of repositories in this language (go, node, python, ...), the one the agent's image builds")
 	sweepCmd.Flags().IntVar(&sweepOpts.Parallel, "parallel", fanout.Default, "How many teams, searches and rule documents the sweep reads at once; 1 runs them one after another. Teams that own a common repository are always swept one after another")
 	sweepCmd.Flags().StringVar(&sweepOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
@@ -88,6 +90,9 @@ func resolveSweepOptions(opts *RunOptions) ([]string, error) {
 	actions, err := process.ParseActions(sweepFlags.actions)
 	if err != nil {
 		return nil, err
+	}
+	if actions.Selected(process.ActionRescue) && len(teams) == 0 {
+		return nil, errRescueNeedsTeam
 	}
 	opts.Actions = actions
 	opts.CheckTimeout = sweepFlags.checkTimeout
@@ -228,7 +233,7 @@ marge never closes a PR itself.`,
 				return err
 			}
 			opts := sweepOpts
-			opts.Policies = scope.Policies
+			opts.useScope(scope)
 
 			catalogue, rulesReport := loadRules(ctx, client, source, opts.Parallel)
 			opts.Rules = catalogue

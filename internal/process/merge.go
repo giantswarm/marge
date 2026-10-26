@@ -123,7 +123,7 @@ func (p *Processor) mergeInLane(ctx context.Context, run *prRun) {
 			return
 		}
 		run.pull = fresh
-		if fresh.GetMergeableState() == "dirty" {
+		if fresh.GetMergeableState() == mergeableDirty {
 			p.setConflict(ctx, run, "merge conflict")
 			return
 		}
@@ -214,7 +214,7 @@ func (p *Processor) merge(ctx context.Context, run *prRun) {
 			run.set(pr.StatusAlreadyMerged, "merged between retries")
 			return
 		}
-		if refreshed.GetMergeableState() == "dirty" {
+		if refreshed.GetMergeableState() == mergeableDirty {
 			p.setConflict(ctx, run, "merge conflict on retry")
 			return
 		}

@@ -116,14 +116,18 @@ calling it a flake is not.
 
 ## Finishing
 
-Every PR you leave open ends in a marker. A plain comment is invisible to the
+Every PR you were handed ends in a marker. A plain comment is invisible to the
 next sweep, so the sweep would hand you the same PR again next week.
 
+- `fixed`: you pushed a fix and CI runs again. The next sweep merges it.
+- `merged`: you saw the PR merge.
 - `failed`: you attempted this code and could not fix it.
 - `blocked`: the fix is known and waits on something outside the repository:
   an upstream release, an ecosystem that is not ready, a decision.
 
-Write the outcome, the reason and the estimated cost.
+Write the outcome, the reason, the estimated cost, how long it took, and the
+handoff's `triggered_by` as `dispatched_by`. Every marker counts against the
+team's weekly rescue number.
 
 ## Not on this page
 

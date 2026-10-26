@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -212,4 +213,81 @@ func TestGroupFindingsCountsByCauseAndRepository(t *testing.T) {
 	}, got[0].Repositories)
 	require.Equal(t, "silent_required_context", got[1].Cause)
 	require.Equal(t, "check-values-schema / validate", got[1].Repositories[0].Detail)
+}
+
+// A handoff spends the team's weekly count, so a run that only handed PRs
+// over is news, and the summary says how much of the week is left.
+func TestSummaryNamesTheRescueHandoff(t *testing.T) {
+	result := SweepResult{
+		Summary: SweepSummary{Total: 3, Failed: 3},
+		RescueHandoff: &SweepHandoff{
+			Team:   "bumblebee",
+			Budget: SweepHandoffBudget{Weekly: 5, Used: new(1), Remaining: new(4)},
+			Repositories: []SweepHandoffRepo{
+				{Repo: "giantswarm/marge", PRs: []SweepHandoffPR{{Number: 1}, {Number: 2}}},
+			},
+			Refused: []SweepHandoffRefuse{{URL: "https://github.com/giantswarm/muster/pull/3", Reason: "teammate PR #9 changes go.mod"}},
+		},
+	}
+
+	text, changed := teamSummary("bumblebee", result)
+
+	require.True(t, changed)
+	require.Contains(t, text, "Handed over for rescue: 2 PRs in 1 repository, 2 of the weekly 5 left.")
+	require.Contains(t, text, "1 candidate not handed over")
+}
+
+// A handoff that could not be made is news: the week's rescues did not run.
+func TestSummaryNamesAHandoffThatFailed(t *testing.T) {
+	result := SweepResult{
+		Summary:       SweepSummary{Total: 1, Failed: 1},
+		RescueHandoff: &SweepHandoff{Team: "bumblebee", Error: "the team's weekly rescue count could not be read: search refused"},
+	}
+
+	text, changed := teamSummary("bumblebee", result)
+
+	require.True(t, changed)
+	require.Contains(t, text, "No PR handed over for rescue: the team's weekly rescue count could not be read")
+}
+
+func TestHandoffInfo(t *testing.T) {
+	require.Nil(t, handoffInfo(nil))
+
+	uncounted := handoffInfo(&pr.Handoff{Team: "bumblebee", Budget: pr.HandoffBudget{Weekly: 5}})
+	require.Nil(t, uncounted.Budget.Used, "a run with no candidate counted nothing")
+	require.Nil(t, uncounted.Budget.Remaining)
+
+	info := pr.PRInfo{Owner: "giantswarm", Repo: "marge", Number: 7, Title: "chore(deps): update x", URL: "https://github.com/giantswarm/marge/pull/7"}
+	got := handoffInfo(&pr.Handoff{
+		Team:        "bumblebee",
+		TriggeredBy: "the schedule",
+		Toolchain:   "go",
+		Budget:      pr.HandoffBudget{Weekly: 5, Counted: true, Used: 1, Remaining: 4, Timeout: 20 * time.Minute, PerRescueUSD: 3},
+		Repos: []pr.HandoffRepo{{
+			Repo: "giantswarm/marge", Language: "go",
+			PRs: []pr.HandoffPR{{
+				PR: info, Kind: pr.KindRenovate, UpdateType: pr.UpdateMinor, HeadSHA: "head",
+				WriteTarget: pr.WritePRBranch, Checks: []string{"go-build"},
+				CheckURLs: map[string]string{"go-build": "https://example.invalid/job"},
+				Signature: "abc123abc123", Excerpt: "undefined: foo",
+			}},
+		}},
+		Refused: []pr.HandoffRefusal{{PR: pr.PRInfo{URL: "https://github.com/giantswarm/marge/pull/8"}, Reason: "the PR has a merge conflict"}},
+	})
+
+	require.Equal(t, &SweepHandoff{
+		Team:        "bumblebee",
+		TriggeredBy: "the schedule",
+		Toolchain:   "go",
+		Budget:      SweepHandoffBudget{Weekly: 5, Used: new(1), Remaining: new(4), Timeout: "20m0s", PerRescueUSD: 3},
+		Repositories: []SweepHandoffRepo{{
+			Repo: "giantswarm/marge", Language: "go",
+			PRs: []SweepHandoffPR{{
+				URL: info.URL, Number: 7, Title: info.Title, Kind: "renovate", UpdateType: "minor", HeadSHA: "head",
+				WriteTarget: "pr-branch", Checks: []SweepHandoffCheck{{Name: "go-build", URL: "https://example.invalid/job"}},
+				Signature: "abc123abc123", Excerpt: "undefined: foo",
+			}},
+		}},
+		Refused: []SweepHandoffRefuse{{URL: "https://github.com/giantswarm/marge/pull/8", Reason: "the PR has a merge conflict"}},
+	}, got)
 }

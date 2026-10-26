@@ -183,14 +183,16 @@ func TestPolicy_declaredUnenforced(t *testing.T) {
 	resolved.Rescue.Budget = pr.Budget{PerRescueUSD: 3, WeeklyUSD: 15}
 	require.Empty(t, resolved.DeclaredUnenforced(), "a cap on a rescue the team does not want bounds nothing")
 
-	// No rescue runs in this build, so every bound the team wrote down is
-	// named: the timeout and the weekly count as well as the two budget
-	// figures. A file that calls any of them enforced is wrong.
-	require.False(t, pr.RescuesDispatched)
+	// The handoff counts the week's rescues, so the weekly count binds.
+	// Nothing in this build stops a run at its timeout or at a budget, so
+	// those three are named. A file that calls any of them enforced is
+	// wrong.
+	require.True(t, pr.RescuesDispatched)
+	require.False(t, pr.TimeoutEnforced)
+	require.False(t, pr.BudgetEnforced)
 	resolved.Rescue.Enabled = true
 	require.Equal(t, []string{
 		"rescue.timeout",
-		"rescue.weekly",
 		"rescue.budget.perRescue",
 		"rescue.budget.weekly",
 	}, resolved.DeclaredUnenforced())

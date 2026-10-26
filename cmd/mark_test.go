@@ -9,8 +9,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -78,7 +80,7 @@ func TestMarkRescue_recordsFingerprint(t *testing.T) {
 		Filename: new("package.json"), Status: new("modified"), Changes: new(2), Patch: new(patch),
 	}}}
 
-	marker, owner, repo, number, err := markRescue(context.Background(), f.client(t), "https://github.com/org/repo/pull/44", "blocked", "peer typescript <6.1.0", "klaus", false)
+	marker, owner, repo, number, err := markRescue(context.Background(), f.client(t), markRequest{PRRef: "https://github.com/org/repo/pull/44", Outcome: "blocked", Reason: "peer typescript <6.1.0", Tool: "klaus"})
 	if err != nil {
 		t.Fatalf("markRescue: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestMarkRescue_recordsFingerprint(t *testing.T) {
 func TestMarkRescue_compareFailureFallsBackToChangeID(t *testing.T) {
 	f := &markFixture{compareFail: true}
 
-	marker, _, _, _, err := markRescue(context.Background(), f.client(t), "https://github.com/org/repo/pull/44", "failed", "", "klaus", false)
+	marker, _, _, _, err := markRescue(context.Background(), f.client(t), markRequest{PRRef: "https://github.com/org/repo/pull/44", Outcome: "failed", Tool: "klaus"})
 	if err != nil {
 		t.Fatalf("markRescue must not fail when the fingerprint cannot be computed: %v", err)
 	}
@@ -120,7 +122,60 @@ func TestMarkRescue_compareFailureFallsBackToChangeID(t *testing.T) {
 }
 
 func TestMarkRescue_rejectsUnknownOutcome(t *testing.T) {
-	if _, _, _, _, err := markRescue(context.Background(), nil, "https://github.com/org/repo/pull/44", "gave-up", "", "klaus", false); err == nil {
+	if _, _, _, _, err := markRescue(context.Background(), nil, markRequest{PRRef: "https://github.com/org/repo/pull/44", Outcome: "gave-up", Tool: "klaus"}); err == nil {
 		t.Error("expected an error for an invalid outcome")
 	}
+}
+
+// A rescue's marker carries what the attempt cost and who started its run,
+// so the cost of a rescue is visible on the PR it was spent on.
+func TestMarkRescue_recordsTheAttempt(t *testing.T) {
+	f := &markFixture{compareFail: true}
+	cost := 3.2
+
+	marker, _, _, _, err := markRescue(t.Context(), f.client(t), markRequest{
+		PRRef:        "https://github.com/org/repo/pull/44",
+		Outcome:      "Fixed",
+		Tool:         "rescue-agent",
+		CostUSD:      &cost,
+		Duration:     14*time.Minute + 10*time.Second,
+		DispatchedBy: "the schedule",
+		RunID:        "ctx-42",
+	})
+	require.NoError(t, err)
+	require.Equal(t, pr.RescueOutcomeFixed, marker.Outcome)
+
+	posted := f.posted.Load()
+	require.NotNil(t, posted)
+	require.Contains(t, *posted, "**AI rescue fixed** (rescue-agent), estimated $3.20 in 14 min, dispatched by the schedule")
+	parsed := pr.ParseRescueMarker(*posted)
+	require.NotNil(t, parsed)
+	require.NotNil(t, parsed.CostUSD)
+	require.InDelta(t, cost, *parsed.CostUSD, 1e-9)
+	require.Equal(t, 850, parsed.DurationS)
+	require.Equal(t, "the schedule", parsed.DispatchedBy)
+	require.Equal(t, "ctx-42", parsed.RunID)
+}
+
+func TestMarkRescue_refusesANegativeCostOrDuration(t *testing.T) {
+	negative := -1.0
+	_, _, _, _, err := markRescue(t.Context(), nil, markRequest{PRRef: "org/repo#44", Outcome: "failed", CostUSD: &negative})
+	require.ErrorContains(t, err, "not negative")
+
+	_, _, _, _, err = markRescue(t.Context(), nil, markRequest{PRRef: "org/repo#44", Outcome: "failed", Duration: -time.Second})
+	require.ErrorContains(t, err, "not negative")
+}
+
+// A cost the caller left out is not reported, which a cost of zero is.
+func TestParseMarkRequest_tellsAMissingCostFromZero(t *testing.T) {
+	missing := parseMarkRequest(call(map[string]any{"pr_url": "org/repo#44"}))
+	require.Nil(t, missing.CostUSD)
+	require.Equal(t, pr.RescueOutcomeFailed, missing.Outcome)
+
+	zero := parseMarkRequest(call(map[string]any{"pr_url": "org/repo#44", "cost_usd": 0, "duration_s": 90, "dispatched_by": "a.person", "run_id": "r1"}))
+	require.NotNil(t, zero.CostUSD)
+	require.Zero(t, *zero.CostUSD)
+	require.Equal(t, 90*time.Second, zero.Duration)
+	require.Equal(t, "a.person", zero.DispatchedBy)
+	require.Equal(t, "r1", zero.RunID)
 }

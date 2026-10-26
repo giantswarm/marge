@@ -15,31 +15,33 @@ const (
 )
 
 // Budget is what a team is willing to spend on rescues, in US dollars.
-// Both figures are part of the team contract and neither is enforced yet:
-// a per-rescue budget needs execution_budget_usd on the run, and a weekly
-// budget needs the cost of finished runs to be readable. BudgetEnforced
-// says so in every outcome the sweep records.
+// Both figures are part of the team contract and neither is enforced: the
+// platform bounds no turn by a budget, so the cost a rescue reports is
+// written on its marker and summed, never stopped at. BudgetEnforced says so
+// in every outcome the sweep records.
 type Budget struct {
 	PerRescueUSD float64
 	WeeklyUSD    float64
 }
 
-// RescuesDispatched reports whether this build dispatches a rescue. It is
-// false until the rescue agent runs on an installation. While it is false
-// every bound in RescuePolicy is declared and none of them applies, so a
-// sweep must say so rather than let a team read its file as a guarantee.
-const RescuesDispatched = false
+// RescuesDispatched reports whether this build hands rescues over. It does:
+// the rescue action hands the PRs no rule recognised to the agent the run
+// executes inside, and the weekly count bounds how many.
+const RescuesDispatched = true
 
-// BudgetEnforced reports whether this build enforces the rescue budget.
-// It is false until the platform accepts a budget on a run and reports the
-// cost of a finished one. It stays false once RescuesDispatched is true
-// and the budget still needs the platform.
+// TimeoutEnforced reports whether this build bounds a rescue run by the
+// policy's timeout. It is false until the trigger that starts the run
+// cancels it at the deadline.
+const TimeoutEnforced = false
+
+// BudgetEnforced reports whether this build enforces the rescue budget. It
+// is false while the platform bounds no turn by a budget.
 const BudgetEnforced = false
 
 // RescuePolicy bounds the rescues of one team. Timeout is the wall-clock
-// budget of a single rescue and is meant to become the run's execution
-// timeout; Weekly is how many rescues the team spends per week. See
-// RescuesDispatched for what this build applies.
+// budget of a rescue run; Weekly is how many rescues the team spends per
+// week, counted from the markers of the last seven days. See
+// TimeoutEnforced and BudgetEnforced for what this build applies.
 type RescuePolicy struct {
 	Enabled bool
 	Timeout time.Duration
@@ -200,13 +202,8 @@ func (p Policy) DeclaredUnenforced() []string {
 		return nil
 	}
 	var out []string
-	if !RescuesDispatched {
-		if p.Rescue.Timeout > 0 {
-			out = append(out, "rescue.timeout")
-		}
-		if p.Rescue.Weekly > 0 {
-			out = append(out, "rescue.weekly")
-		}
+	if !TimeoutEnforced && p.Rescue.Timeout > 0 {
+		out = append(out, "rescue.timeout")
 	}
 	if !BudgetEnforced {
 		if p.Rescue.Budget.PerRescueUSD > 0 {
