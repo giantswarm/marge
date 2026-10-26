@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-github/v93/github"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +48,11 @@ func TestNewCallerClient_authenticatesAsTheCaller(t *testing.T) {
 
 	ctx := ContextWithCallerToken(t.Context(), "the-callers-grant")
 	client, err := NewCallerClient(ctx)
+	require.NoError(t, err)
+
+	// go-github sends the token to the client's own API origin only.
+	serverURL := server.URL + "/"
+	client, err = client.Clone(github.WithURLs(&serverURL, &serverURL))
 	require.NoError(t, err)
 
 	response, err := client.Client().Get(server.URL + "/user")

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
