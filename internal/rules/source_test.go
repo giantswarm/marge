@@ -47,7 +47,7 @@ func catalogueServer(t *testing.T, docs map[string]string, encoding string) *git
 			if encoding == "base64" {
 				content = base64.StdEncoding.EncodeToString([]byte(body))
 			}
-			write(w, github.Blob{SHA: new(shaOf(name)), Content: new(content), Encoding: new(encoding)})
+			write(w, github.Blob{SHA: new(shaOf(name)), Content: content, Encoding: new(encoding)})
 			return
 		}
 		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
