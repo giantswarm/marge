@@ -54,7 +54,7 @@ the matching `marge/<class>` label:
 | `waiting` | a required check is pending or nobody reported it | the next sweep |
 | `ci_unavailable` | the Actions budget is spent | a person |
 | `ci_no_verdict` | the checks established nothing about the code | the remedy in the detail |
-| `skipped` | untrusted author, a head branch in another repository, a reconciler team-file PR in giantswarm/github (left to its classification, no label), or the sweep switched off for the repository | a person |
+| `skipped` | untrusted author, a head branch in another repository, a reconciler team-file PR in giantswarm/github (left to its classification, no label), a repository archived on GitHub (no label), or the sweep switched off for the repository | a person |
 | `unclassified` | no sweep has labelled this PR yet | call `list` with `refresh: true` |
 | `not_reached` | the run stopped before it decided the PR; `rate_limit.reset_at` says when GitHub serves the token again | the next sweep, after the reset |
 | `repositories_failed` | the PRs of this repository could not be read | report it |
@@ -63,7 +63,7 @@ Act on `action_required` only.
 
 A sweep also answers with `findings`: the repository settings that hold PRs
 back, grouped by cause (`strict_protection`, `code_owner_review`,
-`silent_required_context`) with the count of the PRs and the repositories.
+`silent_required_context`, `archived`) with the count of the PRs and the repositories.
 They are not PR groups and they need no rescue. Report them to the team that
 owns the repository.
 

@@ -107,6 +107,26 @@ type Scope struct {
 	// the repository, for the entries that declare one. Nil outside the
 	// team scope.
 	Languages map[string]string
+	// Declarations maps owner/name to the team-file entry that puts the
+	// repository in the scope. Nil outside the team scope.
+	Declarations map[string]Declaration
+}
+
+// Declaration is how a team file declares one repository.
+type Declaration struct {
+	// Lifecycle is the entry's lifecycle as written; empty when the entry
+	// declares none.
+	Lifecycle string
+	// File is the team file the entry is in.
+	File string
+}
+
+// String reads the declaration as the part of a sentence that names it.
+func (d Declaration) String() string {
+	if d.Lifecycle == "" {
+		return "declared without a lifecycle in " + d.File
+	}
+	return fmt.Sprintf("declared %s in %s", d.Lifecycle, d.File)
 }
 
 // TeamScope reads the team's repository list, the company defaults and the
@@ -149,7 +169,11 @@ func (l Loader) TeamScope(ctx context.Context, team string) (Scope, error) {
 	if err != nil {
 		return Scope{}, err
 	}
-	return Scope{Repos: repos, Policies: set, Languages: languages}, nil
+	declarations, err := ParseDeclarations(content, l.Owner, path)
+	if err != nil {
+		return Scope{}, err
+	}
+	return Scope{Repos: repos, Policies: set, Languages: languages, Declarations: declarations}, nil
 }
 
 // QueryScope reads the company defaults alone. The query scope has no team,
@@ -218,6 +242,28 @@ func ParseLanguages(content, owner, path string) (map[string]string, error) {
 		}
 	}
 	return languages, nil
+}
+
+// ParseDeclarations returns the lifecycle of every entry of a team's
+// repository list that is in the scope, keyed by owner/name, each with the
+// file that declares it.
+func ParseDeclarations(content, owner, path string) (map[string]Declaration, error) {
+	var entries []struct {
+		Name      string `yaml:"name"`
+		Lifecycle string `yaml:"lifecycle"`
+	}
+	if err := yaml.Unmarshal([]byte(content), &entries); err != nil {
+		return nil, fmt.Errorf("parsing team file %s: %w", path, err)
+	}
+	declarations := make(map[string]Declaration)
+	for _, entry := range entries {
+		name, lifecycle := strings.TrimSpace(entry.Name), strings.TrimSpace(entry.Lifecycle)
+		if name == "" || retired[lifecycle] {
+			continue
+		}
+		declarations[owner+"/"+name] = Declaration{Lifecycle: lifecycle, File: path}
+	}
+	return declarations, nil
 }
 
 // ParseRepositories returns the owner/name entries of a team's repository

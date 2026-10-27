@@ -133,6 +133,25 @@ func TestSummaryNamesTheRepositorySettings(t *testing.T) {
 	require.Contains(t, text, "giantswarm/app-operator 1 (check-values-schema / validate)")
 }
 
+// An archived repository the team file still declares is named once, with
+// the declaration that wants changing, however many PRs it holds.
+func TestSummaryNamesAnArchivedRepositoryOnce(t *testing.T) {
+	result := SweepResult{
+		Summary: SweepSummary{Total: 3, Merged: 1, Skipped: 2},
+		Findings: []SweepFinding{
+			{Cause: "archived", PRs: 2, Repositories: []SweepFindingRepo{
+				{Repo: "giantswarm/mcp-runbooks", PRs: 2, Detail: "declared production in repositories/team-bumblebee.yaml"},
+			}},
+		},
+	}
+
+	text, _ := teamSummary("bumblebee", result)
+
+	require.Contains(t, text, "archived on GitHub while the team file still declares it, so its PRs are skipped")
+	require.Equal(t, 1, strings.Count(text, "giantswarm/mcp-runbooks"))
+	require.Contains(t, text, "giantswarm/mcp-runbooks 2 (declared production in repositories/team-bumblebee.yaml)")
+}
+
 // A run that found no such setting says nothing about one.
 func TestSummaryWithoutRepositorySettings(t *testing.T) {
 	text, _ := teamSummary("bumblebee", SweepResult{Summary: SweepSummary{Total: 1, Merged: 1}})

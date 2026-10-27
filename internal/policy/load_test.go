@@ -143,3 +143,21 @@ func TestTeamScope_languages(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"giantswarm/marge": "go", "giantswarm/agent": "generic"}, scope.Languages)
 }
+
+// TestTeamScope_declarations records the lifecycle of every repository in
+// the scope and the file that declares it, and leaves the retired ones out.
+func TestTeamScope_declarations(t *testing.T) {
+	l := loader(t, map[string]string{
+		RepositoriesFile("bumblebee"): "- name: marge\n  lifecycle: production\n- name: notes\n- name: old\n  lifecycle: archived\n",
+	})
+
+	scope, err := l.TeamScope(t.Context(), "bumblebee")
+	require.NoError(t, err)
+	file := RepositoriesFile("bumblebee")
+	require.Equal(t, map[string]Declaration{
+		"giantswarm/marge": {Lifecycle: "production", File: file},
+		"giantswarm/notes": {File: file},
+	}, scope.Declarations)
+	require.Equal(t, "declared production in "+file, scope.Declarations["giantswarm/marge"].String())
+	require.Equal(t, "declared without a lifecycle in "+file, scope.Declarations["giantswarm/notes"].String())
+}
