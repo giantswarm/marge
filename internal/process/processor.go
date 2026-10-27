@@ -107,6 +107,10 @@ type Processor struct {
 	// time.
 	MergeLane int
 
+	// Suites is the run's e2e suite budget, the one every team of the run
+	// shares. Nil bounds nothing.
+	Suites *remedy.SuiteBudget
+
 	staleCache
 	accessCache
 	rebaseQueue

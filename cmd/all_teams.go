@@ -415,6 +415,7 @@ func runTeamSweeps(ctx context.Context, client *github.Client, login string, sou
 	// stdout carries the result and nothing else.
 	opts.NoTUI = true
 	opts.Quiet = asJSON
+	opts.shareSuites()
 
 	run := teamsRun{
 		Client:  client,
