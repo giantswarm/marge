@@ -145,7 +145,7 @@ scheduleDefaults:
   # -- Report every outcome without writing anything. Turn it on for the first runs on a new installation.
   dryRun: false
   # -- E2e suites one scheduled run may start by commenting the command Heimdall named. Every suite builds clusters on the shared test management cluster, whose Flux helm-controller stalls when too many reconcile at once; the PRs past the limit wait for a later run. 0 starts none.
-  suiteLimit: 2
+  suiteLimit: 2  # @schema minimum: 0
   # -- Seconds a scheduled run may take before Kubernetes stops it. An entry of schedules overrides it for its own run. A stopped run posts what it had reached before it was stopped.
   activeDeadlineSeconds: 3600
   # -- Successful Jobs kept
