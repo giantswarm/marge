@@ -57,6 +57,7 @@ spec:
                 - sweep
                 - --team={{ $entry.team }}
                 - --actions={{ $entry.actions }}
+                - --suite-limit={{ $entry.suiteLimit }}
                 - --no-tui
                 - --post-summary
                 {{- if $entry.dryRun }}

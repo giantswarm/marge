@@ -41,6 +41,7 @@ func init() {
 	runCmd.Flags().StringVar(&runFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name")
 	runCmd.Flags().StringVar(&runFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from")
 	runCmd.Flags().StringVar(&runFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")
+	runCmd.Flags().IntVar(&runOpts.SuiteLimit, "suite-limit", DefaultSuiteLimit, "How many e2e suites one pass may start by commenting the command a gate named; 0 starts none")
 	runCmd.Flags().StringVar(&runOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(runCmd)
@@ -67,6 +68,9 @@ and merge the eligible green ones.`,
 		}
 		if actions.Selected(process.ActionRescue) {
 			return errRescueNeedsTeam
+		}
+		if runOpts.SuiteLimit < 0 {
+			return fmt.Errorf("--suite-limit %d: want 0 or more", runOpts.SuiteLimit)
 		}
 		runOpts.Actions = actions
 		runOpts.CheckTimeout = interactiveCheckTimeout

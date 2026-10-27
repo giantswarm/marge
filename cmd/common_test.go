@@ -323,3 +323,22 @@ func TestSplitByPRs(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// The teams of one run are swept from copies of its options, and they start
+// suites out of one budget between them.
+func TestRunOptions_teamsOfOneRunShareTheSuiteBudget(t *testing.T) {
+	opts := RunOptions{SuiteLimit: 1}
+	opts.shareSuites()
+	first, second := opts, opts
+
+	require.True(t, first.suiteBudget().Take(1))
+	require.False(t, second.suiteBudget().Take(1))
+}
+
+// A sweep outside a several-team run spends a budget of its own.
+func TestRunOptions_eachSweepHasItsOwnSuiteBudget(t *testing.T) {
+	opts := RunOptions{SuiteLimit: 1}
+
+	require.True(t, opts.suiteBudget().Take(1))
+	require.True(t, opts.suiteBudget().Take(1))
+}

@@ -356,6 +356,11 @@
                     "type": "integer",
                     "description": "Successful Jobs kept"
                 },
+                "suiteLimit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "E2e suites one scheduled run may start by commenting the command Heimdall named. Every suite builds clusters on the shared test management cluster, whose Flux helm-controller stalls when too many reconcile at once; the PRs past the limit wait for a later run. 0 starts none."
+                },
                 "timeZone": {
                     "type": "string",
                     "description": "IANA timezone the cron expressions are read in."

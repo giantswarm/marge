@@ -449,13 +449,14 @@ func parseScope(request mcp.CallToolRequest) sweepRequest {
 	return sweepRequest{
 		Repos: request.GetStringSlice("repos", nil),
 		Opts: RunOptions{
-			Quiet:     true,
-			NoTUI:     true,
-			Query:     request.GetString("query", ""),
-			Team:      request.GetString("team", ""),
-			Org:       request.GetString("org", ""),
-			ReposFile: request.GetString("repos_file", ""),
-			PRs:       request.GetStringSlice("prs", nil),
+			Quiet:      true,
+			NoTUI:      true,
+			Query:      request.GetString("query", ""),
+			Team:       request.GetString("team", ""),
+			Org:        request.GetString("org", ""),
+			ReposFile:  request.GetString("repos_file", ""),
+			PRs:        request.GetStringSlice("prs", nil),
+			SuiteLimit: DefaultSuiteLimit,
 		},
 	}
 }
@@ -694,12 +695,13 @@ func remedyRequest(request mcp.CallToolRequest) (sweepRequest, error) {
 	return sweepRequest{
 		Rule: request.GetString("rule", ""),
 		Opts: RunOptions{
-			Quiet:   true,
-			NoTUI:   true,
-			DryRun:  request.GetBool("dry_run", false),
-			Team:    request.GetString("team", ""),
-			PRs:     []string{prRef},
-			Actions: process.ActionSet{process.ActionClassify: true, process.ActionRemedy: true, process.ActionMark: true},
+			Quiet:      true,
+			NoTUI:      true,
+			DryRun:     request.GetBool("dry_run", false),
+			Team:       request.GetString("team", ""),
+			PRs:        []string{prRef},
+			Actions:    process.ActionSet{process.ActionClassify: true, process.ActionRemedy: true, process.ActionMark: true},
+			SuiteLimit: DefaultSuiteLimit,
 		},
 	}, nil
 }
