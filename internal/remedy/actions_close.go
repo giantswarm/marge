@@ -220,11 +220,19 @@ func (commentCommand) Guards() []Guard {
 	return []Guard{TrustedAuthor, NoSecurityFailure, KnownCommand, OnlyGateWaiting, UpToDate, OncePerChange(CommentCommand)}
 }
 
+// The suite budget is taken here rather than in a guard: guards are pure and
+// PRs are processed at once, so only a reservation made where the comment is
+// written keeps the run within its budget. A refused PR carries no evidence
+// marker, so a later run comments it.
 func (commentCommand) Apply(ctx context.Context, req *Request) (Outcome, error) {
+	if !req.Deps.Suites.Take(len(req.Commands)) {
+		return Outcome{Refused: "the run's e2e suite budget is spent: a later run starts this suite"}, nil
+	}
 	body := strings.Join(req.Commands, "\n")
 	_, _, err := req.Deps.GitHub.Issues.CreateComment(ctx, req.Info.Owner, req.Info.Repo, req.Info.Number,
 		github.IssueCommentRequest{Body: body})
 	if err != nil {
+		req.Deps.Suites.Give(len(req.Commands))
 		return Outcome{}, fmt.Errorf("comment command: %w", err)
 	}
 	return Outcome{

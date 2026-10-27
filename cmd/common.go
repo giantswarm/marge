@@ -89,6 +89,32 @@ type RunOptions struct {
 	// Toolchain is the language the rescue agent's image builds. Empty
 	// hands over PRs of every language.
 	Toolchain string
+
+	// SuiteLimit is how many e2e suites the run may start by commenting the
+	// command a gate named. Zero starts none.
+	SuiteLimit int
+	// suites is the budget SuiteLimit sets, shared by every team of a
+	// several-team run. Nil gives each processOnceWithStatus call its own.
+	suites *remedy.SuiteBudget
+}
+
+// DefaultSuiteLimit is the number of e2e suites a run starts unless told
+// otherwise.
+const DefaultSuiteLimit = 2
+
+// shareSuites makes every copy of o taken from now on start suites out of one
+// budget, so the teams of one run share SuiteLimit.
+func (o *RunOptions) shareSuites() {
+	o.suites = remedy.NewSuiteBudget(o.SuiteLimit)
+}
+
+// suiteBudget is the budget one sweep spends: the shared one when the run
+// set it, a budget of its own otherwise.
+func (o RunOptions) suiteBudget() *remedy.SuiteBudget {
+	if o.suites != nil {
+		return o.suites
+	}
+	return remedy.NewSuiteBudget(o.SuiteLimit)
 }
 
 func (o RunOptions) stdout() io.Writer {
@@ -267,6 +293,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc.Policies = opts.Policies
 	proc.Rules = opts.Rules
 	proc.Remedies = remedy.Default()
+	proc.Suites = opts.suiteBudget()
 	proc.CircleCI = circleci.NewClient()
 	proc.Logs = &logs.Fetcher{GitHub: client, CircleCI: proc.CircleCI}
 	// Cross-PR knowledge, so it is computed once from the whole list before

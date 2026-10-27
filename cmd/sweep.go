@@ -57,6 +57,7 @@ func init() {
 	sweepCmd.Flags().StringVar(&sweepOpts.TriggeredBy, "triggered-by", "", "Who started the run, as the rescue handoff and the agent's markers name it (default: the authenticated login)")
 	sweepCmd.Flags().StringVar(&sweepOpts.Toolchain, "toolchain", "", "Hand over for rescue only the PRs of repositories in this language (go, node, python, ...), the one the agent's image builds")
 	sweepCmd.Flags().IntVar(&sweepOpts.Parallel, "parallel", fanout.Default, "How many teams, searches and rule documents the sweep reads at once; 1 runs them one after another. Teams that own a common repository are always swept one after another")
+	sweepCmd.Flags().IntVar(&sweepOpts.SuiteLimit, "suite-limit", DefaultSuiteLimit, "How many e2e suites the run may start by commenting the command a gate named, across every team it sweeps; 0 starts none")
 	sweepCmd.Flags().StringVar(&sweepOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(sweepCmd)
@@ -86,6 +87,9 @@ func resolveSweepOptions(opts *RunOptions) ([]string, error) {
 	}
 	if opts.Parallel < 0 {
 		return nil, fmt.Errorf("--parallel %d: want 1 or more", opts.Parallel)
+	}
+	if opts.SuiteLimit < 0 {
+		return nil, fmt.Errorf("--suite-limit %d: want 0 or more", opts.SuiteLimit)
 	}
 	actions, err := process.ParseActions(sweepFlags.actions)
 	if err != nil {
