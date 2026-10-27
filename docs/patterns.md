@@ -178,7 +178,7 @@ the pattern. Each says which.
 
 | Pattern | Why no rule expresses it | Runbook row |
 |---|---|---|
-| An archived repository still carrying open bot PRs | The sweep never sees them. Discovery searches `is:pr is:open archived:false`, so the PRs are filtered out before classification, and an archived repository is read-only in any case | 8 |
+| An archived repository still carrying open bot PRs | An archived repository is read-only, so no remedy can act. The query scope searches `is:pr is:open archived:false` and never sees the PRs; the team scope skips them and reports the team-file entry that still declares the repository as the `archived` finding | 8 |
 | An architect-orb bump on a devctl-managed repository | The signal is the repository's own CircleCI config, not anything on the PR. A rule reads the diff, the checks and the logs, never a file on the default branch. The runbook's remedy also ends in "coordinate with the operator" | 30 |
 | A transitive-only `/v2` un-pin leaving a vulnerable v1 path | The signal is `go mod why` reporting that the main module does not need the package, which the engine cannot run. The nancy line alone does not separate a pin floor that still holds from a real finding, and the action would be `close` | 48 |
 

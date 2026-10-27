@@ -234,6 +234,9 @@ const (
 	// FindingSilentContext: a required status check has not reported for
 	// long enough that no run will report it. The PR waits for ever.
 	FindingSilentContext RepoFindingCause = "silent_required_context"
+	// FindingArchived: GitHub reports the repository archived, so it is
+	// read-only, while its team-file entry still puts it in the scope.
+	FindingArchived RepoFindingCause = "archived"
 )
 
 // SilentContextAfter is how long a required context may stay unreported on

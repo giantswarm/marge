@@ -225,6 +225,7 @@ A guard that refuses a merge for a repository reason refuses it on every sweep, 
 | `strict_protection` | the base branch requires an up-to-date branch, so every merge puts the siblings behind their base and the repository merges one PR per run | a second daily run |
 | `code_owner_review` | the base branch sets `require_code_owner_reviews`, which the sweep's own approval never satisfies | the sweep App in `CODEOWNERS`, or the rule dropped |
 | `silent_required_context` | a required context reported nothing, on a head whose other checks settled more than seven days ago, so no run will report it | the context removed from the protection, or the workflow that produces it |
+| `archived` | GitHub reports the repository archived, so it is read-only, while its team-file entry still declares it active; its PRs are `skipped` and receive no write | the entry's `lifecycle` set to `archived` |
 
 A finding is recorded on the PR the setting holds, and the summary groups the findings by cause with a count of the PRs and the repositories: a team sweeps up to 78 repositories, and one line per repository does not reach a reader. The JSON output carries every repository, with the count of each and the required context that never reported.
 

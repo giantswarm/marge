@@ -79,10 +79,12 @@ type RunOptions struct {
 	Stdout, Stderr io.Writer
 
 	// TeamRepos and Languages are the team scope's repository list and the
-	// language each entry declares, which the rescue handoff reads. Both
+	// language each entry declares, which the rescue handoff reads.
+	// Declarations are the team-file entries of the repositories. All three
 	// are nil outside the team scope.
-	TeamRepos []string
-	Languages map[string]string
+	TeamRepos    []string
+	Languages    map[string]string
+	Declarations map[string]policy.Declaration
 	// TriggeredBy names who started the run, for the rescue handoff and
 	// the markers the agent writes. Empty names the authenticated login.
 	TriggeredBy string
@@ -111,6 +113,7 @@ func (o *RunOptions) useScope(scope policy.Scope) {
 	o.Policies = scope.Policies
 	o.TeamRepos = scope.Repos
 	o.Languages = scope.Languages
+	o.Declarations = scope.Declarations
 }
 
 // errRescueNeedsTeam refuses the rescue action outside the team scope: a
@@ -265,6 +268,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc.Actions = opts.Actions
 	proc.CheckTimeout = opts.CheckTimeout
 	proc.Policies = opts.Policies
+	proc.Declarations = opts.Declarations
 	proc.Rules = opts.Rules
 	proc.Remedies = remedy.Default()
 	proc.CircleCI = circleci.NewClient()

@@ -125,6 +125,8 @@ func findingCause(cause string) string {
 		return "strict branch protection, so one PR merges per run"
 	case pr.FindingCodeOwnerReview:
 		return "`require_code_owner_reviews`, which the sweep's own approval does not satisfy"
+	case pr.FindingArchived:
+		return "archived on GitHub while the team file still declares it, so its PRs are skipped"
 	case pr.FindingSilentContext:
 		return fmt.Sprintf("a required check that has not reported in %d days", int(pr.SilentContextAfter.Hours()/24))
 	default:

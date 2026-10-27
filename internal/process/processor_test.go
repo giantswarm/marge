@@ -41,6 +41,8 @@ type guardFixture struct {
 	headRepo   string
 	forkedRepo bool
 	headRef    string
+	// archived makes GitHub report the swept repository archived.
+	archived bool
 	// headChecks maps a check name on the PR head to "success", "failure",
 	// "pending" or "neutral"; statusContexts lists the names reported as
 	// commit statuses instead of check runs.
@@ -177,7 +179,7 @@ func (f *guardFixture) server(t *testing.T) *httptest.Server {
 			MergeableState: new(f.mergeableState),
 			User:           &github.User{Login: new(f.author)},
 			Head:           &github.PullRequestBranch{SHA: new(gfHead), Ref: new(headRef), Repo: &github.Repository{FullName: new(headRepo), Fork: new(f.forkedRepo)}},
-			Base:           &github.PullRequestBranch{SHA: new(gfBase), Ref: new("main"), Repo: &github.Repository{FullName: new(repo), Fork: new(f.forkedRepo)}},
+			Base:           &github.PullRequestBranch{SHA: new(gfBase), Ref: new("main"), Repo: &github.Repository{FullName: new(repo), Fork: new(f.forkedRepo), Archived: new(f.archived)}},
 			Labels:         labels,
 		}
 		if f.autoMerge {

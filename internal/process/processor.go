@@ -77,6 +77,9 @@ type Processor struct {
 	// the policy files before the sweep starts. Nil applies the company
 	// defaults of pr.CompanyDefaults.
 	Policies *policy.Set
+	// Declarations maps owner/name to the team-file entry that puts the
+	// repository in the scope. Nil outside the team scope.
+	Declarations map[string]policy.Declaration
 
 	// CheckTimeout bounds how long the sweep waits for pending checks on
 	// one PR. Zero means no wait: a PR with pending or missing required
@@ -141,7 +144,8 @@ type prRun struct {
 	// before this PR was read.
 	mergesSeen int
 	// untouched holds a PR of a repository whose policy switched the sweep
-	// off, or one its repository's own classification decides. Such a PR
+	// off, one GitHub reports archived, or one its repository's own
+	// classification decides. Such a PR
 	// receives no write at all, the classification label included.
 	untouched bool
 
@@ -277,6 +281,11 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 
 	resolved := p.Policies.For(info.Owner, info.Repo)
 	status.SetPolicy(idx, resolved)
+	if pullReq.GetBase().GetRepo().GetArchived() {
+		run.untouched = true
+		p.skipArchived(run)
+		return
+	}
 	if !resolved.Sweep {
 		run.untouched = true
 		run.set(pr.StatusSkipped, "sweep switched off for this repository by policy")
@@ -436,6 +445,20 @@ func (p *Processor) finish(ctx context.Context, run *prRun) {
 		entry := run.status.Snapshot()[run.idx]
 		run.set(entry.State, withNote(entry.Detail, strings.Join(run.notes, "; ")))
 	}
+}
+
+// skipArchived skips a PR of a repository GitHub reports archived. The
+// repository is read-only, so every write would fail. A team file that
+// still declares the repository is reported as a finding: the declaration
+// is what wants changing.
+func (p *Processor) skipArchived(run *prRun) {
+	declaration, declared := p.Declarations[run.info.Owner+"/"+run.info.Repo]
+	if !declared {
+		run.set(pr.StatusSkipped, "archived on GitHub")
+		return
+	}
+	run.set(pr.StatusSkipped, "archived on GitHub, "+declaration.String())
+	run.status.SetFinding(run.idx, &pr.RepoFinding{Cause: pr.FindingArchived, Detail: declaration.String()})
 }
 
 // cutShort reports whether the run stopped on a rate limit before it
