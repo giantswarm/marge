@@ -102,6 +102,21 @@ func TestRescueCandidate_refusals(t *testing.T) {
 			wantNote: "rescue refused: required checks have not all reported",
 		},
 		{
+			name: "a required check never reported beside a failed one still pending",
+			modify: func(_ *Processor, run *prRun) {
+				run.required = remedy.Required{Failed: []string{"go-build"}, Pending: []string{"lint"}, Missing: []string{"build-image"}}
+			},
+			wantNote: "rescue refused: required checks have not all reported",
+		},
+		{
+			name: "a required check never reported beside a failed one while checks run",
+			modify: func(_ *Processor, run *prRun) {
+				run.required = remedy.Required{Failed: []string{"go-build"}, Missing: []string{"build-image"}}
+				run.checksPending = true
+			},
+			wantNote: "rescue refused: required checks have not all reported",
+		},
+		{
 			name: "a rescue already stands for the change",
 			modify: func(_ *Processor, run *prRun) {
 				run.commentMarkers = []*pr.RescueMarker{{Tool: "rescue-agent", Outcome: pr.RescueOutcomeFailed, HeadSHA: "headsha"}}
@@ -124,6 +139,23 @@ func TestRescueCandidate_refusals(t *testing.T) {
 			require.Equal(t, []string{tt.wantNote}, run.notes)
 		})
 	}
+}
+
+// A required job CircleCI never runs because the job it requires failed
+// leaves its context unreported; once nothing runs, the failed required
+// check is the verdict and the PR is handed over.
+func TestRescueCandidate_aRequiredCheckBehindAFailedOneDoesNotRefuse(t *testing.T) {
+	run := rescueRun()
+	run.required = remedy.Required{
+		Green:   []string{"pre-commit"},
+		Failed:  []string{"ci/circleci: go-build"},
+		Missing: []string{"ci/circleci: build-image"},
+	}
+
+	rescueProcessor().rescueCandidate(t.Context(), run)
+
+	require.NotNil(t, run.status.Entry(run.idx).Candidate)
+	require.Empty(t, run.notes)
 }
 
 // A rescue marker for a change that moved on blocks nothing.

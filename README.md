@@ -245,7 +245,7 @@ An action marge performed, or a guard decision a person needs to see, is written
 The `rescue` step hands the PRs no rule recognised to whoever runs the rescue: the agent the weekly run executes inside, or a person in their own Claude Code. It pushes nothing and writes no marker; the rescuer does the work and writes the outcome with [`marge mark`](#marge-mark-pr-url-flags). A PR is handed over when all of these hold:
 
 - its failure is one no rule of the catalogue recognised, on a PR of a trusted bot;
-- no security check failed, and every required check reported;
+- no security check failed, and no check is still running. A required check that never reported refuses the PR unless a required check failed: a job behind the failed one (a CircleCI job whose required job failed) runs only on the head the rescue pushes;
 - the team's policy, and the repository's exception, allow rescues;
 - no [rescue marker](#rescue-markers-prior-ai-rescue-attempts) stands for the change on the branch;
 - the team's weekly count is not spent: every rescue marker of the last seven days on the team's PRs counts, merged and closed PRs included. The count stops at the weekly limit, and one that cannot be read, or would read the comments of more than 200 PRs before reaching it, hands nothing over;

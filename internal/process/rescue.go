@@ -57,7 +57,12 @@ func (p *Processor) rescueRefusal(ctx context.Context, run *prRun, resolved *pr.
 		return "the author is not a trusted bot"
 	case classifySecurityFailure(run.failing, p.securityPatterns()) != "":
 		return "a security check failed"
-	case len(run.required.Missing) > 0 || len(run.required.Pending) > 0 || run.checksPending:
+	case len(run.required.Pending) > 0 || run.checksPending:
+		return "required checks have not all reported"
+	// A failed required check with nothing still running is the verdict: a
+	// required job behind it (a CircleCI job whose required job failed) runs
+	// only on a new head, which is what the rescue pushes.
+	case len(run.required.Missing) > 0 && len(run.required.Failed) == 0:
 		return "required checks have not all reported"
 	}
 	fresh := remedy.FreshRescue(run.rescueMarker(ctx, p), run.pull.GetHead().GetSHA(),
