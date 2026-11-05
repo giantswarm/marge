@@ -112,8 +112,8 @@ because a rescue is counted against the team's week. It hands the PRs no rule
 recognised to whoever runs the rescue, under these conditions: the team's
 policy allows rescues, no security check failed, every required check
 reported, no rescue marker stands for the change, the team's weekly count is
-not spent, the PR is still open without a conflict, and no teammate PR is open
-on the same module. The answer's `rescue_handoff` lists the PRs one
+not spent, the PR is still open without a conflict, and no open teammate PR
+changes a file the bot PR changes. The answer's `rescue_handoff` lists the PRs one
 repository at a time, with the failing checks and their logs, the language,
 the `write_target` (`pr-branch`, or `default-branch` for an Align files PR
 whose branch is regenerated) and the weekly count left. `refused` says why a

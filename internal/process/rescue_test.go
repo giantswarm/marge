@@ -49,7 +49,7 @@ func TestRescueCandidate_recordsWhatTheHandoffNeeds(t *testing.T) {
 	require.Equal(t, []string{"go-build"}, candidate.Checks)
 	require.Equal(t, "https://github.com/giantswarm/marge/actions/runs/1/job/2", candidate.CheckURLs["go-build"])
 	require.Equal(t, "abc123abc123", candidate.Signature)
-	require.Equal(t, []string{"."}, candidate.Modules())
+	require.Equal(t, []string{"go.mod", "go.sum"}, candidate.Files)
 	require.Empty(t, run.notes)
 }
 
@@ -372,15 +372,18 @@ func TestHandoff_refusesAPRThatChangedSinceTheSweep(t *testing.T) {
 	}
 }
 
-// An open PR of a person on the same module is a hard stop; one on another
-// module is not.
+// An open PR of a person that changes a file the candidate changes is a hard
+// stop; one that changes other files of the same module is not, and neither
+// is one in a nested module.
 func TestHandoff_teammatePRs(t *testing.T) {
 	tests := []struct {
 		name  string
 		files []string
 		want  string
 	}{
-		{"same module", []string{"cmd/root.go"}, "teammate PR #9 changes cmd/root.go, in the module at ."},
+		{"same file", []string{"cmd/root.go", "go.sum"}, "teammate PR #9 also changes go.sum"},
+		{"other files of the root module", []string{"cmd/root.go", "main.go"}, ""},
+		{"a nested module's manifest", []string{"api/go.mod"}, ""},
 		{"no teammate PR", nil, ""},
 	}
 	for _, tt := range tests {
@@ -408,22 +411,24 @@ func TestHandoff_teammatePRs(t *testing.T) {
 	}
 }
 
-// A candidate in a nested module collides only with work under that module.
-func TestHandoff_aNestedModuleCollidesOnlyWithItself(t *testing.T) {
+// A candidate whose diff could not be read collides with any open PR of a
+// person, whatever that PR changes.
+func TestHandoff_anUnknownDiffCollidesWithEveryTeammatePR(t *testing.T) {
 	gh := newHandoffGitHub()
 	gh.addPull(1, "head")
 	gh.open = []*github.PullRequest{{Number: new(9), User: &github.User{Login: new("a-person")}}}
-	gh.openFiles[9] = []string{"tools/gen/main.go"}
+	gh.openFiles[9] = []string{"docs/README.md"}
 	p := rescueProcessor()
 	p.Client = newTestClient(t, gh.server(t))
 	status := candidates(1)
 	entry := status.Entry(0)
-	entry.Candidate.Files = []string{"api/go.mod", "api/go.sum"}
+	entry.Candidate.Files = nil
 	status.SetCandidate(0, entry.Candidate)
 
 	h := p.Handoff(t.Context(), status, handoffOptions(0, nil))
 
-	require.Equal(t, 1, h.Count())
+	require.Zero(t, h.Count())
+	require.Equal(t, "teammate PR #9 is open and the diff of this PR is unknown", h.Refused[0].Reason)
 }
 
 // The repository root is believed over the team file, and the run's

@@ -179,10 +179,50 @@ func TestRescuesCountsTheWeek(t *testing.T) {
 		3: {rescueComment(pr.RescueOutcomeMerged, now)},
 	}, &queries)
 
-	got, err := Search{Client: client, Org: "giantswarm", Since: since}.Rescues(t.Context(), []string{"giantswarm/repo1", "giantswarm/Repo2"})
+	got, err := Search{Client: client, Org: "giantswarm", Since: since}.Rescues(t.Context(), []string{"giantswarm/repo1", "giantswarm/Repo2"}, 5)
 
 	require.NoError(t, err)
 	require.Equal(t, 2, got, "two on repo1; repo2's marker is older than the week and its evidence does not count; repo3 is another team's")
 	require.Len(t, queries, 1)
 	require.Contains(t, queries[0], `org:giantswarm is:pr in:comments "AI rescue" updated:>=`)
+}
+
+// A week that reached the limit is spent: the count stops there, however many
+// markers the week holds.
+func TestRescuesStopsAtTheLimit(t *testing.T) {
+	now := time.Now().UTC()
+	client := searchServer(t, map[int][]*github.IssueComment{
+		1: {rescueComment(pr.RescueOutcomeFailed, now), rescueComment(pr.RescueOutcomeFixed, now), rescueComment(pr.RescueOutcomeMerged, now)},
+	}, nil)
+
+	got, err := Search{Client: client, Org: "giantswarm", Since: now.Add(-time.Hour)}.Rescues(t.Context(), []string{"giantswarm/repo1"}, 2)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, got)
+}
+
+// A limit of zero reads nothing: no search, no comments.
+func TestRescuesWithoutALimitReadsNothing(t *testing.T) {
+	client := searchServer(t, nil, nil)
+
+	got, err := Search{Client: client, Org: "giantswarm"}.Rescues(t.Context(), []string{"giantswarm/repo1"}, 0)
+
+	require.NoError(t, err)
+	require.Zero(t, got)
+}
+
+// A count that would read the comments of more than maxRescuePRs pull
+// requests without reaching the limit fails rather than read on.
+func TestRescuesRefusesPastThePRCap(t *testing.T) {
+	markers := make(map[int][]*github.IssueComment, maxRescuePRs+1)
+	repos := make([]string, 0, maxRescuePRs+1)
+	for number := 1; number <= maxRescuePRs+1; number++ {
+		markers[number] = nil
+		repos = append(repos, fmt.Sprintf("giantswarm/repo%d", number))
+	}
+	client := searchServer(t, markers, nil)
+
+	_, err := Search{Client: client, Org: "giantswarm", Since: time.Now().Add(-time.Hour)}.Rescues(t.Context(), repos, 5)
+
+	require.ErrorContains(t, err, "more than 200 pull requests")
 }

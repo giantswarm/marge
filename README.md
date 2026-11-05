@@ -248,12 +248,12 @@ The `rescue` step hands the PRs no rule recognised to whoever runs the rescue: t
 - no security check failed, and every required check reported;
 - the team's policy, and the repository's exception, allow rescues;
 - no [rescue marker](#rescue-markers-prior-ai-rescue-attempts) stands for the change on the branch;
-- the team's weekly count is not spent: every rescue marker of the last seven days on the team's PRs counts, merged and closed PRs included, and a count that cannot be read hands nothing over;
+- the team's weekly count is not spent: every rescue marker of the last seven days on the team's PRs counts, merged and closed PRs included. The count stops at the weekly limit, and one that cannot be read, or would read the comments of more than 200 PRs before reaching it, hands nothing over;
 - a read just before the handoff finds the PR still open, on the head the sweep classified, without a conflict;
-- no open PR of a person changes a file under the directory of a dependency manifest (`go.mod`, `package.json`, `Chart.yaml`, ...) the bot PR changes. For a manifest at the repository root that is every file of the repository;
+- no open PR of a person changes a file the bot PR changes. A bot PR whose diff could not be read collides with every open PR of a person;
 - with `--toolchain`, the repository's language is the one the run's image builds. The language is the team file's `gen.language`, unless the repository root carries `go.mod`, `package.json`, `pyproject.toml` or `requirements.txt` for another one, which wins and is noted.
 
-The candidates are taken one repository at a time. A PR handed over is labelled `marge/rescued` until the next sweep. `--output json` carries the handoff as `rescue_handoff`: `team`, `triggered_by` (the login, or `--triggered-by`), `toolchain`, `budget` (`weekly`, `used`, `remaining`, and the declared `timeout` and `per_rescue_usd`), `repositories` (each with its `language`, and its PRs with `url`, `kind`, `update_type`, `head_sha`, `write_target`, `failing_checks` with the log URL of each, `signature` and `excerpt`) and `refused` (each candidate turned away, with the reason). `write_target` is `pr-branch`, or `default-branch` for an Align files PR, whose branch is regenerated every cycle.
+The candidates are taken one repository at a time. A PR handed over is labelled `marge/rescued` until the next sweep. `--output json` carries the handoff as `rescue_handoff`: `team`, `triggered_by` (the login, or `--triggered-by`), `toolchain`, `budget` (`weekly`, `used` (counted up to `weekly`), `remaining`, and the declared `timeout` and `per_rescue_usd`), `repositories` (each with its `language`, and its PRs with `url`, `kind`, `update_type`, `head_sha`, `write_target`, `failing_checks` with the log URL of each, `signature` and `excerpt`) and `refused` (each candidate turned away, with the reason). `write_target` is `pr-branch`, or `default-branch` for an Align files PR, whose branch is regenerated every cycle.
 
 ```bash
 marge sweep --team bumblebee --actions remedy,rescue,mark --toolchain go --output json

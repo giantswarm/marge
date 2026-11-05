@@ -1,15 +1,13 @@
 package pr
 
 import (
-	"path"
-	"slices"
 	"time"
 )
 
 // RescueCandidate is a PR that passed every rescue precondition the sweep
 // can decide from the PR alone. The run-level step decides the rest: the
 // team's weekly count, the PR's state just before handoff, an open
-// teammate PR on the same module and the run's toolchain.
+// teammate PR on the same files and the run's toolchain.
 type RescueCandidate struct {
 	// HeadSHA is the head the sweep classified. A head that moved before
 	// the handoff is a different change, which the next sweep classifies.
@@ -22,38 +20,8 @@ type RescueCandidate struct {
 	Signature string
 	Excerpt   string
 	// Files are the paths of the PR diff. Nil when the comparison could not
-	// be had or was truncated, in which case no module is known.
+	// be had or was truncated.
 	Files []string
-}
-
-// Modules returns the directories of the dependency manifests the diff
-// changes: the modules a teammate's PR would collide with.
-func (c *RescueCandidate) Modules() []string {
-	var dirs []string
-	for _, file := range c.Files {
-		if !manifests[path.Base(file)] {
-			continue
-		}
-		dir := path.Dir(file)
-		if !slices.Contains(dirs, dir) {
-			dirs = append(dirs, dir)
-		}
-	}
-	return dirs
-}
-
-// manifests are the files that declare a module's dependencies. A bot PR
-// changes at least one of them; a teammate's PR that changes a file under
-// the same directory works on the same module.
-var manifests = map[string]bool{
-	"go.mod":            true,
-	"go.sum":            true,
-	"package.json":      true,
-	"package-lock.json": true,
-	"Chart.yaml":        true,
-	"Chart.lock":        true,
-	"requirements.txt":  true,
-	"pyproject.toml":    true,
 }
 
 // WriteTarget says where a rescue of a PR of this kind pushes its fix.
