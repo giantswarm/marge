@@ -7,11 +7,11 @@ toolchain go1.27.3
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/go-selfupdate v1.6.7
-	github.com/giantswarm/mcp-toolkit v0.4.7
+	github.com/giantswarm/mcp-toolkit v0.4.12
 	github.com/giantswarm/selfupdate-cosign v0.3.15
 	github.com/google/go-github/v93 v93.0.0
 	github.com/manifoldco/promptui v0.9.0
-	github.com/mark3labs/mcp-go v1.4.0
+	github.com/mark3labs/mcp-go v1.5.0
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
