@@ -171,13 +171,26 @@ func Known(groups []Group) string {
 	return strings.Join(lines, "\n  ")
 }
 
+// maxRescuePRs bounds the pull requests whose comments one count reads. The
+// search also matches PRs that carry only sweep evidence or markers older
+// than Since, so a busy week reads more PRs than it counts.
+const maxRescuePRs = 200
+
 // Rescues counts the rescue attempts recorded on the pull requests of repos
 // on or after Since: every rescue marker, whatever its outcome, on an open,
 // merged or closed pull request. Sweep evidence does not count. repos holds
 // owner/name entries; a pull request outside them is another team's.
-func (s Search) Rescues(ctx context.Context, repos []string) (int, error) {
+//
+// The count stops at limit: a week that reached it is spent, however far
+// past it went, so limit is returned and nothing more is read. A limit of
+// zero or less reads nothing. A count that would read the comments of more
+// than maxRescuePRs pull requests before reaching limit is an error.
+func (s Search) Rescues(ctx context.Context, repos []string, limit int) (int, error) {
 	if s.Org == "" {
 		return 0, fmt.Errorf("no organization to search")
+	}
+	if limit <= 0 {
+		return 0, nil
 	}
 	scope := make(map[string]bool, len(repos))
 	for _, repo := range repos {
@@ -189,7 +202,7 @@ func (s Search) Rescues(ctx context.Context, repos []string) (int, error) {
 		query += " updated:>=" + s.Since.UTC().Format(time.DateOnly)
 	}
 	opts := &github.SearchOptions{Sort: "updated", ListOptions: github.ListOptions{PerPage: searchPageSize}}
-	count := 0
+	count, read := 0, 0
 	for {
 		result, resp, err := s.Client.Search.Issues(ctx, query, opts)
 		if err != nil {
@@ -200,11 +213,18 @@ func (s Search) Rescues(ctx context.Context, repos []string) (int, error) {
 			if err != nil || !scope[strings.ToLower(owner+"/"+repo)] {
 				continue
 			}
-			n, err := s.rescueMarkers(ctx, owner, repo, issue.GetNumber())
+			if read == maxRescuePRs {
+				return 0, fmt.Errorf("the rescue markers of %s span more than %d pull requests since %s", s.Org, maxRescuePRs, s.Since.UTC().Format(time.DateOnly))
+			}
+			read++
+			n, err := s.rescueMarkers(ctx, owner, repo, issue.GetNumber(), limit-count)
 			if err != nil {
 				return 0, err
 			}
 			count += n
+			if count >= limit {
+				return limit, nil
+			}
 		}
 		if resp == nil || resp.NextPage == 0 {
 			return count, nil
@@ -216,7 +236,8 @@ func (s Search) Rescues(ctx context.Context, repos []string) (int, error) {
 // rescueMarkers counts the rescue markers of one pull request written on
 // or after Since. A marker without a time cannot be placed in a week, so it
 // counts: an attempt that cannot be dated is not proof that none was made.
-func (s Search) rescueMarkers(ctx context.Context, owner, repo string, number int) (int, error) {
+// It stops reading once want markers are counted.
+func (s Search) rescueMarkers(ctx context.Context, owner, repo string, number, want int) (int, error) {
 	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: commentPageSize}}
 	count := 0
 	for {
@@ -233,6 +254,9 @@ func (s Search) rescueMarkers(ctx context.Context, owner, repo string, number in
 				continue
 			}
 			count++
+			if count >= want {
+				return count, nil
+			}
 		}
 		if resp == nil || resp.NextPage == 0 {
 			return count, nil

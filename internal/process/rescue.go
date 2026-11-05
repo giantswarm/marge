@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -58,7 +57,12 @@ func (p *Processor) rescueRefusal(ctx context.Context, run *prRun, resolved *pr.
 		return "the author is not a trusted bot"
 	case classifySecurityFailure(run.failing, p.securityPatterns()) != "":
 		return "a security check failed"
-	case len(run.required.Missing) > 0 || len(run.required.Pending) > 0 || run.checksPending:
+	case len(run.required.Pending) > 0 || run.checksPending:
+		return "required checks have not all reported"
+	// A failed required check with nothing still running is the verdict: a
+	// required job behind it (a CircleCI job whose required job failed) runs
+	// only on a new head, which is what the rescue pushes.
+	case len(run.required.Missing) > 0 && len(run.required.Failed) == 0:
 		return "required checks have not all reported"
 	}
 	fresh := remedy.FreshRescue(run.rescueMarker(ctx, p), run.pull.GetHead().GetSHA(),
@@ -86,7 +90,7 @@ type HandoffOptions struct {
 // Handoff decides which candidates the run hands to the agent, and labels
 // each one it hands over. It applies what the PR alone cannot decide: the
 // team's weekly count, the PR's state just before the handoff, an open
-// teammate PR on the same module and the run's toolchain. Candidates are
+// teammate PR on the same files and the run's toolchain. Candidates are
 // taken in table order, so one repository's PRs go together.
 //
 // A weekly count that cannot be read hands nothing over.
@@ -246,25 +250,22 @@ func languageName(language string) string {
 	return language
 }
 
-// teammateRefusal refuses a candidate while an open PR of a person changes
-// a file under the directory of a manifest the candidate changes: two
-// changes to one module at once leave one of them to be redone. A
-// candidate whose diff could not be read collides with every teammate PR.
+// teammateRefusal refuses a candidate while an open PR of a person changes a
+// file the candidate changes: two changes to one file at once leave one of
+// them to be redone. A candidate whose diff could not be read collides with
+// every teammate PR.
 func (p *Processor) teammateRefusal(ctx context.Context, facts *repoFacts, candidate *pr.RescueCandidate) string {
 	teammates, err := p.teammatePRs(ctx, facts)
 	if err != nil {
 		return ghErrorDetail("the open PRs could not be read", err)
 	}
-	modules := candidate.Modules()
 	for _, teammate := range teammates {
 		if candidate.Files == nil {
 			return fmt.Sprintf("teammate PR #%d is open and the diff of this PR is unknown", teammate.number)
 		}
 		for _, file := range teammate.files {
-			for _, module := range modules {
-				if module == "." || strings.HasPrefix(file, module+"/") {
-					return fmt.Sprintf("teammate PR #%d changes %s, in the module at %s", teammate.number, file, path.Clean(module))
-				}
+			if slices.Contains(candidate.Files, file) {
+				return fmt.Sprintf("teammate PR #%d also changes %s", teammate.number, file)
 			}
 		}
 	}

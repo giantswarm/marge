@@ -365,21 +365,22 @@ func handoffOptions(client *github.Client, login string, opts RunOptions) proces
 		triggeredBy = login
 	}
 	since := time.Now().Add(-rescueWeek)
+	rescue := opts.Policies.Base().Rescue
 	return process.HandoffOptions{
 		Team:        opts.Team,
 		TriggeredBy: triggeredBy,
 		Toolchain:   opts.Toolchain,
-		Rescue:      opts.Policies.Base().Rescue,
+		Rescue:      rescue,
 		Languages:   opts.Languages,
 		Used: func(ctx context.Context) (int, error) {
-			return weeklyRescues(ctx, client, opts.TeamRepos, since)
+			return weeklyRescues(ctx, client, opts.TeamRepos, since, rescue.Weekly)
 		},
 	}
 }
 
 // weeklyRescues counts the rescue markers written since on the pull
-// requests of the team's repositories, one search per owner.
-func weeklyRescues(ctx context.Context, client *github.Client, repos []string, since time.Time) (int, error) {
+// requests of the team's repositories, one search per owner, up to limit.
+func weeklyRescues(ctx context.Context, client *github.Client, repos []string, since time.Time, limit int) (int, error) {
 	if len(repos) == 0 {
 		return 0, errors.New("the team scope lists no repository to count rescues in")
 	}
@@ -392,7 +393,10 @@ func weeklyRescues(ctx context.Context, client *github.Client, repos []string, s
 	}
 	total := 0
 	for _, owner := range owners {
-		n, err := patterns.Search{Client: client, Org: owner, Since: since}.Rescues(ctx, repos)
+		if total >= limit {
+			break
+		}
+		n, err := patterns.Search{Client: client, Org: owner, Since: since}.Rescues(ctx, repos, limit-total)
 		if err != nil {
 			return 0, err
 		}
