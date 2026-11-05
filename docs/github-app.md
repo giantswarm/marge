@@ -91,7 +91,8 @@ marge dispatches one workflow and no other. `dispatch-cve-workflow` names the
 swept repository's own generated `zz_generated.fix_vulnerabilities.yaml`, on
 the pull request's base branch. `Actions: write` is organization-wide once the
 App is installed everywhere, so GitHub enforces no such limit; the action
-does.
+does. It also dispatches nothing while the remediation PR that workflow keeps
+open against the base (head `remediate-vulnerabilities-<base>`) is still open.
 
 The App does **not** hold `Workflows: write`. The align-files App holds it
 because it writes workflow files. marge never writes one.
