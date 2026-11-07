@@ -39,6 +39,9 @@
         "clusterID": {
             "type": "string"
         },
+        "externalDNSIP": {
+            "type": "string"
+        },
         "fullnameOverride": {
             "type": "string",
             "description": "Overrides the fully qualified resource name"
@@ -51,8 +54,18 @@
                 "object",
                 "null"
             ],
-            "description": "Global values shared between all subcharts",
-            "$comment": "Added automatically by 'helm schema' to allow this chart to be used as a Helm dependency, as this schema would otherwise not allow Helm's special 'global' values key."
+            "description": "Global values shared between all subcharts and the platform.",
+            "additionalProperties": true,
+            "properties": {
+                "podSecurityStandards": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        },
+        "helm": {
+            "type": "object",
+            "additionalProperties": true
         },
         "image": {
             "type": "object",
@@ -79,6 +92,9 @@
         "imagePullSecrets": {
             "type": "array",
             "description": "Image pull secrets for the pod"
+        },
+        "managementCluster": {
+            "type": "string"
         },
         "marge": {
             "type": "object",
@@ -356,9 +372,18 @@
                     "type": "integer",
                     "description": "Successful Jobs kept"
                 },
+                "suiteLimit": {
+                    "type": "integer",
+                    "description": "E2e suites one scheduled run may start by commenting the command Heimdall named. Every suite builds clusters on the shared test management cluster, whose Flux helm-controller stalls when too many reconcile at once; the PRs past the limit wait for a later run. 0 starts none.",
+                    "minimum": 0
+                },
                 "timeZone": {
                     "type": "string",
                     "description": "IANA timezone the cron expressions are read in."
+                },
+                "ttlSecondsAfterFinished": {
+                    "type": "integer",
+                    "description": "Seconds a finished Job is kept before Kubernetes deletes it with its pod, so no run outlives the chart that made it. Three days keep the last run of a weekday schedule over a weekend."
                 }
             }
         },

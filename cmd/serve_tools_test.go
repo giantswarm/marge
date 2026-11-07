@@ -59,50 +59,64 @@ func TestTools_areTheEquivalentEngineCall(t *testing.T) {
 			name:      "list is the classify step on a dry run",
 			arguments: map[string]any{"team": "bumblebee"},
 			build:     listRequest,
-			cli:       RunOptions{Team: "bumblebee", DryRun: true},
+			cli:       RunOptions{Team: "bumblebee", DryRun: true, SuiteLimit: DefaultSuiteLimit},
 			actions:   "classify",
 		},
 		{
 			name:      "list narrowed to a few PRs",
 			arguments: map[string]any{"team": "bumblebee", "prs": []any{"giantswarm/marge#7"}},
 			build:     listRequest,
-			cli:       RunOptions{Team: "bumblebee", DryRun: true, PRs: []string{"giantswarm/marge#7"}},
+			cli:       RunOptions{Team: "bumblebee", DryRun: true, PRs: []string{"giantswarm/marge#7"}, SuiteLimit: DefaultSuiteLimit},
 			actions:   "classify",
 		},
 		{
 			name:      "sweep passes its scope and steps through",
 			arguments: map[string]any{"team": "bumblebee", "actions": "classify,merge", "dry_run": true},
 			build:     parseSweepRequest,
-			cli:       RunOptions{Team: "bumblebee", DryRun: true},
+			cli:       RunOptions{Team: "bumblebee", DryRun: true, SuiteLimit: DefaultSuiteLimit},
 			actions:   "classify,merge",
 		},
 		{
 			name:      "sweep defaults to every step and writes",
 			arguments: map[string]any{"query": "typescript"},
 			build:     parseSweepRequest,
-			cli:       RunOptions{Query: "typescript"},
+			cli:       RunOptions{Query: "typescript", SuiteLimit: DefaultSuiteLimit},
 			actions:   "",
 		},
 		{
 			name:      "remedy is classify, remedy and mark on one PR",
 			arguments: map[string]any{"pr_url": "https://github.com/giantswarm/marge/pull/7"},
 			build:     remedyRequest,
-			cli:       RunOptions{PRs: []string{"https://github.com/giantswarm/marge/pull/7"}},
+			cli:       RunOptions{PRs: []string{"https://github.com/giantswarm/marge/pull/7"}, SuiteLimit: DefaultSuiteLimit},
 			actions:   "classify,remedy,mark",
 		},
 		{
 			name:      "remedy carries the dry run",
 			arguments: map[string]any{"pr_url": "giantswarm/marge#7", "dry_run": true},
 			build:     remedyRequest,
-			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, DryRun: true},
+			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, DryRun: true, SuiteLimit: DefaultSuiteLimit},
 			actions:   "classify,remedy,mark",
 		},
 		{
 			name:      "remedy under a team is decided by that team's policy",
 			arguments: map[string]any{"pr_url": "giantswarm/marge#7", "team": "bumblebee"},
 			build:     remedyRequest,
-			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, Team: "bumblebee"},
+			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, Team: "bumblebee", SuiteLimit: DefaultSuiteLimit},
 			actions:   "classify,remedy,mark",
+		},
+		{
+			name:      "rescue is classify, remedy, rescue and mark on one PR of a team",
+			arguments: map[string]any{"pr_url": "https://github.com/giantswarm/marge/pull/7", "team": "bumblebee"},
+			build:     rescueRequest,
+			cli:       RunOptions{PRs: []string{"https://github.com/giantswarm/marge/pull/7"}, Team: "bumblebee", SuiteLimit: DefaultSuiteLimit},
+			actions:   "classify,remedy,rescue,mark",
+		},
+		{
+			name:      "rescue carries the dry run",
+			arguments: map[string]any{"pr_url": "giantswarm/marge#7", "team": "bumblebee", "dry_run": true},
+			build:     rescueRequest,
+			cli:       RunOptions{PRs: []string{"giantswarm/marge#7"}, Team: "bumblebee", DryRun: true, SuiteLimit: DefaultSuiteLimit},
+			actions:   "classify,remedy,rescue,mark",
 		},
 	}
 
@@ -149,6 +163,7 @@ func TestScopeRepos(t *testing.T) {
 
 // TestTools_annotations holds what a client is told before it calls: only
 // list is read-only, and the two tools that change a PR are destructive.
+// Every registered tool is in the table.
 // mcp-go fills an unset hint with the specification's default, so every
 // hint is spelled out and every one of them is checked.
 func TestTools_annotations(t *testing.T) {
@@ -160,7 +175,17 @@ func TestTools_annotations(t *testing.T) {
 		{tool: listTool(), readOnly: true, destructive: false},
 		{tool: sweepTool(), readOnly: false, destructive: true},
 		{tool: remedyTool(), readOnly: false, destructive: true},
+		{tool: rescueTool(), readOnly: false, destructive: true},
 		{tool: markTool(), readOnly: false, destructive: false},
+		{tool: changelogTool(), readOnly: false, destructive: false},
+	}
+
+	declared := map[string]bool{}
+	for _, tt := range tests {
+		declared[tt.tool.Name] = true
+	}
+	for name := range docsServer().ListTools() {
+		require.True(t, declared[name], "%s is registered but its annotations are not checked here", name)
 	}
 
 	for _, tt := range tests {
@@ -180,7 +205,7 @@ func TestTools_annotations(t *testing.T) {
 // TestWritingTools_takeADryRun holds the rule that every tool which can
 // change a PR offers a preview of what it would change.
 func TestWritingTools_takeADryRun(t *testing.T) {
-	for _, tool := range []mcp.Tool{sweepTool(), remedyTool(), markTool()} {
+	for _, tool := range []mcp.Tool{sweepTool(), remedyTool(), rescueTool(), markTool()} {
 		t.Run(tool.Name, func(t *testing.T) {
 			require.Contains(t, tool.InputSchema.Properties, "dry_run")
 		})
@@ -198,6 +223,7 @@ func TestTools_withoutAGrantAskForASignIn(t *testing.T) {
 		"list":   tools.handleList,
 		"sweep":  tools.handleSweep,
 		"remedy": tools.handleRemedy,
+		"rescue": tools.handleRescue,
 		"mark":   tools.handleMark,
 	}
 
@@ -238,6 +264,16 @@ func TestRemedyRequest_rejectsAReferenceThatIsNotAPR(t *testing.T) {
 		_, err := remedyRequest(call(map[string]any{"pr_url": ref}))
 		require.Error(t, err, "reference %q must be refused", ref)
 	}
+}
+
+// TestRescueRequest_needsATeam holds that a rescue is always counted
+// against a team: without one there is no week to count it in.
+func TestRescueRequest_needsATeam(t *testing.T) {
+	_, err := rescueRequest(call(map[string]any{"pr_url": "giantswarm/marge#7"}))
+	require.ErrorIs(t, err, errRescueNeedsTeam)
+
+	_, err = rescueRequest(call(map[string]any{"pr_url": "giantswarm/marge", "team": "bumblebee"}))
+	require.Error(t, err, "a reference that is not a PR must be refused")
 }
 
 // TestListRequest_isAlwaysReadOnly holds that no argument turns the

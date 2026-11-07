@@ -31,6 +31,7 @@ the index.
 | Pattern | Rule | Action | Runbook row |
 |---|---|---|---|
 | A CircleCI build the platform cancelled | `circleci-auto-cancel` | `circleci-retry` | 74 |
+| A CircleCI executor image pull the registry rate-limited | `circleci-executor-image-pull-rate-limited` | `circleci-retry` | observed 2026-10-09 |
 | cosign transparency-log conflict | `cosign-transparency-log-conflict` | `circleci-retry` | 32 |
 | A chart push that lost the race on the shared app catalog | `circleci-catalog-push-race` | `circleci-retry` | observed 2026-09-18 to 2026-09-21 |
 | A release asset 404 moments after publication | `release-asset-404-race` | `rerun-failed` | 33 |
@@ -177,7 +178,7 @@ the pattern. Each says which.
 
 | Pattern | Why no rule expresses it | Runbook row |
 |---|---|---|
-| An archived repository still carrying open bot PRs | The sweep never sees them. Discovery searches `is:pr is:open archived:false`, so the PRs are filtered out before classification, and an archived repository is read-only in any case | 8 |
+| An archived repository still carrying open bot PRs | An archived repository is read-only, so no remedy can act. The query scope searches `is:pr is:open archived:false` and never sees the PRs; the team scope skips them and reports the team-file entry that still declares the repository as the `archived` finding | 8 |
 | An architect-orb bump on a devctl-managed repository | The signal is the repository's own CircleCI config, not anything on the PR. A rule reads the diff, the checks and the logs, never a file on the default branch. The runbook's remedy also ends in "coordinate with the operator" | 30 |
 | A transitive-only `/v2` un-pin leaving a vulnerable v1 path | The signal is `go mod why` reporting that the main module does not need the package, which the engine cannot run. The nancy line alone does not separate a pin floor that still holds from a real finding, and the action would be `close` | 48 |
 

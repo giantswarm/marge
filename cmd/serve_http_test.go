@@ -145,3 +145,32 @@ func TestServeRejectsUnknownTransport(t *testing.T) {
 		t.Fatalf("RunE with an unknown transport = %v, want an unknown transport error", err)
 	}
 }
+
+// TestHTTPHandler_bodyIsBounded: a body beyond the bound is refused, and the
+// endpoint keeps answering.
+func TestHTTPHandler_bodyIsBounded(t *testing.T) {
+	handler, streamable := httpHandler(newMCPServer(gh.NewCallerClient))
+	t.Cleanup(func() { streamable.CloseSessions(context.Background()) })
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	post := func(body string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+mcpEndpoint, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer gho_test")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	big := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"` + strings.Repeat("x", maxMCPBodyBytes) + `"}}`
+	if got := post(big); got < 400 {
+		t.Fatalf("oversized body = %d, want an error", got)
+	}
+	if got := post(`{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`); got != http.StatusOK {
+		t.Fatalf("initialize = %d, want 200", got)
+	}
+}

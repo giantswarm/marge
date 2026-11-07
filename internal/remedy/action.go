@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
 	"github.com/giantswarm/marge/internal/pr"
@@ -56,6 +56,9 @@ type Deps struct {
 	// Login is the authenticated account, used to recognise the sweep's own
 	// review and its own markers.
 	Login string
+	// Suites is the run's e2e suite budget, shared by every PR of the run.
+	// Nil bounds nothing.
+	Suites *SuiteBudget
 }
 
 // Required partitions a base branch's required contexts by what the PR head

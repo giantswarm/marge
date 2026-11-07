@@ -5,35 +5,36 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/giantswarm/marge/internal/process"
+	"github.com/giantswarm/marge/internal/policy"
+	"github.com/giantswarm/marge/internal/pr"
 )
 
-// TestClassifyOnly holds what widens the fan-out: the classify step alone,
-// and nothing that writes. A set that carries one write step is a sweep, and
-// keeps the policy's own bounds.
-func TestClassifyOnly(t *testing.T) {
-	classify, err := process.ParseActions("classify")
-	require.NoError(t, err)
-	require.True(t, classify.ClassifyOnly())
+// TestFanOut holds what every run reads and writes under: the reads go as
+// wide as GitHub answers, or as the policy where it declares wider, and the
+// writes keep the policy's bounds.
+func TestFanOut(t *testing.T) {
+	defaults := pr.CompanyDefaults().Concurrency
 
-	withApprove, err := process.ParseActions("classify,approve")
-	require.NoError(t, err)
-	require.False(t, withApprove.ClassifyOnly())
+	tests := []struct {
+		name       string
+		file       string
+		wantReads  pr.Concurrency
+		wantWrites pr.Concurrency
+	}{
+		{"company defaults", "", pr.ReadConcurrency, defaults},
+		{"a policy wider than the read bound", "concurrency:\n  perTeam: 20\n", pr.Concurrency{PerTeam: 20, PerRepo: pr.ReadConcurrency.PerRepo}, pr.Concurrency{PerTeam: 20, PerRepo: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc, err := policy.ParseDocument(policy.DefaultFile, tt.file)
+			require.NoError(t, err)
+			set, err := policy.NewSet([]policy.File{{Path: policy.DefaultFile, Doc: doc}}, nil)
+			require.NoError(t, err)
 
-	every, err := process.ParseActions("")
-	require.NoError(t, err)
-	require.False(t, every.ClassifyOnly())
+			reads, writes := fanOut(RunOptions{Policies: set})
 
-	require.False(t, process.ActionSet(nil).ClassifyOnly(), "a nil set performs every action")
-	require.False(t, process.ActionSet{}.ClassifyOnly(), "an empty set classifies nothing")
-}
-
-// TestListRequestIsClassifyOnly ties the list tool to that: a refresh is the
-// classify step on a dry run, which is what lets it read wide.
-func TestListRequestIsClassifyOnly(t *testing.T) {
-	req, err := listRequest(call(map[string]any{"team": "bumblebee", "refresh": true}))
-
-	require.NoError(t, err)
-	require.True(t, req.Opts.DryRun)
-	require.True(t, req.Opts.Actions.ClassifyOnly())
+			require.Equal(t, tt.wantReads, reads)
+			require.Equal(t, tt.wantWrites, writes)
+		})
+	}
 }

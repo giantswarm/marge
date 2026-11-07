@@ -1,0 +1,15 @@
+name: an executor image pull the registry rate-limited is retried
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update vendir https://github.com/block/buzz to v0.5.2"
+  failing: ["ci/circleci: push-buzz-minio-to-registries"]
+  logs:
+    "circleci:ci/circleci: push-buzz-minio-to-registries": |
+      Status: Downloaded newer image for public.ecr.aws/eks-distro/kubernetes/pause:3.6
+      Starting container gsoci.azurecr.io/giantswarm/architect:8.5.0
+        image cache not found on this host, downloading gsoci.azurecr.io/giantswarm/architect:8.5.0
+      Error response from daemon: toomanyrequests: Too many requests. Please visit https://aka.ms/acr/skus to view limits of all service tiers.
+expect:
+  rule: circleci-executor-image-pull-rate-limited
+  check: "ci/circleci: push-buzz-minio-to-registries"

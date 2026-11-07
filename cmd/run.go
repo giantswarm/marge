@@ -2,16 +2,18 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/marge/internal/fanout"
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
@@ -39,6 +41,7 @@ func init() {
 	runCmd.Flags().StringVar(&runFlags.rulesRepo, "rules-repo", "", "Repository the rule catalogue is read from, as owner/name")
 	runCmd.Flags().StringVar(&runFlags.rulesRef, "rules-ref", "", "Branch the rule catalogue is read from")
 	runCmd.Flags().StringVar(&runFlags.rulesPath, "rules-path", "", "Read the rule catalogue from this directory instead of the repository")
+	runCmd.Flags().IntVar(&runOpts.SuiteLimit, "suite-limit", DefaultSuiteLimit, "How many e2e suites one pass may start by commenting the command a gate named; 0 starts none")
 	runCmd.Flags().StringVar(&runOpts.SecurityPatterns, "security-patterns", "", "Comma-separated case-insensitive substrings added to the built-in list that flags failing CI checks as security-related")
 
 	rootCmd.AddCommand(runCmd)
@@ -62,6 +65,12 @@ and merge the eligible green ones.`,
 		actions, err := process.ParseActions(runActions)
 		if err != nil {
 			return err
+		}
+		if actions.Selected(process.ActionRescue) {
+			return errRescueNeedsTeam
+		}
+		if runOpts.SuiteLimit < 0 {
+			return fmt.Errorf("--suite-limit %d: want 0 or more", runOpts.SuiteLimit)
 		}
 		runOpts.Actions = actions
 		runOpts.CheckTimeout = interactiveCheckTimeout
@@ -89,7 +98,7 @@ and merge the eligible green ones.`,
 				return err
 			}
 
-			found, err := searchPRs(ctx, client, query, login, scope.Repos)
+			found, err := searchPRs(ctx, client, query, login, scope.Repos, runOpts.Parallel)
 			if err != nil {
 				return fmt.Errorf("searching PRs: %w", err)
 			}
@@ -98,11 +107,11 @@ and merge the eligible green ones.`,
 			}
 			prs := filterByOrg(found.PRs, runOpts.Org)
 
-			catalogue, rulesReport := loadRules(ctx, client, source)
+			catalogue, rulesReport := loadRules(ctx, client, source, runOpts.Parallel)
 			reportRules(os.Stderr, rulesReport)
 
 			opts := runOpts
-			opts.Policies = scope.Policies
+			opts.useScope(scope)
 			opts.Rules = catalogue
 			opts.Cols = pr.FullColumns()
 
@@ -152,8 +161,10 @@ type repoFailure struct {
 // repositories and query is a case-insensitive substring filter on the
 // repository names; without one it runs the GitHub search, where query
 // becomes part of the search string. Only PRs of the trusted kinds are
-// returned.
-func searchPRs(ctx context.Context, client *github.Client, query string, login string, repos []string) (discovery, error) {
+// returned. parallel bounds the searches run at once, as fanout.Each reads
+// it; the PRs come back in the order of the searches whatever order they
+// answered in.
+func searchPRs(ctx context.Context, client *github.Client, query string, login string, repos []string, parallel int) (discovery, error) {
 	if len(repos) > 0 {
 		return listRepoPRs(ctx, client, repos, query)
 	}
@@ -172,23 +183,32 @@ func searchPRs(ctx context.Context, client *github.Client, query string, login s
 	// caller's own repositories as the caller.
 	filters = append(filters, fmt.Sprintf("user:%s author:%s head:%s", login, login, pr.RenovateBranchPrefix))
 
-	seen := make(map[string]bool)
-	var found discovery
-	for _, filter := range filters {
-		searchQuery := strings.TrimSpace(fmt.Sprintf("%s is:pr is:open archived:false %s", query, filter))
-		prs, err := searchIssuePRs(ctx, client, searchQuery, seen)
-		if err != nil {
-			return discovery{}, err
-		}
-		found.PRs = append(found.PRs, prs...)
+	results := make([][]pr.PRInfo, len(filters))
+	errs := make([]error, len(filters))
+	fanout.Each(len(filters), parallel, func(i int) {
+		searchQuery := strings.TrimSpace(fmt.Sprintf("%s is:pr is:open archived:false %s", query, filters[i]))
+		results[i], errs[i] = searchIssuePRs(ctx, client, searchQuery)
+	})
+	if err := errors.Join(errs...); err != nil {
+		return discovery{}, err
 	}
 
+	seen := make(map[string]bool)
+	var found discovery
+	for _, prs := range results {
+		for _, info := range prs {
+			if seen[info.URL] {
+				continue
+			}
+			seen[info.URL] = true
+			found.PRs = append(found.PRs, info)
+		}
+	}
 	return found, nil
 }
 
-// searchIssuePRs pages through one GitHub search and returns the PRs not yet
-// seen.
-func searchIssuePRs(ctx context.Context, client *github.Client, searchQuery string, seen map[string]bool) ([]pr.PRInfo, error) {
+// searchIssuePRs pages through one GitHub search and returns its PRs.
+func searchIssuePRs(ctx context.Context, client *github.Client, searchQuery string) ([]pr.PRInfo, error) {
 	opts := &github.SearchOptions{
 		Sort:        "updated",
 		ListOptions: github.ListOptions{PerPage: 100},
@@ -202,11 +222,6 @@ func searchIssuePRs(ctx context.Context, client *github.Client, searchQuery stri
 
 		for _, issue := range result.Issues {
 			url := issue.GetHTMLURL()
-			if seen[url] {
-				continue
-			}
-			seen[url] = true
-
 			owner, repo, err := pr.ExtractOwnerRepo(url)
 			if err != nil {
 				continue

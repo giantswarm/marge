@@ -20,6 +20,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
+      ttlSecondsAfterFinished: {{ $entry.ttlSecondsAfterFinished }}
       activeDeadlineSeconds: {{ $entry.activeDeadlineSeconds }}
       template:
         metadata:
@@ -56,6 +57,7 @@ spec:
                 - sweep
                 - --team={{ $entry.team }}
                 - --actions={{ $entry.actions }}
+                - --suite-limit={{ $entry.suiteLimit }}
                 - --no-tui
                 - --post-summary
                 {{- if $entry.dryRun }}

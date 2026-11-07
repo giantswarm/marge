@@ -1,5 +1,6 @@
-// Package patterns reads back the unhandled-failure markers the sweep
-// writes on pull requests, and groups them by signature.
+// Package patterns reads back the markers written on pull requests: the
+// unhandled-failure markers the sweep writes, grouped by signature, and the
+// rescue markers a rescue writes, counted per week.
 //
 // A sweep run groups the failures no rule recognised in memory and prints
 // the groups; the run then ends and the grouping ends with it. The markers
@@ -15,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -168,4 +169,98 @@ func Known(groups []Group) string {
 		lines = append(lines, fmt.Sprintf("%s (%d PRs, %s)", group.Signature, group.Count, strings.Join(group.Checks, ", ")))
 	}
 	return strings.Join(lines, "\n  ")
+}
+
+// maxRescuePRs bounds the pull requests whose comments one count reads. The
+// search also matches PRs that carry only sweep evidence or markers older
+// than Since, so a busy week reads more PRs than it counts.
+const maxRescuePRs = 200
+
+// Rescues counts the rescue attempts recorded on the pull requests of repos
+// on or after Since: every rescue marker, whatever its outcome, on an open,
+// merged or closed pull request. Sweep evidence does not count. repos holds
+// owner/name entries; a pull request outside them is another team's.
+//
+// The count stops at limit: a week that reached it is spent, however far
+// past it went, so limit is returned and nothing more is read. A limit of
+// zero or less reads nothing. A count that would read the comments of more
+// than maxRescuePRs pull requests before reaching limit is an error.
+func (s Search) Rescues(ctx context.Context, repos []string, limit int) (int, error) {
+	if s.Org == "" {
+		return 0, fmt.Errorf("no organization to search")
+	}
+	if limit <= 0 {
+		return 0, nil
+	}
+	scope := make(map[string]bool, len(repos))
+	for _, repo := range repos {
+		scope[strings.ToLower(repo)] = true
+	}
+
+	query := fmt.Sprintf("org:%s is:pr in:comments %q", s.Org, pr.RescuePhrase)
+	if !s.Since.IsZero() {
+		query += " updated:>=" + s.Since.UTC().Format(time.DateOnly)
+	}
+	opts := &github.SearchOptions{Sort: "updated", ListOptions: github.ListOptions{PerPage: searchPageSize}}
+	count, read := 0, 0
+	for {
+		result, resp, err := s.Client.Search.Issues(ctx, query, opts)
+		if err != nil {
+			return 0, fmt.Errorf("searching %s for rescue markers: %w", s.Org, err)
+		}
+		for _, issue := range result.Issues {
+			owner, repo, err := pr.ExtractOwnerRepo(issue.GetHTMLURL())
+			if err != nil || !scope[strings.ToLower(owner+"/"+repo)] {
+				continue
+			}
+			if read == maxRescuePRs {
+				return 0, fmt.Errorf("the rescue markers of %s span more than %d pull requests since %s", s.Org, maxRescuePRs, s.Since.UTC().Format(time.DateOnly))
+			}
+			read++
+			n, err := s.rescueMarkers(ctx, owner, repo, issue.GetNumber(), limit-count)
+			if err != nil {
+				return 0, err
+			}
+			count += n
+			if count >= limit {
+				return limit, nil
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			return count, nil
+		}
+		opts.Page = resp.NextPage
+	}
+}
+
+// rescueMarkers counts the rescue markers of one pull request written on
+// or after Since. A marker without a time cannot be placed in a week, so it
+// counts: an attempt that cannot be dated is not proof that none was made.
+// It stops reading once want markers are counted.
+func (s Search) rescueMarkers(ctx context.Context, owner, repo string, number, want int) (int, error) {
+	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: commentPageSize}}
+	count := 0
+	for {
+		comments, resp, err := s.Client.Issues.ListComments(ctx, owner, repo, number, opts)
+		if err != nil {
+			return 0, fmt.Errorf("reading the comments of %s/%s#%d: %w", owner, repo, number, err)
+		}
+		for _, comment := range comments {
+			marker := pr.ParseRescueMarker(comment.GetBody())
+			if marker == nil || marker.IsEvidence() {
+				continue
+			}
+			if !marker.At.IsZero() && marker.At.Before(s.Since) {
+				continue
+			}
+			count++
+			if count >= want {
+				return count, nil
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			return count, nil
+		}
+		opts.Page = resp.NextPage
+	}
 }

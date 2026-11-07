@@ -5,10 +5,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
@@ -65,25 +66,65 @@ func TestMarkWaitKeepsTheClassification(t *testing.T) {
 	require.True(t, out.KeepClassification)
 }
 
-func TestDispatchCVEWorkflowRunsOnTheBaseBranch(t *testing.T) {
-	var path string
-	var body map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &body)
-		w.WriteHeader(http.StatusNoContent)
+// cveServer answers the remediation PR lookup with pulls and the dispatch
+// with status, and records the lookup query and the dispatch request.
+func cveServer(t *testing.T, pulls string, status int) (server *httptest.Server, query *url.Values, dispatch *map[string]any) {
+	t.Helper()
+	query, dispatch = new(url.Values), new(map[string]any)
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/giantswarm/marge/pulls":
+			*query = r.URL.Query()
+			_, _ = io.WriteString(w, pulls)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/giantswarm/marge/actions/workflows/zz_generated.fix_vulnerabilities.yaml/dispatches":
+			raw, _ := io.ReadAll(r.Body)
+			body := map[string]any{}
+			_ = json.Unmarshal(raw, &body)
+			*dispatch = body
+			w.WriteHeader(status)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
+	return server, query, dispatch
+}
+
+func TestDispatchCVEWorkflowRunsOnTheBaseBranch(t *testing.T) {
+	server, query, dispatch := cveServer(t, `[]`, http.StatusNoContent)
 
 	out, err := Default().Apply(t.Context(), DispatchCVEWorkflow, botRequest(apiClient(t, server)), nil)
 
 	require.NoError(t, err)
 	require.True(t, out.Applied)
 	require.True(t, out.KeepClassification)
-	require.Equal(t, "/repos/giantswarm/marge/actions/workflows/zz_generated.fix_vulnerabilities.yaml/dispatches", path)
-	require.Equal(t, "main", body["ref"])
-	require.Equal(t, map[string]any{"branch": "main"}, body["inputs"])
+	require.Equal(t, "giantswarm:remediate-vulnerabilities-main", query.Get("head"))
+	require.Equal(t, "main", query.Get("base"))
+	require.Equal(t, "open", query.Get("state"))
+	require.Equal(t, "main", (*dispatch)["ref"])
+	require.Equal(t, map[string]any{"branch": "main"}, (*dispatch)["inputs"])
+}
+
+func TestDispatchCVEWorkflowWaitsForAnOpenRemediation(t *testing.T) {
+	server, _, dispatch := cveServer(t, `[{"number": 306}]`, http.StatusNoContent)
+
+	out, err := Default().Apply(t.Context(), DispatchCVEWorkflow, botRequest(apiClient(t, server)), nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Equal(t, "remediation open: #306", out.Refused)
+	require.Empty(t, *dispatch)
+}
+
+func TestDispatchCVEWorkflowRefusesWithoutTheWorkflow(t *testing.T) {
+	server, _, _ := cveServer(t, `[]`, http.StatusNotFound)
+
+	out, err := Default().Apply(t.Context(), DispatchCVEWorkflow, botRequest(apiClient(t, server)), nil)
+
+	require.NoError(t, err)
+	require.False(t, out.Applied)
+	require.Equal(t, "the repository has no zz_generated.fix_vulnerabilities.yaml", out.Refused)
 }
 
 // TestDispatchCVEWorkflowRefusesAHandEdit demonstrates the refusal the

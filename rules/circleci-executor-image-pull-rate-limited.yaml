@@ -1,0 +1,14 @@
+name: circleci-executor-image-pull-rate-limited
+summary: A CircleCI job died pulling its executor image because the registry rate-limited the pull.
+source: runbook, transient infra (buzz#27 build 385, 2026-10-09)
+match:
+  states: [failed]
+  check:
+    name: "ci/circleci: *"
+  log:
+    source: circleci
+    pattern: '(?i)Error response from daemon: toomanyrequests'
+action:
+  name: circleci-retry
+evidence:
+  reason: the job never ran its steps, the registry answered toomanyrequests for the executor image, so the build was rerun on the same commit

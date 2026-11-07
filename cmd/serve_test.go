@@ -236,6 +236,7 @@ func TestParseSweepRequest_readsEveryDeclaredArgument(t *testing.T) {
 			ReposFile:        "/tmp/repos.txt",
 			PRs:              []string{"my-org/a#7", "https://github.com/my-org/b/pull/9"},
 			SecurityPatterns: "Trivy,Analyze",
+			SuiteLimit:       DefaultSuiteLimit,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -262,8 +263,12 @@ func TestParseSweepRequest_teamScope(t *testing.T) {
 		}
 	}
 
-	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "rescue"}}}); err == nil {
+	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "rescind"}}}); err == nil {
 		t.Error("unknown action: want an error")
+	}
+
+	if _, err := parseSweepRequest(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"actions": "remedy,rescue,mark", "query": "x"}}}); err == nil {
+		t.Error("rescue under the query scope: want an error")
 	}
 }
 
@@ -278,9 +283,10 @@ func TestParseSweepRequest_defaultsMatchSweepCommand(t *testing.T) {
 	allActions, _ := process.ParseActions("")
 	want := sweepRequest{
 		Opts: RunOptions{
-			Quiet:   true,
-			NoTUI:   true,
-			Actions: allActions,
+			Quiet:      true,
+			NoTUI:      true,
+			Actions:    allActions,
+			SuiteLimit: DefaultSuiteLimit,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

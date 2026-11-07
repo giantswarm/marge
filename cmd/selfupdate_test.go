@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/creativeprojects/go-selfupdate"
+	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"

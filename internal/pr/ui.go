@@ -2,9 +2,13 @@ package pr
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -187,7 +191,7 @@ func ColorizeStatus(state StatusState, detail string) string {
 	}
 }
 
-func PrintPlainResults(w *os.File, status *PRStatus) {
+func PrintPlainResults(w io.Writer, status *PRStatus) {
 	merged := status.MergedEntries()
 	autoMerge := status.AutoMergeEntries()
 	securityFailed, otherFailed := SplitActionRequired(status.ActionRequired())
@@ -226,6 +230,40 @@ func PrintPlainResults(w *os.File, status *PRStatus) {
 		}
 		_, _ = fmt.Fprintln(w)
 	}
+
+	printHandoff(w, status.Handoff())
+}
+
+// printHandoff lists the PRs the run handed over for rescue, one repository
+// at a time, and the candidates it turned away. The agent reads the JSON
+// output; this is the person's view of the same handoff.
+func printHandoff(w io.Writer, h *Handoff) {
+	if h == nil {
+		return
+	}
+	if h.Error != "" {
+		_, _ = fmt.Fprintf(w, "Rescue handoff: nothing handed over: %s\n\n", h.Error)
+		return
+	}
+	if !h.Budget.Counted {
+		_, _ = fmt.Fprintf(w, "Rescue handoff: no candidate, the weekly count of %d was not read.\n\n", h.Budget.Weekly)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Rescue handoff (%d, weekly count %d of %d used before this run):\n", h.Count(), h.Budget.Used, h.Budget.Weekly)
+	for _, repo := range h.Repos {
+		language := repo.Language
+		if repo.LanguageNote != "" {
+			language += "; " + repo.LanguageNote
+		}
+		_, _ = fmt.Fprintf(w, "  %s (%s)\n", repo.Repo, language)
+		for _, p := range repo.PRs {
+			_, _ = fmt.Fprintf(w, "    %s  %s  write to %s  failing: %s\n", p.PR.URL, p.Kind, p.WriteTarget, strings.Join(p.Checks, ", "))
+		}
+	}
+	for _, refusal := range h.Refused {
+		_, _ = fmt.Fprintf(w, "  not handed over: %s: %s\n", refusal.PR.URL, refusal.Reason)
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 // Section headers shared by the plain-text and TUI summaries for the stale
@@ -246,7 +284,7 @@ const (
 
 // printFailureGroup writes a header and one entry per failure including its
 // PR URL on a continuation line. It is a no-op when entries is empty.
-func printFailureGroup(w *os.File, header string, entries []StatusEntry) {
+func printFailureGroup(w io.Writer, header string, entries []StatusEntry) {
 	if len(entries) == 0 {
 		return
 	}
@@ -258,7 +296,7 @@ func printFailureGroup(w *os.File, header string, entries []StatusEntry) {
 	_, _ = fmt.Fprintln(w)
 }
 
-func printPlainEntry(w *os.File, e StatusEntry) {
+func printPlainEntry(w io.Writer, e StatusEntry) {
 	detail := e.State.String()
 	if e.Detail != "" {
 		detail = fmt.Sprintf("%s (%s)", detail, e.Detail)
@@ -287,9 +325,9 @@ func printPlainEntry(w *os.File, e StatusEntry) {
 // AdjustColumnWidths widens each column so every value fits without truncation.
 func AdjustColumnWidths(cols []TableColumn, prs []PRInfo) {
 	for i, c := range cols {
-		w := len(c.Label)
+		w := utf8.RuneCountInString(c.Label)
 		for _, p := range prs {
-			if v := len(c.Fn(p)); v > w {
+			if v := utf8.RuneCountInString(c.Fn(p)); v > w {
 				w = v
 			}
 		}
@@ -297,12 +335,48 @@ func AdjustColumnWidths(cols []TableColumn, prs []PRInfo) {
 	}
 }
 
+// FitColumnWidths narrows the widest columns until the table fits in width
+// terminal columns, so one long value (a PR title that names no dependency)
+// is truncated instead of pushing the columns after it, and the status,
+// past the right edge. No column narrows below its label. A width of zero,
+// a terminal of unknown size, leaves the columns as they are.
+func FitColumnWidths(cols []TableColumn, width int) {
+	if width <= 0 {
+		return
+	}
+	for tableWidth(cols) > width {
+		widest := -1
+		for i, c := range cols {
+			if c.Width > utf8.RuneCountInString(c.Label) && (widest < 0 || c.Width > cols[widest].Width) {
+				widest = i
+			}
+		}
+		if widest < 0 {
+			return
+		}
+		cols[widest].Width--
+	}
+}
+
+// TerminalWidth returns the width of the terminal f writes to, or zero when
+// f is no terminal.
+func TerminalWidth(f *os.File) int {
+	width, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return width
+}
+
+// truncate shortens s to maxLen runes, never splitting one, with "..." as
+// the last three when it cuts.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return string(runes[:maxLen])
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }

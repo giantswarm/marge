@@ -4,6 +4,9 @@
 version: "2"
 
 linters:
+  enable:
+    - gosec
+    - goconst
   settings:
     goconst:
       # goconst's defaults (min-len 3, min-occurrences 3) flag table-driven

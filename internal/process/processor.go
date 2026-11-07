@@ -7,15 +7,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
+	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/logs"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/remedy"
 	"github.com/giantswarm/marge/internal/rules"
 )
+
+// mergeableDirty is GitHub's mergeable_state for a PR that conflicts with
+// its base.
+const mergeableDirty = "dirty"
 
 const (
 	checkPollInterval = 15 * time.Second
@@ -72,6 +77,9 @@ type Processor struct {
 	// the policy files before the sweep starts. Nil applies the company
 	// defaults of pr.CompanyDefaults.
 	Policies *policy.Set
+	// Declarations maps owner/name to the team-file entry that puts the
+	// repository in the scope. Nil outside the team scope.
+	Declarations map[string]policy.Declaration
 
 	// CheckTimeout bounds how long the sweep waits for pending checks on
 	// one PR. Zero means no wait: a PR with pending or missing required
@@ -91,6 +99,17 @@ type Processor struct {
 	// the sweep's PR list before processing starts and only read afterwards,
 	// so it needs no lock. A nil map supersedes nothing.
 	SupersededBy pr.SupersededBy
+
+	// MergeLane is how many PRs of one repository merge at once: the
+	// policy's perRepo. The PRs of a repository are read together, and two
+	// merges race for one base branch, so the merges keep the policy's bound
+	// while the reads go wide. Zero holds every repository to one merge at a
+	// time.
+	MergeLane int
+
+	// Suites is the run's e2e suite budget, the one every team of the run
+	// shares. Nil bounds nothing.
+	Suites *remedy.SuiteBudget
 
 	staleCache
 	accessCache
@@ -125,8 +144,12 @@ type prRun struct {
 	// preexisting names the red non-required checks the PR merged past
 	// because they are red on the base head too.
 	preexisting []string
+	// mergesSeen is how many PRs of the repository the sweep had merged
+	// before this PR was read.
+	mergesSeen int
 	// untouched holds a PR of a repository whose policy switched the sweep
-	// off, or one its repository's own classification decides. Such a PR
+	// off, one GitHub reports archived, or one its repository's own
+	// classification decides. Such a PR
 	// receives no write at all, the classification label included.
 	untouched bool
 
@@ -248,6 +271,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	if ctx.Err() != nil {
 		return
 	}
+	mergesSeen := p.mergesIn(info)
 	pullReq, _, err := p.Client.PullRequests.Get(ctx, info.Owner, info.Repo, info.Number)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -256,11 +280,16 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		status.Update(idx, pr.StatusFailed, ghErrorDetail("fetch error", err))
 		return
 	}
-	run := &prRun{info: info, pull: pullReq, status: status, idx: idx}
+	run := &prRun{info: info, pull: pullReq, status: status, idx: idx, mergesSeen: mergesSeen}
 	defer p.finish(ctx, run)
 
 	resolved := p.Policies.For(info.Owner, info.Repo)
 	status.SetPolicy(idx, resolved)
+	if pullReq.GetBase().GetRepo().GetArchived() {
+		run.untouched = true
+		p.skipArchived(run)
+		return
+	}
 	if !resolved.Sweep {
 		run.untouched = true
 		run.set(pr.StatusSkipped, "sweep switched off for this repository by policy")
@@ -294,7 +323,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		run.set(pr.StatusSkipped, "head branch lives in another repository")
 		return
 	}
-	if pullReq.GetMergeableState() == "dirty" {
+	if pullReq.GetMergeableState() == mergeableDirty {
 		if reason, detail := p.classifyObsolete(ctx, run); reason != "" {
 			run.markObsolete(reason, detail)
 			return
@@ -310,6 +339,15 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 	if !resolved.Eligible(kind, updateType) {
 		run.set(pr.StatusHeld, heldDetail(kind, updateType))
 		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, heldMarkerReason(kind, updateType, resolved))
+		return
+	}
+	// A body that asks for a proof before merging holds the PR for whoever
+	// gives it, whichever caller runs the sweep and with or without
+	// --merge-auto: green CI is not that proof.
+	if item, open := pr.UnprovenBeforeMerge(pullReq.GetBody()); open {
+		reason := needsProofReason(item)
+		run.set(pr.StatusHeld, "held: "+reason)
+		p.postOnce(ctx, run, pr.MarkerKindEvidence, pr.MarkerOutcomeHeld, reason)
 		return
 	}
 
@@ -348,7 +386,7 @@ func (p *Processor) ProcessPR(ctx context.Context, info pr.PRInfo, status *pr.PR
 		p.handOffToAutoMerge(ctx, run)
 		return
 	}
-	p.merge(ctx, run)
+	p.mergeInLane(ctx, run)
 }
 
 // handsOffToAutoMerge reports whether GitHub, not marge, performs the merge.
@@ -392,15 +430,17 @@ func (p *Processor) plannedWrites(run *prRun, changelog bool) string {
 	return strings.Join(steps, ", ")
 }
 
-// finish runs on every exit: it attaches a prior rescue marker to failure
-// outcomes, writes the classification label and appends the notes. An
-// untouched PR gets none of it.
+// finish runs on every exit: it applies the matching rule, attaches a prior
+// rescue marker to failure outcomes, records a rescue candidate, writes the
+// classification label and appends the notes. An untouched PR gets none of
+// it.
 func (p *Processor) finish(ctx context.Context, run *prRun) {
-	if run.untouched {
+	if run.untouched || cutShort(ctx, run) {
 		return
 	}
 	p.applyRule(ctx, run)
 	p.attachRescueMarker(ctx, run)
+	p.rescueCandidate(ctx, run)
 	state := run.status.StateAt(run.idx)
 	if class := pr.LabelClass(state); class != "" && !p.DryRun {
 		p.setLabel(ctx, run, class)
@@ -409,6 +449,38 @@ func (p *Processor) finish(ctx context.Context, run *prRun) {
 		entry := run.status.Snapshot()[run.idx]
 		run.set(entry.State, withNote(entry.Detail, strings.Join(run.notes, "; ")))
 	}
+}
+
+// skipArchived skips a PR of a repository GitHub reports archived. The
+// repository is read-only, so every write would fail. A team file that
+// still declares the repository is reported as a finding: the declaration
+// is what wants changing.
+func (p *Processor) skipArchived(run *prRun) {
+	declaration, declared := p.Declarations[run.info.Owner+"/"+run.info.Repo]
+	if !declared {
+		run.set(pr.StatusSkipped, "archived on GitHub")
+		return
+	}
+	run.set(pr.StatusSkipped, "archived on GitHub, "+declaration.String())
+	run.status.SetFinding(run.idx, &pr.RepoFinding{Cause: pr.FindingArchived, Detail: declaration.String()})
+}
+
+// cutShort reports whether the run stopped on a rate limit before it
+// decided the PR, and leaves such a PR pending. Every call after the
+// refusal fails, and a failed read is no evidence, so an outcome reached
+// past it may rest on a read that never happened. Only an outcome the
+// sweep wrote to GitHub stands; it carries no label, which the next sweep
+// writes.
+func cutShort(ctx context.Context, run *prRun) bool {
+	if _, stopped := gh.AsRateLimit(ctx, nil); !stopped {
+		return false
+	}
+	switch run.status.StateAt(run.idx) {
+	case pr.StatusMerged, pr.StatusAlreadyMerged, pr.StatusAutoMerge, pr.StatusRefreshed, pr.StatusRetried, pr.StatusRemedied:
+		return true
+	}
+	run.set(pr.StatusPending, "")
+	return true
 }
 
 // attachRescueMarker attaches the newest rescue-attempt marker to failure

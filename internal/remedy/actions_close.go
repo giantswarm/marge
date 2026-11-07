@@ -3,10 +3,11 @@ package remedy
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -67,6 +68,11 @@ func (markWait) Apply(context.Context, *Request) (Outcome, error) {
 // opens the remediation PR under the Herald App.
 const cveWorkflow = "zz_generated.fix_vulnerabilities.yaml"
 
+// remediationBranch is the branch the shared fix-vulnerabilities workflow in
+// giantswarm/github-workflows force-pushes for a base branch, and the head of
+// the one remediation PR it keeps open against that base.
+func remediationBranch(base string) string { return "remediate-vulnerabilities-" + base }
+
 // dispatchCVEWorkflow triggers that workflow on the PR's base branch. The
 // remedy for a finding the base head carries is a change to the base, and
 // nancy-fixer performs it: the bump, the replace pin and the time-boxed
@@ -89,13 +95,30 @@ func (dispatchCVEWorkflow) Apply(ctx context.Context, req *Request) (Outcome, er
 	if base == "" {
 		return Outcome{Refused: "the pull request names no base branch"}, nil
 	}
-	_, _, err := req.Deps.GitHub.Actions.CreateWorkflowDispatchEventByFileName(ctx,
+	// An open remediation PR is the workflow's answer already; a new run
+	// only force-pushes the same branch again.
+	open, _, err := req.Deps.GitHub.PullRequests.List(ctx, req.Info.Owner, req.Info.Repo, &github.PullRequestListOptions{
+		State:       "open",
+		Head:        req.Info.Owner + ":" + remediationBranch(base),
+		Base:        base,
+		ListOptions: github.ListOptions{PerPage: 1},
+	})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("dispatch-cve-workflow: listing the remediation PR: %w", err)
+	}
+	if len(open) > 0 {
+		return Outcome{Refused: fmt.Sprintf("remediation open: #%d", open[0].GetNumber())}, nil
+	}
+	_, resp, err := req.Deps.GitHub.Actions.CreateWorkflowDispatchEventByFileName(ctx,
 		req.Info.Owner, req.Info.Repo, cveWorkflow,
 		github.CreateWorkflowDispatchEventRequest{
 			Ref:    base,
 			Inputs: map[string]any{"branch": base},
 		})
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return Outcome{Refused: "the repository has no " + cveWorkflow}, nil
+		}
 		return Outcome{}, fmt.Errorf("dispatch-cve-workflow: %w", err)
 	}
 	return Outcome{
@@ -220,11 +243,19 @@ func (commentCommand) Guards() []Guard {
 	return []Guard{TrustedAuthor, NoSecurityFailure, KnownCommand, OnlyGateWaiting, UpToDate, OncePerChange(CommentCommand)}
 }
 
+// The suite budget is taken here rather than in a guard: guards are pure and
+// PRs are processed at once, so only a reservation made where the comment is
+// written keeps the run within its budget. A refused PR carries no evidence
+// marker, so a later run comments it.
 func (commentCommand) Apply(ctx context.Context, req *Request) (Outcome, error) {
+	if !req.Deps.Suites.Take(len(req.Commands)) {
+		return Outcome{Refused: "the run's e2e suite budget is spent: a later run starts this suite"}, nil
+	}
 	body := strings.Join(req.Commands, "\n")
 	_, _, err := req.Deps.GitHub.Issues.CreateComment(ctx, req.Info.Owner, req.Info.Repo, req.Info.Number,
 		github.IssueCommentRequest{Body: body})
 	if err != nil {
+		req.Deps.Suites.Give(len(req.Commands))
 		return Outcome{}, fmt.Errorf("comment command: %w", err)
 	}
 	return Outcome{

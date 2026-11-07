@@ -200,7 +200,14 @@ An entry of .Values.schedules takes the missing keys from
 {{- fail (printf "two entries of schedules are named %s: the name is what tells two runs of one team apart, and it names their resources." $entry.name) }}
 {{- end }}
 {{- $names = append $names $entry.name }}
-{{- $entries = append $entries (mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry) }}
+{{- $merged := mergeOverwrite (deepCopy $.Values.scheduleDefaults) $entry }}
+{{- /* mergeOverwrite skips empty values on some Helm versions: an explicit 0 is taken from the entry by key. */}}
+{{- range $key := list "successfulJobsHistoryLimit" "failedJobsHistoryLimit" "suiteLimit" }}
+{{- if hasKey $entry $key }}
+{{- $_ := set $merged $key (get $entry $key) }}
+{{- end }}
+{{- end }}
+{{- $entries = append $entries $merged }}
 {{- end }}
 {{- toYaml $entries }}
 {{- end }}
@@ -223,7 +230,7 @@ Refuses a scheduled run the chart cannot render, and names the entry.
 {{- if not $entry.schedule }}
 {{- fail (printf "schedule entry %s needs a cron expression in schedule." $entry.name) }}
 {{- end }}
-{{- $known := list "name" "team" "schedule" "timeZone" "suspend" "actions" "dryRun" "args" "tokenAudience" "activeDeadlineSeconds" "successfulJobsHistoryLimit" "failedJobsHistoryLimit" "resources" }}
+{{- $known := list "name" "team" "schedule" "timeZone" "suspend" "actions" "dryRun" "suiteLimit" "args" "tokenAudience" "activeDeadlineSeconds" "successfulJobsHistoryLimit" "failedJobsHistoryLimit" "ttlSecondsAfterFinished" "resources" }}
 {{- range $key, $_ := $entry }}
 {{- if not (has $key $known) }}
 {{- fail (printf "schedule entry %s sets %s, which is not a key of a scheduled run: %s." $entry.name $key (join ", " $known)) }}

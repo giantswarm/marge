@@ -145,3 +145,40 @@ func TestPolicy_switchedOffRepositoryWritesNothingForAnyAuthor(t *testing.T) {
 	require.Equal(t, 0, int(fixture.commentPosts.Load()))
 	require.Empty(t, entry.Label)
 }
+
+// TestPolicy_archivedRepositoryIsSkipped skips every PR of a repository
+// GitHub reports archived while its team file still declares it, writes
+// nothing to it, and names the declaration as a finding.
+func TestPolicy_archivedRepositoryIsSkipped(t *testing.T) {
+	fixture := greenFixture()
+	fixture.archived = true
+	declaration := policy.Declaration{Lifecycle: "production", File: policy.RepositoriesFile("bumblebee")}
+	entry := fixture.run(t, func(p *Processor) {
+		p.Declarations = map[string]policy.Declaration{"org/repo": declaration}
+	})
+
+	require.Equal(t, pr.StatusSkipped, entry.State)
+	require.Equal(t, "archived on GitHub, declared production in repositories/team-bumblebee.yaml", entry.Detail)
+	require.Equal(t, &pr.RepoFinding{Cause: pr.FindingArchived, Detail: "declared production in repositories/team-bumblebee.yaml"}, entry.Finding)
+	require.Equal(t, 0, int(fixture.approveCalls.Load()))
+	require.Equal(t, 0, int(fixture.mergeCalls.Load()))
+	require.Equal(t, 0, int(fixture.updateBranchCalls.Load()))
+	require.Equal(t, 0, int(fixture.labelAdds.Load()), "an archived repository is read-only")
+	require.Equal(t, 0, int(fixture.labelRemoves.Load()))
+	require.Equal(t, 0, int(fixture.commentPosts.Load()))
+	require.Empty(t, entry.Label)
+}
+
+// TestPolicy_archivedRepositoryOutsideTheTeamScope skips the PR without a
+// finding: no team file declares the repository.
+func TestPolicy_archivedRepositoryOutsideTheTeamScope(t *testing.T) {
+	fixture := greenFixture()
+	fixture.archived = true
+	entry := fixture.run(t, nil)
+
+	require.Equal(t, pr.StatusSkipped, entry.State)
+	require.Equal(t, "archived on GitHub", entry.Detail)
+	require.Nil(t, entry.Finding)
+	require.Equal(t, 0, int(fixture.approveCalls.Load()))
+	require.Equal(t, 0, int(fixture.labelAdds.Load()))
+}

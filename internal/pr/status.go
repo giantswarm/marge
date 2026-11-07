@@ -148,6 +148,42 @@ func (s StatusState) String() string {
 type PRStatus struct {
 	mu      sync.Mutex
 	entries []StatusEntry
+	// rateLimitReset is when the token the run stopped on is served again.
+	// A zero time is a run no rate limit stopped.
+	rateLimitReset time.Time
+	// handoff is what the run handed to the rescue agent. Nil for a run
+	// without the rescue action.
+	handoff *Handoff
+}
+
+// SetHandoff records what the run handed to the rescue agent.
+func (s *PRStatus) SetHandoff(h *Handoff) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.handoff = h
+}
+
+// Handoff returns what the run handed to the rescue agent, or nil.
+func (s *PRStatus) Handoff() *Handoff {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.handoff
+}
+
+// SetRateLimited records that the run stopped because GitHub refused its
+// token for rate until reset. The PRs it had not decided stay pending.
+func (s *PRStatus) SetRateLimited(reset time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rateLimitReset = reset
+}
+
+// RateLimited reports whether a rate limit stopped the run, and when the
+// token is served again.
+func (s *PRStatus) RateLimited() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rateLimitReset, !s.rateLimitReset.IsZero()
 }
 
 type StatusEntry struct {
@@ -177,6 +213,9 @@ type StatusEntry struct {
 	// Finding names the repository setting that holds this PR back. Nil
 	// when no setting stands between the PR and a merge.
 	Finding *RepoFinding
+	// Candidate is set on a PR that passed every rescue precondition the
+	// PR alone decides. Nil outside a run with the rescue action.
+	Candidate *RescueCandidate
 }
 
 // RepoFindingCause names a repository setting the sweep cannot act on. The
@@ -195,6 +234,9 @@ const (
 	// FindingSilentContext: a required status check has not reported for
 	// long enough that no run will report it. The PR waits for ever.
 	FindingSilentContext RepoFindingCause = "silent_required_context"
+	// FindingArchived: GitHub reports the repository archived, so it is
+	// read-only, while its team-file entry still puts it in the scope.
+	FindingArchived RepoFindingCause = "archived"
 )
 
 // SilentContextAfter is how long a required context may stay unreported on
@@ -374,6 +416,39 @@ func (s *PRStatus) SetUnhandled(idx int, unhandled *Unhandled) {
 	}
 }
 
+// SetCandidate records that the entry may be handed over for rescue.
+func (s *PRStatus) SetCandidate(idx int, candidate *RescueCandidate) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx >= 0 && idx < len(s.entries) {
+		s.entries[idx].Candidate = candidate
+	}
+}
+
+// CandidateIndices returns the indices of the entries that may be handed
+// over for rescue, in table order.
+func (s *PRStatus) CandidateIndices() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []int
+	for i, e := range s.entries {
+		if e.Candidate != nil {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// Entry returns a copy of the entry at idx.
+func (s *PRStatus) Entry(idx int) StatusEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx >= 0 && idx < len(s.entries) {
+		return s.entries[idx]
+	}
+	return StatusEntry{}
+}
+
 // UnhandledEntries returns the entries whose failure no rule recognised.
 func (s *PRStatus) UnhandledEntries() []StatusEntry {
 	s.mu.Lock()
@@ -540,6 +615,11 @@ func (s *PRStatus) WaitingEntries() []StatusEntry {
 	entries := s.entriesInStates(StatusWaitingChecks, StatusAwaitingRebase)
 	sortOldestFirst(entries)
 	return entries
+}
+
+// NotReachedEntries returns the entries a stopped run never decided.
+func (s *PRStatus) NotReachedEntries() []StatusEntry {
+	return s.entriesInStates(StatusPending)
 }
 
 // BlockedEntries returns entries whose CI could not run because a GitHub

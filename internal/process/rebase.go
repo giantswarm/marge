@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/marge/internal/pr"
 )
@@ -21,13 +21,18 @@ const (
 )
 
 // rebaseQueue holds what one sweep merged and which PRs that merge
-// conflicted. A repository's PRs are processed one at a time, but several
-// repositories run at once, so every field is taken under the mutex.
+// conflicted. The PRs of several repositories, and several PRs of one, run
+// at once, so every field is taken under the mutex.
 type rebaseQueue struct {
 	rebaseMu sync.Mutex
 	// mergedBy maps owner/repo to the first PR the sweep merged there.
 	mergedBy map[string]int
-	deferred []deferredPR
+	// merges counts the PRs the sweep merged per owner/repo, so a PR read
+	// before a sibling's merge knows its mergeable state is stale.
+	merges map[string]int
+	// mergeLanes holds one lane per owner/repo, MergeLane merges wide.
+	mergeLanes memo[Slots]
+	deferred   []deferredPR
 	// revisiting reports that the second pass is running. A PR the second
 	// pass finds dirty is classified, never queued again.
 	revisiting bool
@@ -48,11 +53,20 @@ func (p *Processor) recordMerge(info pr.PRInfo) {
 	defer p.rebaseMu.Unlock()
 	if p.mergedBy == nil {
 		p.mergedBy = make(map[string]int)
+		p.merges = make(map[string]int)
 	}
 	key := info.Owner + "/" + info.Repo
 	if _, seen := p.mergedBy[key]; !seen {
 		p.mergedBy[key] = info.Number
 	}
+	p.merges[key]++
+}
+
+// mergesIn is how many PRs of the repository the sweep has merged so far.
+func (p *Processor) mergesIn(info pr.PRInfo) int {
+	p.rebaseMu.Lock()
+	defer p.rebaseMu.Unlock()
+	return p.merges[info.Owner+"/"+info.Repo]
 }
 
 // setConflict records a merge conflict. A conflict the sweep caused itself,
@@ -121,6 +135,13 @@ func (p *Processor) rebaseWait() time.Duration {
 	return defaultRebaseWait
 }
 
+// Deferred is the number of PRs the next Revisit waits on.
+func (p *Processor) Deferred() int {
+	p.rebaseMu.Lock()
+	defer p.rebaseMu.Unlock()
+	return len(p.deferred)
+}
+
 // Revisit is the second pass of a sweep. It takes the PRs the sweep's own
 // merges made dirty, waits for the bot to rebase them, and processes each
 // one again. Without it such a PR waits for the next sweep, which is a day
@@ -149,10 +170,14 @@ func (p *Processor) revisitOne(ctx context.Context, d deferredPR, deadline time.
 	for {
 		pullReq, _, err := p.Client.PullRequests.Get(ctx, d.info.Owner, d.info.Repo, d.info.Number)
 		if err != nil {
+			// A stopped run keeps what the first pass reported.
+			if ctx.Err() != nil {
+				return
+			}
 			d.status.Update(d.idx, pr.StatusAwaitingRebase, ghErrorDetail("rebase check failed", err))
 			return
 		}
-		if state := pullReq.GetMergeableState(); state != "dirty" && state != "unknown" {
+		if state := pullReq.GetMergeableState(); state != mergeableDirty && state != "unknown" {
 			p.ProcessPR(ctx, d.info, d.status, d.idx)
 			return
 		}

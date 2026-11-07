@@ -23,6 +23,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -33,9 +34,18 @@ const (
 	TokenFileEnv = "MARGE_NOTICES_TOKEN_FILE"
 )
 
-// postTimeout bounds one post. A gateway that does not answer must not hold a
-// sweep that has already done its work.
-const postTimeout = 30 * time.Second
+// attemptTimeout bounds one attempt at a post. A gateway that does not answer
+// must not hold a sweep that has already done its work.
+const attemptTimeout = 15 * time.Second
+
+// attempts bounds the tries of one post. A gateway restarting or a Slack hiccup
+// answers 5xx for seconds, not minutes, so a few tries with a doubling wait
+// carry a notice over it, and a gateway that stays down is given up on.
+const attempts = 4
+
+// defaultBackoff is the wait before the second attempt; each later wait
+// doubles it.
+const defaultBackoff = 2 * time.Second
 
 // TextMax is the gateway's own bound on a notice: one Slack section block,
 // whose limit is 3000 characters. A longer summary is trimmed to whole lines
@@ -57,6 +67,9 @@ type Client struct {
 	// TokenFile holds the projected ServiceAccount token, read per post.
 	TokenFile string
 	HTTP      *http.Client
+	// Backoff is the wait before the second attempt, doubled before each
+	// later one. Zero means defaultBackoff.
+	Backoff time.Duration
 }
 
 // LoadClient returns the client the environment configures, or nil when it
@@ -80,9 +93,42 @@ type notice struct {
 	Text    string `json:"text"`
 }
 
-// Post sends text to channel as team's notice. An empty channel or an empty
-// text is an error: both mean the caller decided to post and then had nothing
-// to say.
+// StatusError is a post the gateway answered with something other than
+// 201 Created.
+type StatusError struct {
+	Channel string
+	Code    int
+	Status  string
+	Reason  string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("posting to Slack channel %s: the gateway answered %s: %s", e.Channel, e.Status, e.Reason)
+}
+
+// Unavailable reports that a post failed because the gateway could not take
+// it at the time: a 5xx answer, or no answer before the timeout or a refused
+// or reset connection. Any other failure, a 4xx answer above all, is a fault
+// of the configuration (the token, the channel, the request) that no retry
+// repairs.
+func Unavailable(err error) bool {
+	var status *StatusError
+	if errors.As(err, &status) {
+		return status.Code >= http.StatusInternalServerError
+	}
+	var netErr interface{ Timeout() bool }
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET)
+}
+
+// Post sends text to channel as team's notice, and tries again with a
+// doubling wait while the gateway is unavailable, up to attempts tries or
+// until ctx ends. An empty channel or an empty text is an error: both mean
+// the caller decided to post and then had nothing to say.
 func (c *Client) Post(ctx context.Context, team, channel, text string) error {
 	if !channelID.MatchString(strings.TrimSpace(channel)) {
 		return fmt.Errorf("slack channel %q is not a channel ID: the team's policy must name one (C…)", channel)
@@ -100,7 +146,29 @@ func (c *Client) Post(ctx context.Context, team, channel, text string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, postTimeout)
+	wait := c.backoff()
+	for attempt := 1; ; attempt++ {
+		err = c.send(ctx, channel, token, body)
+		if err == nil || !Unavailable(err) {
+			return err
+		}
+		if attempt == attempts {
+			return fmt.Errorf("%w (gave up after %d attempts)", err, attempt)
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%w (gave up after %d attempts: %w)", err, attempt, context.Cause(ctx))
+		case <-timer.C:
+		}
+		wait *= 2
+	}
+}
+
+// send makes one attempt at a post.
+func (c *Client) send(ctx context.Context, channel, token string, body []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/notices", bytes.NewReader(body))
@@ -117,9 +185,16 @@ func (c *Client) Post(ctx context.Context, team, channel, text string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("posting to Slack channel %s: the gateway answered %s: %s", channel, resp.Status, answer(resp.Body))
+		return &StatusError{Channel: channel, Code: resp.StatusCode, Status: resp.Status, Reason: answer(resp.Body)}
 	}
 	return nil
+}
+
+func (c *Client) backoff() time.Duration {
+	if c.Backoff <= 0 {
+		return defaultBackoff
+	}
+	return c.Backoff
 }
 
 // token reads the projected token, which the kubelet rotates, so it is read

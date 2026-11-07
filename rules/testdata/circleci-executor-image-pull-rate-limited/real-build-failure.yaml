@@ -1,0 +1,17 @@
+name: a build that pulled its image and failed in a step is no image-pull retry
+subject:
+  state: failed
+  kind: renovate
+  title: "chore(deps): update postgres docker tag to v0.21.2"
+  failing: ["ci/circleci: build-chart"]
+  logs:
+    "circleci:ci/circleci: build-chart": |
+      Starting container gsoci.azurecr.io/giantswarm/architect:8.5.0
+        using image gsoci.azurecr.io/giantswarm/architect@sha256:0b1c
+      Running build step for HelmRequirementsUpdater
+      Updating lockfile(s) with 'helm dependencies update ./helm/buzz'
+      Command executed, exit code: 1.
+      Error when running build step for HelmRequirementsUpdater: Chart dependency update failed
+      Exited with code exit status 1
+expect:
+  rule: ""

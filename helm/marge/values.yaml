@@ -144,12 +144,16 @@ scheduleDefaults:
   actions: "classify,approve,merge,refresh,retry,remedy,mark"
   # -- Report every outcome without writing anything. Turn it on for the first runs on a new installation.
   dryRun: false
+  # -- E2e suites one scheduled run may start by commenting the command Heimdall named. Every suite builds clusters on the shared test management cluster, whose Flux helm-controller stalls when too many reconcile at once; the PRs past the limit wait for a later run. 0 starts none.
+  suiteLimit: 2  # @schema minimum: 0
   # -- Seconds a scheduled run may take before Kubernetes stops it. An entry of schedules overrides it for its own run. A stopped run posts what it had reached before it was stopped.
   activeDeadlineSeconds: 3600
   # -- Successful Jobs kept
   successfulJobsHistoryLimit: 3
   # -- Failed Jobs kept
   failedJobsHistoryLimit: 3
+  # -- Seconds a finished Job is kept before Kubernetes deletes it with its pod, so no run outlives the chart that made it. Three days keep the last run of a weekday schedule over a weekend.
+  ttlSecondsAfterFinished: 259200
   # -- Container resources of a scheduled run. The pod mounts an emptyDir on /tmp, so ephemeral-storage is bounded as well: a container that mounts one without both bounds is refused by the restricted policies.
   resources:
     limits:

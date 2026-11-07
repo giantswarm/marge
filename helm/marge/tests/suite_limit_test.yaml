@@ -1,0 +1,31 @@
+suite: schedule suite limit
+templates:
+  - templates/cronjob.yaml
+tests:
+  - it: passes the default suite limit and keeps an explicit 0
+    set:
+      marge:
+        github:
+          app:
+            existingSecret: marge-app
+      schedules:
+        - name: none
+          team: alpha
+          schedule: "0 6 * * 1-5"
+          suiteLimit: 0
+        - name: defaults
+          team: beta
+          schedule: "0 7 * * 1-5"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --suite-limit=0
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-marge-none
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --suite-limit=2
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-marge-defaults

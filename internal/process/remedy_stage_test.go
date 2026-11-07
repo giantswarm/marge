@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/pr"
@@ -235,4 +235,29 @@ func TestProcessPRGateWaitsForAnUpToDateBranch(t *testing.T) {
 			require.Equal(t, tc.updated, updated, "writes: %v", writes)
 		})
 	}
+}
+
+// The suite budget is the run's, not the PR's: once it is spent, a gated PR
+// the same run reaches is left waiting with nothing written, and carries no
+// marker, so a later run comments it.
+func TestProcessPRGateStopsAtTheRunsSuiteBudget(t *testing.T) {
+	const command = "/run app-test-suites-single PROVIDER=capa"
+	var writes []string
+	proc := gateProcessor(t, gateServer(t, 0, &writes))
+	proc.Suites = remedy.NewSuiteBudget(1)
+
+	status := pr.NewPRStatus()
+	info := pr.PRInfo{Owner: "org", Repo: "repo", Number: 1, Author: "renovate[bot]"}
+	first, second := status.Add(info), status.Add(info)
+
+	proc.ProcessPR(t.Context(), info, status, first)
+	writtenByFirst := len(writes)
+	proc.ProcessPR(t.Context(), info, status, second)
+
+	require.Contains(t, writes[:writtenByFirst], "POST /repos/org/repo/issues/1/comments "+command)
+	for _, w := range writes[writtenByFirst:] {
+		require.NotContains(t, w, "/issues/1/comments", "the second pass commented")
+	}
+	require.Equal(t, pr.StatusWaitingChecks, status.StateAt(second))
+	require.Contains(t, status.Snapshot()[second].Detail, "suite budget is spent")
 }

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/marge/internal/circleci"

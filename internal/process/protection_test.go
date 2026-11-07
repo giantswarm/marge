@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,4 +189,74 @@ func TestBranchRulesRefusesARateLimit(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+// classicServer refuses every classic protection read with refusal, answers
+// every ruleset read with none, and counts the classic reads per repository.
+func classicServer(t *testing.T, refusal string) (*httptest.Server, *sync.Map) {
+	t.Helper()
+	var reads sync.Map
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/org/{repo}/branches/main/protection/{rest...}", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := reads.LoadOrStore(r.PathValue("repo"), new(atomic.Int32))
+		n.(*atomic.Int32).Add(1)
+		// Long enough that repositories read together overlap.
+		time.Sleep(10 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"` + refusal + `"}`))
+	})
+	mux.HandleFunc("GET /repos/org/{repo}/rules/branches/main", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server, &reads
+}
+
+func classicReads(reads *sync.Map) int32 {
+	var total int32
+	reads.Range(func(_, n any) bool {
+		total += n.(*atomic.Int32).Load()
+		return true
+	})
+	return total
+}
+
+// A token that may not read classic protection is refused on every
+// repository alike: the sweep's first read answers for the rest, also for the
+// repositories that started together with it.
+func TestClassicProtectionIsReadOnceForATokenThatMayNotReadIt(t *testing.T) {
+	server, reads := classicServer(t, "Resource not accessible by integration")
+	processor := &Processor{Client: newTestClient(t, server)}
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		info := pr.PRInfo{Owner: "org", Repo: "repo" + strconv.Itoa(i)}
+		wg.Go(func() {
+			_, err := processor.requiredProtection(t.Context(), info, "main")
+			require.NoError(t, err)
+			_, err = processor.requiredReview(t.Context(), info, "main")
+			require.NoError(t, err)
+		})
+	}
+	wg.Wait()
+
+	require.EqualValues(t, 1, classicReads(reads))
+}
+
+// A refusal for want of the admin role is the repository's own: another
+// repository, where the caller may be an admin, is still read.
+func TestClassicProtectionRefusedForTheRoleIsReadOnEveryRepository(t *testing.T) {
+	server, reads := classicServer(t, "Must have admin rights to Repository.")
+	processor := &Processor{Client: newTestClient(t, server)}
+
+	for i := range 3 {
+		info := pr.PRInfo{Owner: "org", Repo: "repo" + strconv.Itoa(i)}
+		_, err := processor.requiredProtection(t.Context(), info, "main")
+		require.NoError(t, err)
+	}
+
+	require.EqualValues(t, 3, classicReads(reads))
 }

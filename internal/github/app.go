@@ -270,7 +270,8 @@ func (t *appTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.base.RoundTrip(authorized(req, "Bearer "+token.Value))
+	bucket := fmt.Sprintf("app-installation:%d", t.app.InstallationID)
+	return t.base.RoundTrip(authorized(withRateBucket(req, bucket), "Bearer "+token.Value))
 }
 
 // token returns a live token for the scope, minting one when the scope has

@@ -2,19 +2,22 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/go-github/v92/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/marge/internal/circleci"
 	gh "github.com/giantswarm/marge/internal/github"
 	"github.com/giantswarm/marge/internal/logs"
+	"github.com/giantswarm/marge/internal/patterns"
 	"github.com/giantswarm/marge/internal/policy"
 	"github.com/giantswarm/marge/internal/pr"
 	"github.com/giantswarm/marge/internal/process"
@@ -60,11 +63,88 @@ type RunOptions struct {
 	// or owner/repo#number. Empty sweeps every PR the scope found. The
 	// scope still decides which repositories are read and under which
 	// policy, so a PR outside it is refused rather than swept.
-	PRs              []string
+	PRs []string
+	// Parallel is how many independent pieces of the run go at once: the
+	// teams of a several-team run, the searches of the query scope and the
+	// documents of the rule catalogue. Zero means fanout.Default; 1 runs
+	// them one after another. The PRs of one team fan out under
+	// pr.ReadConcurrency and the policy's bounds whatever it says.
+	Parallel         int
 	Grouping         string
 	SecurityPatterns string
 	Cols             []pr.TableColumn
+	// Stdout and Stderr receive what the sweep prints; nil is the
+	// process's own. A several-team run gives each team its own, so teams
+	// swept at once print one after another.
+	Stdout, Stderr io.Writer
+
+	// TeamRepos and Languages are the team scope's repository list and the
+	// language each entry declares, which the rescue handoff reads.
+	// Declarations are the team-file entries of the repositories. All three
+	// are nil outside the team scope.
+	TeamRepos    []string
+	Languages    map[string]string
+	Declarations map[string]policy.Declaration
+	// TriggeredBy names who started the run, for the rescue handoff and
+	// the markers the agent writes. Empty names the authenticated login.
+	TriggeredBy string
+	// Toolchain is the language the rescue agent's image builds. Empty
+	// hands over PRs of every language.
+	Toolchain string
+
+	// SuiteLimit is how many e2e suites the run may start by commenting the
+	// command a gate named. Zero starts none.
+	SuiteLimit int
+	// suites is the budget SuiteLimit sets, shared by every team of a
+	// several-team run. Nil gives each processOnceWithStatus call its own.
+	suites *remedy.SuiteBudget
 }
+
+// DefaultSuiteLimit is the number of e2e suites a run starts unless told
+// otherwise.
+const DefaultSuiteLimit = 2
+
+// shareSuites makes every copy of o taken from now on start suites out of one
+// budget, so the teams of one run share SuiteLimit.
+func (o *RunOptions) shareSuites() {
+	o.suites = remedy.NewSuiteBudget(o.SuiteLimit)
+}
+
+// suiteBudget is the budget one sweep spends: the shared one when the run
+// set it, a budget of its own otherwise.
+func (o RunOptions) suiteBudget() *remedy.SuiteBudget {
+	if o.suites != nil {
+		return o.suites
+	}
+	return remedy.NewSuiteBudget(o.SuiteLimit)
+}
+
+func (o RunOptions) stdout() io.Writer {
+	if o.Stdout == nil {
+		return os.Stdout
+	}
+	return o.Stdout
+}
+
+func (o RunOptions) stderr() io.Writer {
+	if o.Stderr == nil {
+		return os.Stderr
+	}
+	return o.Stderr
+}
+
+// useScope takes over what a resolved scope says about the run: the policy
+// of its PRs, and the team's repositories and their languages.
+func (o *RunOptions) useScope(scope policy.Scope) {
+	o.Policies = scope.Policies
+	o.TeamRepos = scope.Repos
+	o.Languages = scope.Languages
+	o.Declarations = scope.Declarations
+}
+
+// errRescueNeedsTeam refuses the rescue action outside the team scope: a
+// rescue is counted against a team's week, and the query scope has none.
+var errRescueNeedsTeam = errors.New("the rescue action needs the team scope: a rescue is counted against a team's weekly number, and a query has no team")
 
 // resolveScope reads the policy files and returns what the run covers: the
 // repositories it is restricted to and the policy they are swept under. The
@@ -130,15 +210,24 @@ func teamFileRepo() (owner, name string, err error) {
 }
 
 func processOnceWithStatus(ctx context.Context, client *github.Client, login string, prs []pr.PRInfo, opts RunOptions) (*pr.PRStatus, error) {
+	stdout, stderr := opts.stdout(), opts.stderr()
+	progress := progressFrom(ctx)
+	progress.Planned(len(prs))
 	if len(prs) == 0 {
 		if !opts.Quiet {
-			fmt.Fprintln(os.Stderr, "No matching PRs found.")
+			_, _ = fmt.Fprintln(stderr, "No matching PRs found.")
 		}
 		return pr.NewPRStatus(), nil
 	}
 
+	if err := gh.CheckRateBudget(ctx, client, leastRequests(prs)); err != nil {
+		return nil, err
+	}
+	ctx, stop := gh.StopOnRateLimit(ctx)
+	defer stop()
+
 	if !opts.Quiet {
-		fmt.Fprintf(os.Stderr, "Processing %d PR(s)...\n\n", len(prs))
+		_, _ = fmt.Fprintf(stderr, "Processing %d PR(s)...\n\n", len(prs))
 	}
 
 	sort.Slice(prs, func(i, j int) bool {
@@ -161,7 +250,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		cols = pr.FullColumns()
 	}
 	pr.AdjustColumnWidths(cols, prs)
+	pr.FitColumnWidths(cols, pr.TerminalWidth(os.Stdout))
 
+	// The live table redraws the terminal, so it is drawn on the process's
+	// own stdout and never on a team's buffer.
 	tui := !opts.NoTUI && !opts.Quiet
 
 	if tui {
@@ -202,8 +294,10 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	proc.Actions = opts.Actions
 	proc.CheckTimeout = opts.CheckTimeout
 	proc.Policies = opts.Policies
+	proc.Declarations = opts.Declarations
 	proc.Rules = opts.Rules
 	proc.Remedies = remedy.Default()
+	proc.Suites = opts.suiteBudget()
 	proc.CircleCI = circleci.NewClient()
 	proc.Logs = &logs.Fetcher{GitHub: client, CircleCI: proc.CircleCI}
 	// Cross-PR knowledge, so it is computed once from the whole list before
@@ -217,20 +311,25 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 		indexByPR[key] = indices[i]
 	}
 
-	// Group PRs by owner/repo, then fan out under the policy's concurrency,
-	// or under the read bound when the run writes nothing.
-	concurrency := opts.Policies.Base().Concurrency
-	if opts.DryRun && opts.Actions.ClassifyOnly() {
-		concurrency = pr.ReadConcurrency
-	}
-	forEachPR(pr.GroupByRepo(prs), concurrency, func(info pr.PRInfo) {
+	reads, writes := fanOut(opts)
+	ctx = gh.WithWriteBound(ctx, writes.PerTeam*writes.PerRepo)
+	proc.MergeLane = writes.PerRepo
+	forEachPR(pr.GroupByRepo(prs), reads, func(info pr.PRInfo) {
 		key := fmt.Sprintf("%s/%s#%d", info.Owner, info.Repo, info.Number)
 		proc.ProcessPR(ctx, info, status, indexByPR[key])
+		progress.Finished()
 	})
 
 	// Second pass: the PRs a merge of this sweep made dirty, once the bot
 	// has rebased them.
+	progress.Revisiting(proc.Deferred())
 	proc.Revisit(ctx, status)
+	if opts.Actions.Selected(process.ActionRescue) {
+		status.SetHandoff(proc.Handoff(ctx, status, handoffOptions(client, login, opts)))
+	}
+	if exhausted, stopped := gh.AsRateLimit(ctx, nil); stopped {
+		status.SetRateLimited(exhausted.Reset)
+	}
 
 	close(stopRefresh)
 	<-refreshStopped
@@ -239,7 +338,7 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	case opts.Quiet:
 		// Nothing is printed; the caller consumes the returned status.
 	case opts.NoTUI:
-		pr.PrintPlainResults(os.Stdout, status)
+		pr.PrintPlainResults(stdout, status)
 	default:
 		pr.UpdateTable(os.Stdout, status.Snapshot(), cols)
 		// Restore wrapping before any post-table prose so long lines
@@ -249,19 +348,95 @@ func processOnceWithStatus(ctx context.Context, client *github.Client, login str
 	}
 
 	if !opts.Quiet {
-		fmt.Fprintf(os.Stderr, "\n%s\n", status.FormatSummary())
-		reportUnenforced(os.Stderr, opts.Policies.Base())
+		_, _ = fmt.Fprintf(stderr, "\n%s\n", status.FormatSummary())
+		reportUnenforced(stderr, opts.Policies.Base())
 	}
 
 	return status, nil
 }
 
-// forEachPR runs fn on every PR of every group, under the two bounds the
-// policy declares: perTeam repositories run at once, and within one
-// repository perRepo PRs. A repository holds its slot for as long as it has
-// work, so perTeam bounds repositories and not the PRs they hold together.
-// The default perRepo of 1 keeps the PRs of a repository sequential, which
-// is what avoids "base branch was modified" failures.
+// rescueWeek is the window the weekly rescue count covers.
+const rescueWeek = 7 * 24 * time.Hour
+
+// handoffOptions are the run-level facts the rescue handoff reads.
+func handoffOptions(client *github.Client, login string, opts RunOptions) process.HandoffOptions {
+	triggeredBy := opts.TriggeredBy
+	if triggeredBy == "" {
+		triggeredBy = login
+	}
+	since := time.Now().Add(-rescueWeek)
+	rescue := opts.Policies.Base().Rescue
+	return process.HandoffOptions{
+		Team:        opts.Team,
+		TriggeredBy: triggeredBy,
+		Toolchain:   opts.Toolchain,
+		Rescue:      rescue,
+		Languages:   opts.Languages,
+		Used: func(ctx context.Context) (int, error) {
+			return weeklyRescues(ctx, client, opts.TeamRepos, since, rescue.Weekly)
+		},
+	}
+}
+
+// weeklyRescues counts the rescue markers written since on the pull
+// requests of the team's repositories, one search per owner, up to limit.
+func weeklyRescues(ctx context.Context, client *github.Client, repos []string, since time.Time, limit int) (int, error) {
+	if len(repos) == 0 {
+		return 0, errors.New("the team scope lists no repository to count rescues in")
+	}
+	var owners []string
+	for _, repo := range repos {
+		owner, _, _ := strings.Cut(repo, "/")
+		if !slices.Contains(owners, owner) {
+			owners = append(owners, owner)
+		}
+	}
+	total := 0
+	for _, owner := range owners {
+		if total >= limit {
+			break
+		}
+		n, err := patterns.Search{Client: client, Org: owner, Since: since}.Rescues(ctx, repos, limit-total)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// leastRequests is the fewest REST requests a run over prs spends: every PR
+// is read with its commit statuses and its check runs, and every
+// repository's branch rules once. A PR that fails, merges or is written to
+// spends more, so a budget above it is no promise the run finishes.
+func leastRequests(prs []pr.PRInfo) int {
+	const perPR, perRepo = 3, 1
+	repos := make(map[string]bool, len(prs))
+	for _, info := range prs {
+		repos[strings.ToLower(info.Owner+"/"+info.Repo)] = true
+	}
+	return perPR*len(prs) + perRepo*len(repos)
+}
+
+// fanOut decides how wide a run reads and how wide it writes. Every run
+// reads under pr.ReadConcurrency, or the policy's bounds where they are
+// wider: a read moves no branch and posts no comment, so it is bounded by
+// how many reads GitHub answers at once. The writes keep the policy's
+// bounds: no more than its product in flight across the run, and no more
+// than perRepo merges at once in one repository.
+func fanOut(opts RunOptions) (reads, writes pr.Concurrency) {
+	writes = opts.Policies.Base().Concurrency
+	reads = pr.Concurrency{
+		PerTeam: max(pr.ReadConcurrency.PerTeam, writes.PerTeam),
+		PerRepo: max(pr.ReadConcurrency.PerRepo, writes.PerRepo),
+	}
+	return reads, writes
+}
+
+// forEachPR runs fn on every PR of every group, under two bounds: perTeam
+// repositories run at once, and within one repository perRepo PRs. A
+// repository holds its slot for as long as it has work, so perTeam bounds
+// repositories and not the PRs they hold together.
 func forEachPR(groups []pr.PRGroup, concurrency pr.Concurrency, fn func(pr.PRInfo)) {
 	var wg sync.WaitGroup
 	repoSlots := make(chan struct{}, max(concurrency.PerTeam, 1))
@@ -386,42 +561,6 @@ func scopeRepos(scoped []string, refs []string) ([]string, error) {
 	return mergeRepos(repos), nil
 }
 
-// filterByPRs keeps the PRs the caller named, in the order the scope found
-// them. Each reference is a PR URL or owner/repo#number. An empty selection
-// keeps every PR; a reference that names no PR of the scope is an error, so
-// a caller never believes a PR was swept because it was silently absent.
-func filterByPRs(prs []pr.PRInfo, refs []string) ([]pr.PRInfo, error) {
-	if len(refs) == 0 {
-		return prs, nil
-	}
-	selected := make(map[string]bool, len(refs))
-	for _, ref := range refs {
-		owner, repo, number, err := pr.ParsePRRef(ref)
-		if err != nil {
-			return nil, err
-		}
-		selected[pr.Key(owner, repo, number)] = true
-	}
-
-	var kept []pr.PRInfo
-	for _, info := range prs {
-		key := pr.Key(info.Owner, info.Repo, info.Number)
-		if selected[key] {
-			kept = append(kept, info)
-			delete(selected, key)
-		}
-	}
-	if len(selected) > 0 {
-		missing := make([]string, 0, len(selected))
-		for key := range selected {
-			missing = append(missing, key)
-		}
-		sort.Strings(missing)
-		return nil, fmt.Errorf("not an open bot PR of this scope: %s", strings.Join(missing, ", "))
-	}
-	return kept, nil
-}
-
 // filterByOrg keeps the PRs whose owner is org, compared case-insensitively
 // like GitHub does. An empty org keeps every PR.
 func filterByOrg(prs []pr.PRInfo, org string) []pr.PRInfo {
@@ -448,11 +587,12 @@ type RulesSource struct {
 	Path string
 }
 
-// loadRules reads the rule catalogue of one sweep. It never fails the sweep:
+// loadRules reads the rule catalogue of one sweep, parallel documents at
+// once. It never fails the sweep:
 // a catalogue that cannot be read leaves classification, approval and merging
 // as they are, and refuses every remedy. The report says which happened.
-func loadRules(ctx context.Context, client *github.Client, src RulesSource) (*rules.Catalogue, *SweepRules) {
-	loader := rules.Loader{Client: client, Ref: src.Ref, LocalPath: src.Path}
+func loadRules(ctx context.Context, client *github.Client, src RulesSource, parallel int) (*rules.Catalogue, *SweepRules) {
+	loader := rules.Loader{Client: client, Ref: src.Ref, LocalPath: src.Path, Parallel: parallel}
 	if src.Repo != "" {
 		owner, name, found := strings.Cut(src.Repo, "/")
 		if !found {

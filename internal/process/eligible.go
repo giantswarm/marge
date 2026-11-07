@@ -21,6 +21,19 @@ func heldDetail(kind pr.Kind, updateType pr.UpdateType) string {
 	return "held: " + heldReason(kind, updateType)
 }
 
+// needsProofReason explains a PR held because its body asks for a proof
+// before merging, naming the first open item of that checklist.
+func needsProofReason(item string) string {
+	const maxItem = 80
+	if r := []rune(item); len(r) > maxItem {
+		item = string(r[:maxItem]) + "…"
+	}
+	if item == "" {
+		return "needs proof: the PR body asks for a proof before merging"
+	}
+	return fmt.Sprintf("needs proof: the PR body asks for a proof before merging (open: %q)", item)
+}
+
 // heldMarkerReason explains the same hold on the PR itself, and names the
 // files the resolved policy came from. A person who reads the label alone
 // knows a hold happened and not which key held it, and the run's log is
