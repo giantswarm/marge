@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/brand"
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/google/go-github/v93/github"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -115,7 +116,7 @@ func newMCPServer(newClient clientFactory, options ...server.ServerOption) *serv
 	mcpServer := server.NewMCPServer(
 		"marge",
 		version,
-		append([]server.ServerOption{server.WithToolCapabilities(true)}, options...)...,
+		append([]server.ServerOption{server.WithToolCapabilities(true), brand.WithGiantSwarmIcon()}, options...)...,
 	)
 
 	tools := toolset{newClient: newClient}
