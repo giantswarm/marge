@@ -175,24 +175,28 @@ func (p *Processor) readBaseContextStates(ctx context.Context, info pr.PRInfo, s
 	}
 
 	checkOpts := &github.ListCheckRunsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	var runs []*github.CheckRun
 	for {
-		runs, resp, err := p.Client.Checks.ListCheckRunsForRef(ctx, info.Owner, info.Repo, sha, checkOpts)
+		page, resp, err := p.Client.Checks.ListCheckRunsForRef(ctx, info.Owner, info.Repo, sha, checkOpts)
 		if err != nil {
 			return nil, err
 		}
-		for _, cr := range runs.CheckRuns {
-			if cr.GetStatus() != statusCompleted {
-				// Still running on the base branch: neither green nor red.
-				record(cr.GetName(), false, false, time.Time{})
-				continue
-			}
-			conclusion := cr.GetConclusion()
-			record(cr.GetName(), conclusion == stateSuccess, isFailedConclusion(conclusion), cr.GetCompletedAt().Time)
-		}
+		runs = append(runs, page.CheckRuns...)
 		if resp == nil || resp.NextPage == 0 {
 			break
 		}
 		checkOpts.Page = resp.NextPage
+	}
+	// A check with several runs on the base head is judged by its newest
+	// run, as on the PR head.
+	for _, cr := range newestRuns(runs) {
+		if cr.GetStatus() != statusCompleted {
+			// Still running on the base branch: neither green nor red.
+			record(cr.GetName(), false, false, time.Time{})
+			continue
+		}
+		conclusion := cr.GetConclusion()
+		record(cr.GetName(), conclusion == stateSuccess, isFailedConclusion(conclusion), cr.GetCompletedAt().Time)
 	}
 
 	return states, nil

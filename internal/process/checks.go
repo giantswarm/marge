@@ -222,6 +222,9 @@ type checkOutcome struct {
 	settledAt time.Time
 }
 
+// getCombinedCheckState reads the head's commit statuses and check runs and
+// folds them into one outcome. A check name with several runs on the head
+// is judged by its newest run alone (see newestRuns).
 func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (checkOutcome, error) {
 	ref := fmt.Sprintf("refs/pull/%d/head", info.Number)
 	combined, _, err := p.Client.Repositories.GetCombinedStatus(ctx, info.Owner, info.Repo, ref, &github.ListOptions{PerPage: 100})
@@ -252,7 +255,7 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 	var noVerdictChecks []noVerdictCheck
 	allComplete := true
 	hasFailure := false
-	for _, cr := range checkRuns.CheckRuns {
+	for _, cr := range newestRuns(checkRuns.CheckRuns) {
 		name := cr.GetName()
 		if cr.GetStatus() != statusCompleted {
 			allComplete = false
@@ -366,6 +369,59 @@ func (p *Processor) getCombinedCheckState(ctx context.Context, info pr.PRInfo) (
 		out.state = stateSuccess
 	}
 	return out, nil
+}
+
+// newestRuns keeps, for each check name, the one run on the head that
+// supersedes the others. GitHub lists every workflow run's check runs on a
+// commit, so a workflow started twice on one head (Renovate's opened and
+// edited events arrive a second apart, and the workflow's concurrency group
+// cancels the first run) lists its check twice: once cancelled, once with
+// its verdict. Only the newest run says what the check established; an
+// older run it superseded is neither a failure nor a missing verdict. Runs
+// without a name cannot be grouped and are kept as they are. Names keep the
+// order of their first appearance, so the lists built from the result are
+// stable.
+func newestRuns(runs []*github.CheckRun) []*github.CheckRun {
+	out := make([]*github.CheckRun, 0, len(runs))
+	index := make(map[string]int, len(runs))
+	for _, cr := range runs {
+		name := cr.GetName()
+		if name == "" {
+			out = append(out, cr)
+			continue
+		}
+		i, seen := index[name]
+		switch {
+		case !seen:
+			index[name] = len(out)
+			out = append(out, cr)
+		case supersedes(cr, out[i]):
+			out[i] = cr
+		}
+	}
+	return out
+}
+
+// supersedes reports whether run a is newer than run b of the same name. A
+// run still in progress is newer than a finished one, whatever their times:
+// what the check is about to say outranks what it said, and a queued run
+// may carry no start time yet. Among finished runs the later start wins,
+// then the later completion; among runs with the same times, the newer
+// check suite, then the newer run id.
+func supersedes(a, b *github.CheckRun) bool {
+	if ra, rb := a.GetStatus() != statusCompleted, b.GetStatus() != statusCompleted; ra != rb {
+		return ra
+	}
+	if sa, sb := a.GetStartedAt().Time, b.GetStartedAt().Time; !sa.Equal(sb) {
+		return sa.After(sb)
+	}
+	if ca, cb := a.GetCompletedAt().Time, b.GetCompletedAt().Time; !ca.Equal(cb) {
+		return ca.After(cb)
+	}
+	if ia, ib := a.GetCheckSuite().GetID(), b.GetCheckSuite().GetID(); ia != ib {
+		return ia > ib
+	}
+	return a.GetID() > b.GetID()
 }
 
 // checkOutputText joins what a check run reports about the head. The three
