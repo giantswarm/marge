@@ -8,7 +8,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/go-selfupdate v1.7.7
 	github.com/giantswarm/mcp-toolkit v0.5.4
-	github.com/giantswarm/selfupdate-cosign v0.3.28
+	github.com/giantswarm/selfupdate-cosign v0.3.29
 	github.com/google/go-github/v93 v93.0.0
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mark3labs/mcp-go v1.6.0
