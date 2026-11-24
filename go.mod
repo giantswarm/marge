@@ -7,7 +7,7 @@ toolchain go1.27.4
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/go-selfupdate v1.7.7
-	github.com/giantswarm/mcp-toolkit v0.5.5
+	github.com/giantswarm/mcp-toolkit v0.7.0
 	github.com/giantswarm/selfupdate-cosign v0.3.30
 	github.com/google/go-github/v93 v93.0.0
 	github.com/manifoldco/promptui v0.9.0
@@ -59,7 +59,7 @@ require (
 	github.com/google/certificate-transparency-go v1.4.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.33.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
