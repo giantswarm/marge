@@ -7,7 +7,7 @@ toolchain go1.27.4
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/giantswarm/go-selfupdate v1.7.7
-	github.com/giantswarm/mcp-toolkit v0.11.0
+	github.com/giantswarm/mcp-toolkit v0.12.0
 	github.com/giantswarm/selfupdate-cosign v0.3.30
 	github.com/google/go-github/v93 v93.0.0
 	github.com/manifoldco/promptui v0.9.0
